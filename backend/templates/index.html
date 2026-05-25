@@ -1,0 +1,641 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>scan2order</title>
+  <style>
+    :root {
+      --bg: #0f0f0f;
+      --surface: #1a1a1a;
+      --border: #2a2a2a;
+      --accent: #22c55e;
+      --accent-dim: #15803d;
+      --text: #e5e5e5;
+      --text-dim: #888;
+      --danger: #ef4444;
+      --warning: #f59e0b;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+    header {
+      width: 100%;
+      padding: 16px 24px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    header h1 { font-size: 1.2rem; font-weight: 700; color: var(--accent); }
+    header .user-badge {
+      margin-left: auto;
+      font-size: 0.75rem;
+      color: var(--text-dim);
+      background: var(--surface);
+      padding: 4px 10px;
+      border-radius: 99px;
+      border: 1px solid var(--border);
+    }
+
+    main { width: 100%; max-width: 800px; padding: 24px 16px; flex: 1; }
+
+    /* ─ Sections ─ */
+    .section {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 20px;
+      margin-bottom: 20px;
+    }
+    .section h2 {
+      font-size: 1rem;
+      font-weight: 600;
+      margin-bottom: 14px;
+      color: var(--text);
+    }
+
+    /* ─ Link code panel ─ */
+    #link-panel { text-align: center; }
+    #link-panel p { color: var(--text-dim); font-size: 0.9rem; margin-bottom: 16px; }
+    .code-input-row {
+      display: flex; gap: 8px; max-width: 360px; margin: 0 auto;
+    }
+    input[type="text"] {
+      flex: 1;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 10px 14px;
+      color: var(--text);
+      font-size: 1rem;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+    }
+    input[type="text"]:focus { outline: none; border-color: var(--accent); }
+    button {
+      background: var(--accent);
+      color: #000;
+      border: none;
+      border-radius: 8px;
+      padding: 10px 18px;
+      font-size: 0.9rem;
+      font-weight: 600;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+    button:hover { background: #16a34a; }
+    button:disabled { background: var(--accent-dim); cursor: not-allowed; }
+    .btn-danger { background: var(--danger); color: #fff; }
+    .btn-danger:hover { background: #dc2626; }
+    .btn-secondary {
+      background: var(--surface);
+      color: var(--text);
+      border: 1px solid var(--border);
+    }
+    .btn-secondary:hover { background: var(--border); }
+
+    /* ─ Store status pills ─ */
+    .store-row {
+      display: flex; align-items: center; gap: 10px;
+      padding: 8px 0;
+      border-bottom: 1px solid var(--border);
+    }
+    .store-row:last-child { border-bottom: none; }
+    .store-name { font-size: 0.9rem; font-weight: 500; flex: 1; }
+    .pill {
+      font-size: 0.72rem;
+      font-weight: 600;
+      padding: 3px 10px;
+      border-radius: 99px;
+    }
+    .pill-green { background: #14532d; color: #86efac; }
+    .pill-red   { background: #450a0a; color: #fca5a5; }
+    .pill-amber { background: #451a03; color: #fcd34d; }
+
+    /* ─ OCR upload ─ */
+    .upload-area {
+      border: 2px dashed var(--border);
+      border-radius: 10px;
+      padding: 32px;
+      text-align: center;
+      cursor: pointer;
+      transition: border-color 0.2s;
+    }
+    .upload-area:hover { border-color: var(--accent); }
+    .upload-area p { color: var(--text-dim); font-size: 0.88rem; }
+    #file-input { display: none; }
+
+    /* ─ Items list ─ */
+    .items-list { display: flex; flex-direction: column; gap: 8px; margin-bottom: 14px; }
+    .item-row {
+      display: flex; align-items: center; gap: 8px;
+    }
+    .item-row input[type="text"] { flex: 1; padding: 7px 10px; font-size: 0.85rem; }
+    .item-row input[type="number"] { width: 64px; padding: 7px 8px; font-size: 0.85rem; }
+    .item-row button { padding: 7px 12px; font-size: 0.8rem; }
+    #add-item-btn { align-self: flex-start; }
+
+    /* ─ Progress bar ─ */
+    .progress-wrap { margin-top: 14px; }
+    .progress-label {
+      font-size: 0.8rem; color: var(--text-dim); margin-bottom: 6px;
+      display: flex; justify-content: space-between;
+    }
+    .progress-bar {
+      height: 6px;
+      background: var(--border);
+      border-radius: 99px;
+      overflow: hidden;
+    }
+    .progress-fill {
+      height: 100%;
+      background: var(--accent);
+      border-radius: 99px;
+      transition: width 0.3s;
+    }
+
+    /* ─ Results table ─ */
+    .results-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.84rem;
+    }
+    .results-table th {
+      text-align: left;
+      padding: 8px 10px;
+      color: var(--text-dim);
+      border-bottom: 1px solid var(--border);
+      font-weight: 500;
+    }
+    .results-table td {
+      padding: 10px 10px;
+      border-bottom: 1px solid var(--border);
+      vertical-align: top;
+    }
+    .results-table tr:last-child td { border-bottom: none; }
+    .store-tag {
+      display: inline-block;
+      font-size: 0.7rem;
+      font-weight: 700;
+      padding: 2px 7px;
+      border-radius: 4px;
+    }
+    .tag-bigbasket { background: #14532d; color: #86efac; }
+    .tag-zepto     { background: #1e3a5f; color: #93c5fd; }
+    .tag-blinkit   { background: #4a1d04; color: #fcd34d; }
+    .price-main { font-size: 1rem; font-weight: 600; }
+    .price-dim  { font-size: 0.78rem; color: var(--text-dim); }
+
+    /* ─ Cart summary ─ */
+    .cart-block {
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 14px;
+      margin-bottom: 12px;
+    }
+    .cart-block h3 { font-size: 0.9rem; font-weight: 600; margin-bottom: 10px; }
+    .cart-item-row {
+      display: flex; justify-content: space-between;
+      font-size: 0.83rem; padding: 4px 0;
+      border-bottom: 1px solid var(--border);
+    }
+    .cart-item-row:last-child { border-bottom: none; }
+    .cart-total {
+      display: flex; justify-content: space-between;
+      font-weight: 600; padding-top: 8px; margin-top: 4px;
+      border-top: 1px solid var(--border);
+    }
+
+    /* ─ Toast ─ */
+    #toast {
+      position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%);
+      background: #1f2937; color: #fff;
+      padding: 10px 20px; border-radius: 8px;
+      font-size: 0.85rem; pointer-events: none;
+      opacity: 0; transition: opacity 0.2s;
+      z-index: 999;
+    }
+    #toast.show { opacity: 1; }
+
+    /* ─ Misc ─ */
+    .row { display: flex; gap: 10px; flex-wrap: wrap; }
+    .hidden { display: none !important; }
+    .error-msg { color: var(--danger); font-size: 0.85rem; margin-top: 8px; }
+  </style>
+</head>
+<body>
+
+<header>
+  <h1>🛒 scan2order</h1>
+  <span id="user-badge" class="user-badge hidden">not connected</span>
+</header>
+
+<main>
+
+  <!-- ── Link code panel ───────────────────────────── -->
+  <div class="section" id="link-panel">
+    <h2>Connect your phone</h2>
+    <p>Open the scan2order app, tap <strong>Share Code</strong>, and enter the code below.</p>
+    <div class="code-input-row">
+      <input id="code-input" type="text" placeholder="ENTER CODE" maxlength="8" />
+      <button id="code-submit-btn" onclick="submitCode()">Connect</button>
+    </div>
+    <div id="code-error" class="error-msg"></div>
+  </div>
+
+  <!-- ── Main UI (hidden until linked) ────────────── -->
+  <div id="main-ui" class="hidden">
+
+    <!-- Store status -->
+    <div class="section">
+      <h2>Connected stores</h2>
+      <div id="stores-list">Loading…</div>
+    </div>
+
+    <!-- OCR upload -->
+    <div class="section">
+      <h2>Upload grocery list</h2>
+      <div class="upload-area" onclick="document.getElementById('file-input').click()">
+        <p>📷 Tap to upload a photo of your grocery list</p>
+        <p style="margin-top:6px; font-size:0.78rem;">JPEG or PNG</p>
+      </div>
+      <input id="file-input" type="file" accept="image/*" onchange="handleUpload(event)" />
+      <div id="ocr-status" class="error-msg"></div>
+    </div>
+
+    <!-- Items -->
+    <div class="section">
+      <h2>Items to compare</h2>
+      <div class="items-list" id="items-list"></div>
+      <div class="row">
+        <button id="add-item-btn" class="btn-secondary" onclick="addItem()">+ Add item</button>
+        <button id="compare-btn" onclick="startCompare()">Compare prices</button>
+      </div>
+      <div id="compare-progress" class="progress-wrap hidden">
+        <div class="progress-label">
+          <span id="progress-label-text">Searching…</span>
+          <span id="progress-label-count">0 / 0</span>
+        </div>
+        <div class="progress-bar"><div class="progress-fill" id="progress-fill" style="width:0%"></div></div>
+      </div>
+    </div>
+
+    <!-- Results -->
+    <div class="section hidden" id="results-section">
+      <h2>Price comparison</h2>
+      <table class="results-table">
+        <thead>
+          <tr>
+            <th>Item</th>
+            <th>Best store</th>
+            <th>Price</th>
+            <th>Product</th>
+          </tr>
+        </thead>
+        <tbody id="results-tbody"></tbody>
+      </table>
+    </div>
+
+    <!-- Cart summary -->
+    <div class="section hidden" id="cart-section">
+      <h2>Your carts</h2>
+      <div id="carts-container"></div>
+      <div style="margin-top:14px; display:flex; justify-content:space-between; align-items:center;">
+        <div style="font-size:1rem; font-weight:700;">
+          Grand total: <span id="grand-total">₹0</span>
+        </div>
+        <button id="add-all-btn" onclick="addAllToCarts()">Add to carts</button>
+      </div>
+      <div id="cart-progress" class="progress-wrap hidden">
+        <div class="progress-label">
+          <span id="cart-progress-label">Adding…</span>
+          <span id="cart-progress-count">0 / 0</span>
+        </div>
+        <div class="progress-bar">
+          <div class="progress-fill" id="cart-progress-fill" style="width:0%"></div>
+        </div>
+      </div>
+    </div>
+
+  </div><!-- /#main-ui -->
+</main>
+
+<div id="toast"></div>
+
+<script>
+  // ── State ──────────────────────────────────────────────────
+  let USER_ID = sessionStorage.getItem("s2o_user_id") || "";
+  let _comparison = [];
+  let _carts = {};
+  let _comparePoller = null;
+  let _cartPoller = null;
+
+  // ── Init ──────────────────────────────────────────────────
+  window.addEventListener("DOMContentLoaded", () => {
+    if (USER_ID) {
+      showMainUI();
+      loadStores();
+    }
+    addItem(); // start with one empty item
+  });
+
+  // ── Helpers ───────────────────────────────────────────────
+  function api(path, opts = {}) {
+    const headers = { "Content-Type": "application/json" };
+    if (USER_ID) headers["X-User-ID"] = USER_ID;
+    return fetch(path, { headers, ...opts }).then(r => r.json());
+  }
+
+  function toast(msg, ms = 2500) {
+    const el = document.getElementById("toast");
+    el.textContent = msg;
+    el.classList.add("show");
+    setTimeout(() => el.classList.remove("show"), ms);
+  }
+
+  function storeTag(store) {
+    return `<span class="store-tag tag-${store}">${store}</span>`;
+  }
+
+  // ── Link code flow ────────────────────────────────────────
+  function submitCode() {
+    const code = document.getElementById("code-input").value.trim().toUpperCase();
+    if (code.length < 4) {
+      document.getElementById("code-error").textContent = "Please enter the full code";
+      return;
+    }
+    document.getElementById("code-submit-btn").disabled = true;
+    document.getElementById("code-error").textContent = "";
+
+    fetch(`/api/link/use/${code}`, { method: "POST" })
+      .then(r => r.json())
+      .then(data => {
+        if (data.user_id) {
+          USER_ID = data.user_id;
+          sessionStorage.setItem("s2o_user_id", USER_ID);
+          showMainUI();
+          loadStores();
+          toast("Connected! 🎉");
+        } else {
+          document.getElementById("code-error").textContent =
+            data.detail || "Invalid or expired code. Generate a new one in the app.";
+          document.getElementById("code-submit-btn").disabled = false;
+        }
+      })
+      .catch(() => {
+        document.getElementById("code-error").textContent = "Connection failed. Try again.";
+        document.getElementById("code-submit-btn").disabled = false;
+      });
+  }
+
+  function showMainUI() {
+    document.getElementById("link-panel").classList.add("hidden");
+    document.getElementById("main-ui").classList.remove("hidden");
+    const badge = document.getElementById("user-badge");
+    badge.textContent = `ID: ${USER_ID.slice(0, 8)}…`;
+    badge.classList.remove("hidden");
+  }
+
+  // ── Store status ──────────────────────────────────────────
+  function loadStores() {
+    api("/api/stores").then(data => {
+      const stores = data.stores || {};
+      const el = document.getElementById("stores-list");
+      const names = { bigbasket: "BigBasket", zepto: "Zepto", blinkit: "Blinkit" };
+      el.innerHTML = Object.entries(names).map(([key, label]) => {
+        const info = stores[key] || {};
+        const pill = info.connected
+          ? '<span class="pill pill-green">Connected</span>'
+          : '<span class="pill pill-red">Not connected</span>';
+        let extra = "";
+        if (key === "blinkit" && info.connected && !info.location_set) {
+          extra = '<span class="pill pill-amber" style="margin-left:6px">Location needed</span>';
+        }
+        return `<div class="store-row">
+          <span class="store-name">${label}</span>${pill}${extra}
+        </div>`;
+      }).join("");
+    });
+  }
+
+  // ── OCR upload ────────────────────────────────────────────
+  function handleUpload(event) {
+    const file = event.target.files[0];
+    if (!file) return;
+    const status = document.getElementById("ocr-status");
+    status.textContent = "Processing image…";
+
+    const fd = new FormData();
+    fd.append("image", file);
+
+    fetch("/api/ocr", {
+      method: "POST",
+      headers: { "X-User-ID": USER_ID },
+      body: fd,
+    })
+      .then(r => r.json())
+      .then(data => {
+        if (data.error) {
+          status.textContent = `OCR error: ${data.error}`;
+          return;
+        }
+        status.textContent = `Found ${data.items.length} items`;
+        // Clear current items and add OCR results
+        const list = document.getElementById("items-list");
+        list.innerHTML = "";
+        (data.items || []).forEach(name => addItem(name));
+        if (!data.items.length) addItem();
+      })
+      .catch(() => { status.textContent = "Upload failed. Try again."; });
+  }
+
+  // ── Item management ───────────────────────────────────────
+  let _itemId = 0;
+  function addItem(name = "", qty = "", count = 1) {
+    const id = ++_itemId;
+    const el = document.createElement("div");
+    el.className = "item-row";
+    el.id = `item-${id}`;
+    el.innerHTML = `
+      <input type="text"   placeholder="Item name" value="${esc(name)}" id="name-${id}" />
+      <input type="text"   placeholder="Qty (e.g. 500g)" value="${esc(qty)}" id="qty-${id}" style="width:110px"/>
+      <input type="number" placeholder="×" value="${count}" min="1" max="99" id="count-${id}" />
+      <button class="btn-danger" onclick="document.getElementById('item-${id}').remove()">✕</button>
+    `;
+    document.getElementById("items-list").appendChild(el);
+    el.querySelector(`#name-${id}`).focus();
+  }
+
+  function getItems() {
+    const rows = document.querySelectorAll(".item-row");
+    const items = [];
+    rows.forEach(row => {
+      const id = row.id.replace("item-", "");
+      const name = (document.getElementById(`name-${id}`)?.value || "").trim();
+      if (!name) return;
+      items.push({
+        name,
+        qty: (document.getElementById(`qty-${id}`)?.value || "").trim(),
+        count: parseInt(document.getElementById(`count-${id}`)?.value || "1", 10) || 1,
+      });
+    });
+    return items;
+  }
+
+  function esc(s) {
+    return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
+  }
+
+  // ── Compare ───────────────────────────────────────────────
+  function startCompare() {
+    const items = getItems();
+    if (!items.length) { toast("Add at least one item"); return; }
+
+    document.getElementById("compare-btn").disabled = true;
+    document.getElementById("compare-progress").classList.remove("hidden");
+    document.getElementById("results-section").classList.add("hidden");
+    document.getElementById("cart-section").classList.add("hidden");
+
+    api("/api/compare", {
+      method: "POST",
+      body: JSON.stringify({ items }),
+    }).then(data => {
+      stopComparePoller();
+      document.getElementById("compare-btn").disabled = false;
+      document.getElementById("compare-progress").classList.add("hidden");
+
+      if (data.error) { toast(data.error, 4000); return; }
+      _comparison = data.comparison || [];
+      _carts = data.carts || {};
+      renderResults(_comparison);
+      renderCarts(_carts, data.grand_total);
+    }).catch(e => {
+      stopComparePoller();
+      document.getElementById("compare-btn").disabled = false;
+      toast("Compare failed: " + e.message);
+    });
+
+    // Start polling for progress.
+    _comparePoller = setInterval(pollCompare, 800);
+  }
+
+  function pollCompare() {
+    api("/api/compare/progress").then(p => {
+      if (!p.running && p.done >= p.total && p.total > 0) stopComparePoller();
+      const pct = p.total ? Math.round((p.done / p.total) * 100) : 0;
+      document.getElementById("progress-fill").style.width = pct + "%";
+      document.getElementById("progress-label-text").textContent = p.current || "Searching…";
+      document.getElementById("progress-label-count").textContent = `${p.done} / ${p.total}`;
+    });
+  }
+
+  function stopComparePoller() {
+    if (_comparePoller) { clearInterval(_comparePoller); _comparePoller = null; }
+  }
+
+  function renderResults(comparison) {
+    const tbody = document.getElementById("results-tbody");
+    tbody.innerHTML = "";
+    comparison.forEach(entry => {
+      const item = entry.item || {};
+      const app = entry.cheapest_app;
+      const price = entry.cheapest_price;
+      // Find selected product.
+      const prods = (entry.prices || {})[app] || [];
+      const prod = prods.find(p => p.product_id === entry.selected_pid) || prods[0] || {};
+      const tr = document.createElement("tr");
+      tr.innerHTML = `
+        <td>${esc(item.name)}${item.qty ? ` <span class="price-dim">${esc(item.qty)}</span>` : ""}</td>
+        <td>${app ? storeTag(app) : '<span class="price-dim">—</span>'}</td>
+        <td>${price ? `<span class="price-main">₹${price.toFixed(0)}</span>` : '<span class="price-dim">not found</span>'}</td>
+        <td>${esc(prod.name || "—")} <span class="price-dim">${esc(prod.unit || "")}</span></td>
+      `;
+      tbody.appendChild(tr);
+    });
+    document.getElementById("results-section").classList.remove("hidden");
+  }
+
+  function renderCarts(carts, grandTotal) {
+    const container = document.getElementById("carts-container");
+    container.innerHTML = "";
+    const storeNames = { bigbasket: "BigBasket 🛒", zepto: "Zepto ⚡", blinkit: "Blinkit 🟡" };
+    Object.entries(carts).forEach(([store, cart]) => {
+      const div = document.createElement("div");
+      div.className = "cart-block";
+      const itemsHTML = (cart.items || []).map(i =>
+        `<div class="cart-item-row">
+          <span>${esc(i.name)}${i.matched_unit ? ` <span class="price-dim">${esc(i.matched_unit)}</span>` : ""}</span>
+          <span>₹${(i.price || 0).toFixed(0)}${i.count > 1 ? ` × ${i.count}` : ""}</span>
+        </div>`
+      ).join("");
+      div.innerHTML = `
+        <h3>${storeNames[store] || store}</h3>
+        ${itemsHTML}
+        <div class="cart-total"><span>Cart total</span><span>₹${(cart.total || 0).toFixed(0)}</span></div>
+      `;
+      container.appendChild(div);
+    });
+    document.getElementById("grand-total").textContent = `₹${(grandTotal || 0).toFixed(0)}`;
+    document.getElementById("cart-section").classList.remove("hidden");
+  }
+
+  // ── Add all to carts ──────────────────────────────────────
+  function addAllToCarts() {
+    if (!Object.keys(_carts).length) { toast("Run compare first"); return; }
+    document.getElementById("add-all-btn").disabled = true;
+    document.getElementById("cart-progress").classList.remove("hidden");
+
+    api("/api/cart/add-all", {
+      method: "POST",
+      body: JSON.stringify({ carts: _carts }),
+    }).then(data => {
+      stopCartPoller();
+      document.getElementById("add-all-btn").disabled = false;
+      document.getElementById("cart-progress").classList.add("hidden");
+      const results = data.results || {};
+      let added = 0, failed = 0;
+      Object.values(results).forEach(r => {
+        added += (r.added || []).length;
+        failed += (r.failed || []).length;
+      });
+      toast(`Done! ${added} added, ${failed} failed`, 3500);
+    }).catch(e => {
+      stopCartPoller();
+      document.getElementById("add-all-btn").disabled = false;
+      toast("Add-to-cart failed: " + e.message);
+    });
+
+    _cartPoller = setInterval(pollCart, 800);
+  }
+
+  function pollCart() {
+    api("/api/cart/progress").then(p => {
+      if (!p.running && p.done >= p.total && p.total > 0) stopCartPoller();
+      const pct = p.total ? Math.round((p.done / p.total) * 100) : 0;
+      document.getElementById("cart-progress-fill").style.width = pct + "%";
+      document.getElementById("cart-progress-label").textContent = p.current || "Adding…";
+      document.getElementById("cart-progress-count").textContent = `${p.done} / ${p.total}`;
+    });
+  }
+
+  function stopCartPoller() {
+    if (_cartPoller) { clearInterval(_cartPoller); _cartPoller = null; }
+  }
+
+  // ── Enter key on code input ───────────────────────────────
+  document.addEventListener("keydown", e => {
+    if (e.key === "Enter" && document.activeElement?.id === "code-input") {
+      submitCode();
+    }
+  });
+</script>
+</body>
+</html>
