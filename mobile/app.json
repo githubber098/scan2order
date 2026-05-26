@@ -1,0 +1,50 @@
+{
+  "expo": {
+    "name": "scan2order",
+    "slug": "scan2order",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "light",
+    "newArchEnabled": true,
+    "splash": {
+      "image": "./assets/splash-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#ffffff"
+    },
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "com.scan2order.app",
+      "infoPlist": {
+        "NSCameraUsageDescription": "Used to scan your handwritten grocery list.",
+        "NSPhotoLibraryUsageDescription": "Used to pick a photo of your grocery list.",
+        "NSLocationWhenInUseUsageDescription": "Used by Blinkit to show products available near you."
+      }
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#ffffff"
+      },
+      "package": "com.scan2order.app",
+      "permissions": [
+        "CAMERA",
+        "READ_EXTERNAL_STORAGE",
+        "ACCESS_FINE_LOCATION",
+        "ACCESS_COARSE_LOCATION"
+      ]
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "plugins": [
+      "expo-image-picker",
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "Used by Blinkit to show products available near you."
+        }
+      ]
+    ]
+  }
+}

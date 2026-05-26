@@ -1,0 +1,14 @@
+services:
+  - type: web
+    name: scan2order-backend
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn server:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: UPSTASH_REDIS_REST_URL
+        sync: false          # set in Render dashboard
+      - key: UPSTASH_REDIS_REST_TOKEN
+        sync: false          # set in Render dashboard
+      - key: GROQ_API_KEY
+        sync: false          # optional — leave blank to disable AI ranking
+    autoDeploy: true
