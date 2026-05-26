@@ -1,0 +1,588 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>scan2order: grocery price compare</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            background: #0a0a1a;
+            color: #e0e0e0;
+            min-height: 100vh;
+            padding: 20px;
+        }
+        .container { max-width: 500px; margin: 0 auto; }
+
+        .logo { text-align: center; margin-bottom: 24px; }
+        .logo h1 {
+            font-size: 26px;
+            background: linear-gradient(135deg, #4ecdc4, #2db5ad);
+            background-clip: text;
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+        .logo p { color: #667; font-size: 13px; margin-top: 4px; }
+
+        textarea {
+            width: 100%; height: 180px;
+            background: #111; border: 1px solid #333; border-radius: 12px;
+            color: #eee; padding: 14px; font-size: 14px; resize: vertical;
+            font-family: inherit;
+        }
+        textarea:focus { outline: none; border-color: #4ecdc4; }
+        textarea::placeholder { color: #555; }
+
+        .btn {
+            width: 100%; padding: 14px; margin-top: 12px;
+            border: none; border-radius: 12px; font-size: 15px;
+            font-weight: 600; cursor: pointer; transition: opacity 0.15s;
+        }
+        .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+        .btn-primary { background: linear-gradient(135deg, #4ecdc4, #2db5ad); color: #001; }
+        .btn-secondary { background: #1a1a2e; border: 1px solid #333; color: #4ecdc4; }
+        .btn-tiny {
+            display: inline-block; width: auto; padding: 4px 10px; margin-top: 0;
+            margin-left: 6px; font-size: 11px; border: 1px solid #333; background: none;
+            color: #888; border-radius: 6px; cursor: pointer;
+        }
+        .btn-tiny:hover { background: #1a2a3a; color: #4ecdc4; border-color: #4ecdc4; }
+
+        /* Auth section */
+        .auth-section {
+            background: #111122; border: 1px solid #222;
+            border-radius: 12px; padding: 14px; margin-bottom: 16px;
+        }
+        .auth-section h3 {
+            font-size: 13px; color: #888; margin-bottom: 10px;
+            text-transform: uppercase; letter-spacing: 0.5px;
+        }
+        .link-row { display: flex; gap: 8px; align-items: center; }
+        .link-row input {
+            flex: 1; padding: 8px 12px; background: #0a0a1a;
+            border: 1px solid #333; border-radius: 8px; color: #eee;
+            font-size: 14px; font-family: monospace; text-transform: uppercase;
+            letter-spacing: 2px;
+        }
+        .link-row input:focus { outline: none; border-color: #4ecdc4; }
+        .link-btn {
+            padding: 8px 14px; background: none; border: 1px solid #4ecdc4;
+            color: #4ecdc4; border-radius: 8px; font-size: 13px; cursor: pointer;
+        }
+        .store-dots { display: flex; gap: 16px; margin-top: 10px; flex-wrap: wrap; }
+        .store-dot-item { display: flex; align-items: center; gap: 6px; font-size: 13px; }
+        .dot {
+            width: 8px; height: 8px; border-radius: 50%; display: inline-block;
+        }
+        .dot-green { background: #4ecdc4; }
+        .dot-red { background: #666; }
+        .dot-yellow { background: #e8a52a; animation: dotPulse 1.6s ease-in-out infinite; }
+        @keyframes dotPulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.45; } }
+        .auth-hint { color: #555; font-size: 12px; margin-top: 8px; }
+
+        /* OCR scan box */
+        .scan-section { margin-bottom: 16px; }
+        .scan-label {
+            display: block; padding: 14px; background: #1a1a2e;
+            border: 1px dashed #4ecdc4; border-radius: 12px;
+            color: #4ecdc4; text-align: center; font-size: 14px; cursor: pointer;
+        }
+        .scan-status { margin-top: 8px; font-size: 12px; color: #888; text-align: center; min-height: 16px; }
+
+        .status {
+            margin-top: 12px; padding: 10px 14px;
+            background: #1a1a2e; border-left: 3px solid #4ecdc4;
+            border-radius: 6px; font-size: 13px;
+        }
+        .status.error { border-left-color: #e24b4a; color: #e24b4a; }
+
+        .progress { margin-top: 12px; padding: 10px 14px; background: #1a1a2e; border-radius: 6px; font-size: 13px; }
+        .progress .progress-label { display: flex; justify-content: space-between; color: #aaa; margin-bottom: 6px; font-size: 12px; }
+        .progress .current { color: #4ecdc4; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 60%; }
+        .progress-bar { width: 100%; height: 4px; background: #222; border-radius: 2px; }
+        .progress-fill { height: 100%; background: linear-gradient(90deg, #4ecdc4, #2db5ad); border-radius: 2px; transition: width 0.3s; }
+
+        /* Results */
+        .results-section { margin-top: 20px; }
+        .results-section h2 { font-size: 16px; margin-bottom: 12px; color: #ccc; }
+
+        .item-card {
+            background: #111122; border: 1px solid #222;
+            border-radius: 12px; padding: 14px; margin-bottom: 10px;
+        }
+        .item-name { font-size: 14px; color: #888; margin-bottom: 6px; }
+        .no-match { color: #555; font-size: 13px; font-style: italic; }
+
+        .app-results { display: grid; gap: 8px; margin-top: 8px; }
+        .product-row {
+            display: flex; justify-content: space-between; align-items: center;
+            padding: 8px 10px; background: #0d0d1e; border-radius: 8px;
+            border: 1px solid #1e1e3e;
+        }
+        .product-row.cheapest { border-color: #4ecdc4; background: #0a1a1a; }
+        .product-info { flex: 1; }
+        .product-name { font-size: 13px; color: #ddd; }
+        .product-meta { font-size: 11px; color: #666; margin-top: 2px; }
+        .product-price { font-size: 15px; font-weight: 700; color: #4ecdc4; }
+        .product-price.cheapest { color: #4ecdc4; }
+        .best-badge {
+            display: inline-block; font-size: 10px; padding: 2px 6px;
+            background: #4ecdc4; color: #001; border-radius: 4px;
+            font-weight: 700; margin-left: 6px;
+        }
+
+        /* Grand total + cart actions */
+        .summary-card {
+            background: #1a1a2e; border: 1px solid #333;
+            border-radius: 12px; padding: 16px; margin-top: 16px;
+        }
+        .grand-total { font-size: 20px; font-weight: 700; color: #4ecdc4; }
+        .cart-list { margin-top: 10px; }
+        .cart-store { margin-bottom: 12px; }
+        .cart-store-name { font-size: 12px; color: #888; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px; }
+        .cart-item-row { display: flex; justify-content: space-between; font-size: 13px; padding: 3px 0; color: #ccc; }
+        .cart-item-price { color: #888; }
+        .add-to-carts-btn { margin-top: 12px; }
+
+        .cart-result {
+            margin-top: 10px; padding: 10px; background: #0a1a0a;
+            border: 1px solid #1a3a1a; border-radius: 8px; font-size: 12px; color: #4ecdc4;
+        }
+        .cart-result.has-failed { border-color: #3a1a1a; background: #1a0a0a; }
+        .failed-item { color: #e24b4a; }
+
+        .skipped-notice { color: #888; font-size: 12px; margin-top: 6px; font-style: italic; }
+    </style>
+</head>
+<body>
+<div class="container">
+    <div class="logo">
+        <h1>scan2order</h1>
+        <p>grocery price comparison across BigBasket, Blinkit &amp; Zepto</p>
+    </div>
+
+    <!-- Auth section -->
+    <div class="auth-section" id="auth-section">
+        <h3>Store connections</h3>
+        <div class="link-row">
+            <input id="link-code" type="text" placeholder="Enter link code from app"
+                   maxlength="8" oninput="this.value=this.value.toUpperCase()">
+            <button class="link-btn" onclick="resolveCode()">Connect</button>
+        </div>
+        <div class="store-dots" id="store-dots">
+            <div class="store-dot-item">
+                <span class="dot dot-red" id="dot-bigbasket"></span>
+                <span>BigBasket</span>
+            </div>
+            <div class="store-dot-item">
+                <span class="dot dot-red" id="dot-blinkit"></span>
+                <span>Blinkit</span>
+            </div>
+            <div class="store-dot-item">
+                <span class="dot dot-red" id="dot-zepto"></span>
+                <span>Zepto</span>
+            </div>
+        </div>
+        <p class="auth-hint">Open the scan2order mobile app → Settings → Link to web app</p>
+    </div>
+
+    <!-- OCR scan -->
+    <div class="scan-section">
+        <label class="scan-label" for="ocr-input">
+            📷 Scan grocery list photo
+        </label>
+        <input type="file" id="ocr-input" accept="image/*" style="display:none"
+               onchange="ocrImage(event)">
+        <div class="scan-status" id="scan-status"></div>
+    </div>
+
+    <!-- Manual input -->
+    <textarea id="grocery-list" placeholder="Tomatoes 500g
+Onions 1kg
+Amul Butter 100g
+Atta 5kg
+..."></textarea>
+
+    <button class="btn btn-primary" onclick="startCompare()" id="compare-btn">
+        Compare prices
+    </button>
+    <button class="btn btn-secondary" onclick="clearAll()" style="margin-top:8px">
+        Clear
+    </button>
+
+    <div id="progress-bar-wrap" style="display:none">
+        <div class="progress">
+            <div class="progress-label">
+                <span id="progress-text">Searching...</span>
+                <span class="current" id="progress-current"></span>
+            </div>
+            <div class="progress-bar"><div class="progress-fill" id="progress-fill" style="width:0%"></div></div>
+        </div>
+    </div>
+
+    <div id="status-wrap"></div>
+
+    <div id="results-section" class="results-section" style="display:none">
+        <h2>Results</h2>
+        <div id="item-cards"></div>
+
+        <div class="summary-card" id="summary-card" style="display:none">
+            <div>Grand total: <span class="grand-total" id="grand-total">₹0</span></div>
+            <div class="cart-list" id="cart-list"></div>
+            <button class="btn btn-primary add-to-carts-btn" onclick="addAllToCarts()" id="add-btn">
+                Add to carts
+            </button>
+            <div id="cart-result-wrap"></div>
+        </div>
+        <div id="skipped-notice" class="skipped-notice"></div>
+    </div>
+</div>
+
+<script>
+// ── State ────────────────────────────────────────────────────────────────────
+
+let userId = localStorage.getItem('user_id') || '';
+let comparisonData = null;
+let pollTimer = null;
+
+// ── Init ─────────────────────────────────────────────────────────────────────
+
+window.addEventListener('load', () => {
+    if (userId) {
+        refreshStoreStatus();
+    }
+});
+
+// ── Auth ─────────────────────────────────────────────────────────────────────
+
+async function resolveCode() {
+    const code = document.getElementById('link-code').value.trim();
+    if (!code || code.length < 4) {
+        showStatus('Enter the link code from the mobile app', 'error');
+        return;
+    }
+    showStatus('Connecting...');
+    try {
+        const resp = await fetch(`/api/auth/link/${encodeURIComponent(code)}`);
+        const data = await resp.json();
+        if (data.success) {
+            userId = data.user_id;
+            localStorage.setItem('user_id', userId);
+            updateStoreDots(data.stores);
+            document.getElementById('link-code').value = '';
+            showStatus('Connected! ' + Object.entries(data.stores)
+                .filter(([, v]) => v).map(([k]) => k).join(', ') + ' ready');
+        } else {
+            showStatus(data.error || 'Invalid code — generate a new one in the app', 'error');
+        }
+    } catch (e) {
+        showStatus('Connection error: ' + e.message, 'error');
+    }
+}
+
+async function refreshStoreStatus() {
+    if (!userId) return;
+    try {
+        const resp = await fetch(`/api/auth/status/${encodeURIComponent(userId)}`);
+        const data = await resp.json();
+        const stores = {};
+        for (const s of ['bigbasket', 'blinkit', 'zepto']) {
+            stores[s] = !!(data.connected_stores && data.connected_stores[s]);
+        }
+        updateStoreDots(stores);
+    } catch (e) { /* silent */ }
+}
+
+function updateStoreDots(stores) {
+    for (const [store, connected] of Object.entries(stores)) {
+        const dot = document.getElementById('dot-' + store);
+        if (dot) {
+            dot.className = 'dot ' + (connected ? 'dot-green' : 'dot-red');
+        }
+    }
+}
+
+// ── OCR ──────────────────────────────────────────────────────────────────────
+
+async function ocrImage(event) {
+    const file = event.target.files[0];
+    if (!file) return;
+    document.getElementById('scan-status').textContent = 'Processing image...';
+
+    const formData = new FormData();
+    formData.append('image', file);
+
+    try {
+        const resp = await fetch('/api/ocr', { method: 'POST', body: formData });
+        const data = await resp.json();
+        if (data.error) {
+            document.getElementById('scan-status').textContent = 'OCR error: ' + data.error;
+            return;
+        }
+        const items = data.items || [];
+        if (items.length === 0) {
+            document.getElementById('scan-status').textContent = 'No items found. Try better lighting.';
+            return;
+        }
+        document.getElementById('grocery-list').value = items.join('\n');
+        document.getElementById('scan-status').textContent = `✓ Found ${items.length} items`;
+    } catch (e) {
+        document.getElementById('scan-status').textContent = 'Error: ' + e.message;
+    }
+    event.target.value = '';
+}
+
+// ── Compare ──────────────────────────────────────────────────────────────────
+
+async function startCompare() {
+    if (!userId) {
+        showStatus('Enter your link code first (from the mobile app)', 'error');
+        return;
+    }
+
+    const raw = document.getElementById('grocery-list').value.trim();
+    if (!raw) {
+        showStatus('Enter a grocery list or scan a photo', 'error');
+        return;
+    }
+
+    const items = raw.split('\n')
+        .map(line => line.trim())
+        .filter(line => line.length > 0)
+        .map(line => {
+            // Parse "Tomatoes 500g" -> {name: "Tomatoes", qty: "500g"}
+            const m = line.match(/^(.+?)\s+(\d+(?:\.\d+)?\s*(?:kg|g|gm|ml|l|L|pcs?|pieces?|pack))$/i);
+            if (m) return { name: m[1].trim(), qty: m[2].trim() };
+            return { name: line };
+        });
+
+    if (items.length === 0) {
+        showStatus('No items parsed from input', 'error');
+        return;
+    }
+
+    document.getElementById('compare-btn').disabled = true;
+    document.getElementById('results-section').style.display = 'none';
+    document.getElementById('progress-bar-wrap').style.display = 'block';
+    document.getElementById('status-wrap').innerHTML = '';
+
+    // Start progress polling
+    let lastDone = 0;
+    pollTimer = setInterval(async () => {
+        try {
+            const pr = await fetch(`/api/compare/progress?user_id=${encodeURIComponent(userId)}`);
+            const p = await pr.json();
+            if (p.total > 0) {
+                const pct = Math.round(100 * p.done / p.total);
+                document.getElementById('progress-fill').style.width = pct + '%';
+                document.getElementById('progress-text').textContent =
+                    `${p.done}/${p.total} items`;
+                document.getElementById('progress-current').textContent =
+                    p.current || '';
+            }
+        } catch (e) { /* silent */ }
+    }, 500);
+
+    try {
+        const resp = await fetch('/api/compare', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ items, user_id: userId }),
+        });
+        const data = await resp.json();
+
+        clearInterval(pollTimer);
+        document.getElementById('progress-bar-wrap').style.display = 'none';
+        document.getElementById('compare-btn').disabled = false;
+
+        if (data.error) {
+            showStatus(data.error, 'error');
+            return;
+        }
+
+        comparisonData = data;
+        renderResults(data);
+    } catch (e) {
+        clearInterval(pollTimer);
+        document.getElementById('progress-bar-wrap').style.display = 'none';
+        document.getElementById('compare-btn').disabled = false;
+        showStatus('Error: ' + e.message, 'error');
+    }
+}
+
+function renderResults(data) {
+    const comparison = data.comparison || [];
+    const carts = data.carts || {};
+    const grandTotal = data.grand_total || 0;
+    const skipped = data.skipped_apps || [];
+
+    document.getElementById('results-section').style.display = 'block';
+    document.getElementById('status-wrap').innerHTML = '';
+
+    // Item cards
+    const cardsEl = document.getElementById('item-cards');
+    cardsEl.innerHTML = '';
+
+    for (const entry of comparison) {
+        const item = entry.item || {};
+        const prices = entry.prices || {};
+        const cheapestApp = entry.cheapest_app;
+        const selectedPid = entry.selected_pid;
+
+        const card = document.createElement('div');
+        card.className = 'item-card';
+
+        const nameEl = document.createElement('div');
+        nameEl.className = 'item-name';
+        nameEl.textContent = `${item.name || ''}${item.qty ? ' · ' + item.qty : ''}`;
+        card.appendChild(nameEl);
+
+        if (!cheapestApp) {
+            const nm = document.createElement('div');
+            nm.className = 'no-match';
+            nm.textContent = 'No matching products found';
+            card.appendChild(nm);
+            cardsEl.appendChild(card);
+            continue;
+        }
+
+        const grid = document.createElement('div');
+        grid.className = 'app-results';
+
+        for (const [storeName, products] of Object.entries(prices)) {
+            for (const p of (products || []).slice(0, 2)) {
+                const isCheapest = storeName === cheapestApp && p.product_id === selectedPid;
+                const row = document.createElement('div');
+                row.className = 'product-row' + (isCheapest ? ' cheapest' : '');
+
+                const price = p.sale_price || p.price || 0;
+                const storeLabel = { bigbasket: 'BigBasket', blinkit: 'Blinkit', zepto: 'Zepto' }[storeName] || storeName;
+
+                row.innerHTML = `
+                    <div class="product-info">
+                        <div class="product-name">${escHtml(p.name || '')}${isCheapest ? '<span class="best-badge">BEST</span>' : ''}</div>
+                        <div class="product-meta">${escHtml(storeLabel)}${p.unit ? ' · ' + escHtml(p.unit) : ''}</div>
+                    </div>
+                    <div class="product-price${isCheapest ? ' cheapest' : ''}">₹${price.toFixed(0)}</div>
+                `;
+                grid.appendChild(row);
+            }
+        }
+
+        card.appendChild(grid);
+        cardsEl.appendChild(card);
+    }
+
+    // Summary card
+    if (grandTotal > 0) {
+        document.getElementById('grand-total').textContent = '₹' + grandTotal.toFixed(0);
+        const cartList = document.getElementById('cart-list');
+        cartList.innerHTML = '';
+        for (const [storeName, cartData] of Object.entries(carts)) {
+            const storeLabel = { bigbasket: 'BigBasket', blinkit: 'Blinkit', zepto: 'Zepto' }[storeName] || storeName;
+            const div = document.createElement('div');
+            div.className = 'cart-store';
+            let html = `<div class="cart-store-name">${escHtml(storeLabel)} — ₹${(cartData.total || 0).toFixed(0)}</div>`;
+            for (const item of (cartData.items || [])) {
+                html += `<div class="cart-item-row"><span>${escHtml(item.matched_name || item.name || '')}</span><span class="cart-item-price">₹${(item.price || 0).toFixed(0)}</span></div>`;
+            }
+            div.innerHTML = html;
+            cartList.appendChild(div);
+        }
+        document.getElementById('summary-card').style.display = 'block';
+    }
+
+    if (skipped.length > 0) {
+        document.getElementById('skipped-notice').textContent =
+            `Skipped (not connected): ${skipped.join(', ')}`;
+    }
+}
+
+// ── Add to carts ──────────────────────────────────────────────────────────────
+
+async function addAllToCarts() {
+    if (!comparisonData || !userId) return;
+
+    document.getElementById('add-btn').disabled = true;
+    document.getElementById('cart-result-wrap').innerHTML = '';
+
+    const carts = comparisonData.carts || {};
+
+    try {
+        const resp = await fetch('/api/cart/add-all', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ carts, user_id: userId }),
+        });
+        const data = await resp.json();
+        renderCartResult(data.results || {});
+    } catch (e) {
+        document.getElementById('cart-result-wrap').innerHTML =
+            `<div class="cart-result has-failed">Error: ${escHtml(e.message)}</div>`;
+    }
+    document.getElementById('add-btn').disabled = false;
+}
+
+function renderCartResult(results) {
+    const wrap = document.getElementById('cart-result-wrap');
+    wrap.innerHTML = '';
+    let anyFailed = false;
+
+    for (const [storeName, r] of Object.entries(results)) {
+        const storeLabel = { bigbasket: 'BigBasket', blinkit: 'Blinkit', zepto: 'Zepto' }[storeName] || storeName;
+        const added = r.added || [];
+        const failed = r.failed || [];
+        if (failed.length > 0) anyFailed = true;
+
+        const div = document.createElement('div');
+        div.className = 'cart-result' + (failed.length > 0 ? ' has-failed' : '');
+
+        let html = `<strong>${escHtml(storeLabel)}</strong>: ${added.length} added`;
+        if (failed.length > 0) {
+            html += `, ${failed.length} failed`;
+        }
+
+        const checkoutUrls = {
+            bigbasket: 'https://www.bigbasket.com/basket/',
+            blinkit: 'https://blinkit.com/cart',
+            zepto: 'https://www.zepto.com/?cart=open',
+        };
+        if (added.length > 0 && checkoutUrls[storeName]) {
+            html += ` — <a href="${checkoutUrls[storeName]}" target="_blank" style="color:#4ecdc4">Open cart →</a>`;
+        }
+
+        if (failed.length > 0) {
+            for (const f of failed.slice(0, 3)) {
+                html += `<div class="failed-item">✗ ${escHtml(f.matched_name || f.name || '')}${f.failed_reason ? ': ' + escHtml(f.failed_reason) : ''}</div>`;
+            }
+        }
+
+        div.innerHTML = html;
+        wrap.appendChild(div);
+    }
+}
+
+// ── Utilities ─────────────────────────────────────────────────────────────────
+
+function showStatus(msg, type) {
+    const el = document.getElementById('status-wrap');
+    el.innerHTML = `<div class="status${type === 'error' ? ' error' : ''}">${escHtml(msg)}</div>`;
+}
+
+function clearAll() {
+    document.getElementById('grocery-list').value = '';
+    document.getElementById('results-section').style.display = 'none';
+    document.getElementById('status-wrap').innerHTML = '';
+    document.getElementById('scan-status').textContent = '';
+    comparisonData = null;
+}
+
+function escHtml(s) {
+    return String(s)
+        .replace(/&/g,'&amp;').replace(/</g,'&lt;')
+        .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+</script>
+</body>
+</html>
