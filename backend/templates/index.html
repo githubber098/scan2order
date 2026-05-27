@@ -157,44 +157,45 @@
 
         .skipped-notice { color: #888; font-size: 12px; margin-top: 6px; font-style: italic; }
 
-        /* Browser auth modal */
+        /* Browser auth modal — near full-screen, mobile-sized browser pane */
         .browser-modal {
             display: none; position: fixed; inset: 0;
-            background: rgba(0,0,0,0.92); z-index: 1000;
+            background: rgba(0,0,0,0.94); z-index: 1000;
             flex-direction: column; align-items: center; justify-content: center;
-            padding: 16px;
+            padding: 8px;
         }
         .browser-modal.open { display: flex; }
         .browser-box {
-            background: #111122; border: 1px solid #333; border-radius: 16px;
-            width: 100%; max-width: 720px; overflow: hidden;
+            background: #111122; border: 1px solid #333; border-radius: 14px;
+            /* width sized to the 430px mobile viewport; height fills the screen */
+            width: min(460px, 100%);
+            max-height: calc(100vh - 16px);
+            display: flex; flex-direction: column; overflow: hidden;
         }
         .browser-titlebar {
             display: flex; justify-content: space-between; align-items: center;
-            padding: 12px 16px; border-bottom: 1px solid #222;
+            padding: 10px 14px; border-bottom: 1px solid #222; flex-shrink: 0;
         }
         .browser-title { font-size: 14px; font-weight: 600; color: #4ecdc4; }
-        .browser-hint { font-size: 12px; color: #555; margin-left: 8px; }
         .browser-close-btn {
             background: none; border: 1px solid #444; color: #aaa;
             border-radius: 6px; padding: 4px 10px; cursor: pointer; font-size: 13px;
         }
         .browser-close-btn:hover { border-color: #e24b4a; color: #e24b4a; }
+        /* Screenshot fills remaining height; object-fit preserves aspect ratio */
         #browser-screenshot {
-            width: 100%; display: block; cursor: crosshair;
-            background: #000; min-height: 120px;
+            flex: 1; min-height: 0;
+            width: 100%; display: block;
+            object-fit: contain; background: #000;
+            cursor: crosshair;
         }
         .browser-footer {
-            padding: 10px 12px; border-top: 1px solid #222;
-            display: flex; gap: 8px; align-items: center;
+            padding: 8px 14px; border-top: 1px solid #1a1a2e;
+            display: flex; align-items: center; justify-content: space-between;
+            flex-shrink: 0;
         }
-        #browser-type-input {
-            flex: 1; padding: 8px 12px; background: #0a0a1a;
-            border: 1px solid #333; border-radius: 8px;
-            color: #eee; font-size: 13px; font-family: inherit;
-        }
-        #browser-type-input:focus { outline: none; border-color: #4ecdc4; }
-        #browser-auth-status { font-size: 12px; color: #666; white-space: nowrap; flex-shrink: 0; }
+        .browser-footer-hint { font-size: 11px; color: #444; }
+        #browser-auth-status { font-size: 12px; color: #555; }
     </style>
 </head>
 <body>
@@ -281,21 +282,16 @@ Atta 5kg
     </div>
 </div>
 
-<!-- Browser auth modal: shows a live Playwright screenshot, forwards events -->
+<!-- Browser auth modal: live Playwright screenshot; click + type directly -->
 <div class="browser-modal" id="browser-modal">
     <div class="browser-box">
         <div class="browser-titlebar">
-            <span>
-                <span class="browser-title" id="browser-title">Login</span>
-                <span class="browser-hint">Log in normally — we'll detect when you're done</span>
-            </span>
+            <span class="browser-title" id="browser-title">Login</span>
             <button class="browser-close-btn" onclick="closeBrowserSession()">✕ Cancel</button>
         </div>
-        <img id="browser-screenshot" src="" alt="Loading browser...">
+        <img id="browser-screenshot" src="" alt="Loading…" tabindex="0">
         <div class="browser-footer">
-            <input id="browser-type-input" type="text"
-                   placeholder="Click on the page above to focus, then type here"
-                   autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false">
+            <span class="browser-footer-hint">Click anywhere to interact &bull; type directly &bull; scroll works too</span>
             <span id="browser-auth-status">Waiting for login…</span>
         </div>
     </div>
@@ -354,17 +350,32 @@ function updateStoreDots(stores) {
 
 // ── Browser auth modal ────────────────────────────────────────────────────────
 
+// Document-level keyboard handler — active only while the modal is open.
+// Captures ALL keystrokes so the user can type directly without focusing
+// a separate input field.
+function _browserKeyHandler(e) {
+    // Let browser shortcuts (Ctrl+R, F12, etc.) pass through
+    if (e.ctrlKey || e.metaKey) return;
+    const ignore = ['Shift', 'Alt', 'Meta', 'Control', 'CapsLock', 'Fn', 'Dead'];
+    if (ignore.includes(e.key)) return;
+    e.preventDefault();
+    if (e.key.length === 1) {
+        _sendBrowserEvent({ type: 'type', text: e.key });
+    } else {
+        _sendBrowserEvent({ type: 'key', key: e.key });
+    }
+}
+
 function _initBrowserModal() {
     const img = document.getElementById('browser-screenshot');
-    const typeInput = document.getElementById('browser-type-input');
 
-    // Click on screenshot → send normalised coords to Playwright
+    // Click on screenshot → normalised coords to Playwright
     img.addEventListener('click', (e) => {
         const rect = img.getBoundingClientRect();
+        // getBoundingClientRect gives the rendered size; divide to normalise
         const nx = (e.clientX - rect.left) / rect.width;
         const ny = (e.clientY - rect.top) / rect.height;
         _sendBrowserEvent({ type: 'click', nx, ny });
-        typeInput.focus();
     });
 
     // Scroll on screenshot → forward deltaY
@@ -372,17 +383,6 @@ function _initBrowserModal() {
         e.preventDefault();
         _sendBrowserEvent({ type: 'scroll', delta_y: e.deltaY });
     }, { passive: false });
-
-    // Keyboard in type input → forward every keystroke, never let it accumulate
-    typeInput.addEventListener('keydown', (e) => {
-        if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
-            e.preventDefault();
-            _sendBrowserEvent({ type: 'type', text: e.key });
-        } else if (!['Shift', 'Control', 'Alt', 'Meta', 'CapsLock'].includes(e.key)) {
-            e.preventDefault();
-            _sendBrowserEvent({ type: 'key', key: e.key });
-        }
-    });
 }
 
 async function openBrowserAuth(store) {
@@ -412,7 +412,9 @@ async function openBrowserAuth(store) {
         (storeNames[store] || store) + ' login';
     document.getElementById('browser-auth-status').textContent = 'Waiting for login…';
     document.getElementById('browser-modal').classList.add('open');
-    document.getElementById('browser-type-input').focus();
+    document.getElementById('browser-screenshot').focus();
+    // Capture all keystrokes globally while the modal is open
+    document.addEventListener('keydown', _browserKeyHandler);
 
     // Refresh screenshot ~3 fps
     _screenshotTimer = setInterval(_refreshScreenshot, 350);
@@ -467,6 +469,7 @@ async function _closeBrowserModal() {
     _screenshotTimer = null;
     _checkTimer = null;
     _browserSessionId = null;
+    document.removeEventListener('keydown', _browserKeyHandler);
     document.getElementById('browser-modal').classList.remove('open');
     document.getElementById('browser-screenshot').src = '';
 }

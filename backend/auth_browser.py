@@ -14,13 +14,15 @@ import asyncio
 import time
 from typing import Optional
 
-_VIEWPORT_W = 1280
-_VIEWPORT_H = 800
+_VIEWPORT_W = 430
+_VIEWPORT_H = 700
 _SESSION_TIMEOUT = 600  # 10 minutes
 
+# Navigate to the homepage for every store so WAFs don't see a bot
+# landing directly on a login/auth URL (Akamai blocks that pattern).
 _STORE_CONFIG = {
     "bigbasket": {
-        "url": "https://www.bigbasket.com/accounts/login/",
+        "url": "https://www.bigbasket.com/",
         "auth_cookie": "BBAUTHTOKEN",
     },
     "blinkit": {
@@ -32,6 +34,19 @@ _STORE_CONFIG = {
         "auth_cookie": "accessToken",
     },
 }
+
+_MOBILE_UA = (
+    "Mozilla/5.0 (Linux; Android 14; Pixel 8) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/131.0.6778.135 Mobile Safari/537.36"
+)
+
+# Injected before every page navigation to hide Playwright's automation flags.
+_STEALTH_SCRIPT = """
+    Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+    Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3] });
+    window.chrome = { runtime: {} };
+"""
 
 _pw = None
 _sessions: dict[str, "_Session"] = {}
@@ -120,13 +135,15 @@ async def start(user_id: str, store: str) -> str:
     )
     context = await browser.new_context(
         viewport={"width": _VIEWPORT_W, "height": _VIEWPORT_H},
-        user_agent=(
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) "
-            "Chrome/124.0.0.0 Safari/537.36"
-        ),
+        user_agent=_MOBILE_UA,
+        is_mobile=True,
+        has_touch=True,
+        device_scale_factor=1,
+        locale="en-IN",
+        timezone_id="Asia/Kolkata",
     )
     page = await context.new_page()
+    await page.add_init_script(_STEALTH_SCRIPT)
     await page.goto(
         _STORE_CONFIG[store]["url"],
         wait_until="domcontentloaded",
