@@ -794,6 +794,52 @@ async def api_cart_progress(user_id: str):
     return dict(_cart_progress.get(user_id, _new_progress()))
 
 
+# ── Log viewer ───────────────────────────────────────────────────────────────
+# Exposes the tail of /app/data/server.log over HTTP so autonomous loop
+# sessions can check real-time output without SSH access.
+# Protected by LOG_API_KEY env var (set in .env on the host).
+
+_LOG_FILE = BASE_DIR.parent / "data" / "server.log"
+_MAX_LOG_BYTES = 10 * 1024 * 1024  # only read the last 10 MB to stay fast
+
+
+@app.get("/api/logs")
+async def api_logs(key: str = "", n: int = 300):
+    """Return the last N lines of the server log.
+
+    Protected: requires ?key=<LOG_API_KEY>.  Returns 403 if the key is wrong
+    or LOG_API_KEY is not set.  Returns 404 if the log file doesn't exist yet
+    (happens on the very first startup before any output is written).
+    """
+    api_key = os.getenv("LOG_API_KEY", "")
+    if not api_key or key != api_key:
+        return Response(status_code=403)
+    if not _LOG_FILE.exists():
+        return Response(
+            status_code=404,
+            content="Log file not found — server may not have restarted since this endpoint was added.",
+        )
+    try:
+        # Read only the tail of large files to stay fast
+        size = _LOG_FILE.stat().st_size
+        if size > _MAX_LOG_BYTES:
+            with open(_LOG_FILE, "rb") as fh:
+                fh.seek(size - _MAX_LOG_BYTES)
+                raw = fh.read().decode("utf-8", errors="replace")
+        else:
+            raw = _LOG_FILE.read_text(encoding="utf-8", errors="replace")
+        lines = raw.splitlines()
+        tail = lines[-n:]
+        return {
+            "total_lines": len(lines),
+            "returned": len(tail),
+            "log_size_kb": round(size / 1024),
+            "lines": tail,
+        }
+    except Exception as e:
+        return {"error": str(e), "lines": []}
+
+
 # ── App info ──────────────────────────────────────────────────────────────────
 
 @app.get("/api/apps")
