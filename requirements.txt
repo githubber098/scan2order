@@ -19,3 +19,6 @@ playwright-stealth>=1.0.6  # patches canvas/WebGL/timing to defeat WAF bot detec
 
 # Optional: Groq LLM ranking fallback
 # groq>=0.8.0  # auto-installed if GROQ_API_KEY is set; safe to add explicitly
+
+# Testing
+pytest>=8.0.0
