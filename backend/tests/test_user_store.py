@@ -166,9 +166,13 @@ class TestGetUserStores:
 class TestLinkCodes:
     def test_create_returns_8_char_code(self, clean_db):
         from storage import user_store
+        import re
         code = user_store.create_link_code(UID)
         assert len(code) == 8
-        assert code.isalnum()
+        # token_urlsafe uses base64url alphabet: A-Z, 0-9, -, _
+        # isalnum() would reject hyphens/underscores — use a regex instead.
+        assert re.fullmatch(r"[A-Z0-9_\-]+", code), \
+            f"Code '{code}' contains unexpected characters"
 
     def test_get_user_id_by_valid_code(self, clean_db):
         from storage import user_store
