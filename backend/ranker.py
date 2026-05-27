@@ -148,19 +148,21 @@ def filter_by_query_relevance(products: list, query: str) -> list:
 
 
 # ---------------------------------------------------------------------------
-# Groq fallback (optional)
+# Ollama fallback (optional — only runs when algorithmic ranker finds no winner)
 # ---------------------------------------------------------------------------
 
-async def _groq_rank(original_item: str, products: list[dict]) -> list[dict]:
-    """Use Groq llama-3.3-70b to pick the best 3 products and explain why.
+async def _ollama_rank(original_item: str, products: list[dict]) -> list[dict]:
+    """Ask the local Ollama model to pick the best product match.
 
-    Returns the same products list with recommended=True on the best match
-    and reason filled in. Falls back to returning products unchanged on error.
-    Requires GROQ_API_KEY env var.
+    Returns the same products list with recommended=True on the best match.
+    Falls back to returning products unchanged on any error.
+    Requires OLLAMA_HOST env var (set automatically by docker-compose).
     """
-    api_key = os.getenv("GROQ_API_KEY")
-    if not api_key:
+    host = os.getenv("OLLAMA_HOST")
+    if not host:
         return products
+
+    model = os.getenv("OLLAMA_MODEL", "llama3.2:3b")
 
     try:
         import httpx as _httpx
@@ -177,13 +179,11 @@ async def _groq_rank(original_item: str, products: list[dict]) -> list[dict]:
             f"Only return valid JSON, no other text."
         )
 
-        async with _httpx.AsyncClient(timeout=10.0) as client:
+        async with _httpx.AsyncClient(timeout=30.0) as client:
             resp = await client.post(
-                "https://api.groq.com/openai/v1/chat/completions",
-                headers={"Authorization": f"Bearer {api_key}",
-                         "Content-Type": "application/json"},
+                f"{host}/v1/chat/completions",
                 json={
-                    "model": "llama-3.3-70b-versatile",
+                    "model": model,
                     "messages": [{"role": "user", "content": prompt}],
                     "temperature": 0,
                     "max_tokens": 100,
@@ -201,14 +201,13 @@ async def _groq_rank(original_item: str, products: list[dict]) -> list[dict]:
         best_idx = int(result.get("best_index", 1)) - 1
         reason = result.get("reason", "")
 
-        # Mark recommended
         for i, p in enumerate(products):
             p["recommended"] = (i == best_idx)
             p["reason"] = reason if i == best_idx else ""
 
         return products
     except Exception as e:
-        print(f"[groq_rank] error: {e}")
+        print(f"[ollama_rank] error: {e}")
         return products
 
 
@@ -315,6 +314,22 @@ async def compare_one_item(item: dict, user_id: str,
             cheapest_app = app_name
             selected_pid = best.get("product_id")
             selected_name = best.get("name")
+
+    # No algorithmic winner — try Ollama as a fallback
+    if not cheapest_app and os.getenv("OLLAMA_HOST") and app_results:
+        all_products = []
+        for store_name, prods in app_results.items():
+            for p in prods:
+                all_products.append({**p, "app_name": store_name})
+        if all_products:
+            ranked = await _ollama_rank(search_query, all_products)
+            best = next((p for p in ranked if p.get("recommended")), None)
+            if best:
+                cheapest_app = best.get("app_name")
+                cheapest_price = _product_price(best)
+                selected_pid = best.get("product_id")
+                selected_name = best.get("name")
+                print(f"[compare-one]   -> ollama picked: {cheapest_app} '{(selected_name or '')[:50]}'")
 
     rel_summary = ", ".join(
         f"{a}={relevant_count.get(a, 0)}/{len(app_results.get(a, []))}"
