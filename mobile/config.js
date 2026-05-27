@@ -5,7 +5,7 @@
  * In dev, point at your local server: 'http://192.168.x.x:8000'
  */
 
-export const BACKEND_URL = 'https://scan2order-backend.onrender.com'
+export const BACKEND_URL = 'https://scan2order.reysen.net'
 
 /**
  * Attach the user_id header and content-type to every API call.
