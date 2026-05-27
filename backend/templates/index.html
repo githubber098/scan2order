@@ -167,10 +167,8 @@
         .browser-modal.open { display: flex; }
         .browser-box {
             background: #111122; border: 1px solid #333; border-radius: 14px;
-            /* width sized to the 430px mobile viewport; height fills the screen */
             width: min(460px, 100%);
-            max-height: calc(100vh - 16px);
-            display: flex; flex-direction: column; overflow: hidden;
+            display: flex; flex-direction: column;
         }
         .browser-titlebar {
             display: flex; justify-content: space-between; align-items: center;
@@ -182,11 +180,18 @@
             border-radius: 6px; padding: 4px 10px; cursor: pointer; font-size: 13px;
         }
         .browser-close-btn:hover { border-color: #e24b4a; color: #e24b4a; }
-        /* Screenshot fills remaining height; object-fit preserves aspect ratio */
+        /* Screenshot: aspect-ratio matches the 430×700 Playwright viewport exactly.
+           This means getBoundingClientRect() returns the real image bounds with
+           no letterbox bars, so click-coordinate normalisation is pixel-accurate.
+           max-height prevents overflow on short screens; the browser adjusts
+           width automatically to preserve the ratio when height is capped. */
         #browser-screenshot {
-            flex: 1; min-height: 0;
-            width: 100%; display: block;
-            object-fit: contain; background: #000;
+            display: block;
+            width: 100%;
+            height: auto;
+            aspect-ratio: 430 / 700;
+            max-height: calc(100vh - 90px);
+            background: #000;
             cursor: crosshair;
         }
         .browser-footer {
