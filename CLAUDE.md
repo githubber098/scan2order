@@ -16,7 +16,7 @@ Do not commit silently or with a one-liner unless the user explicitly says so.
 
 ## Current architecture (keep this section up to date)
 
-- **Session storage**: SQLite via `backend/storage/user_store.py` — file lives at `/app/data/sessions.db` inside the container, mounted as `./data:/app/data` in docker-compose so it persists across rebuilds. No external Redis or Upstash dependency.
+- **Session storage**: SQLite by default (`backend/storage/user_store.py`) — file lives at `/app/data/sessions.db` inside the container, mounted as `./data:/app/data` in docker-compose. Set `MYSQL_URL=mysql://user:pass@host:3306/db` to switch to MySQL/MariaDB instead; the `_MySQLDB` wrapper in `user_store.py` translates all SQL automatically (placeholder style, upsert syntax, DDL types). A commented-out MySQL service is in `docker-compose.yml` for easy opt-in. No external Redis or Upstash dependency.
 - **LLM ranking**: Local Ollama (`llama3.2:3b` by default) via `backend/ranker.py:_ollama_rank`. Only fires when the algorithmic ranker finds no winner. Ollama runs as a second container in docker-compose. No Groq / no API key needed.
 - **Store API calls**: All httpx, no Playwright. BigBasket: listing-svc search + mapi cart. Blinkit: `__NEXT_DATA__` SSR parse for search, `/v2/client/user_cart/` for cart. Zepto: BFF gateway search + bulk-widget-data cart, SHA-256 signed.
 - **Deployment**: Docker + docker-compose on homeserver, exposed via Cloudflare Tunnel (no open inbound ports). Auto-updates from GitHub via systemd timer every 5 min.

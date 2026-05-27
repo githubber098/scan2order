@@ -4,7 +4,6 @@
 fastapi>=0.111.0
 uvicorn[standard]>=0.29.0
 httpx>=0.27.0
-upstash-redis>=1.1.0
 python-multipart>=0.0.9    # for UploadFile / File(...)
 python-dotenv>=1.0.1
 jinja2>=3.1.4              # for templates.TemplateResponse
@@ -13,8 +12,9 @@ jinja2>=3.1.4              # for templates.TemplateResponse
 pytesseract>=0.3.10
 Pillow>=10.3.0
 
-# Groq LLM fallback (optional - set GROQ_API_KEY to enable)
-groq>=0.9.0
+# MySQL support (optional — only used when MYSQL_URL env var is set)
+# Pure-Python driver; no native libs needed.
+PyMySQL>=1.1.0
 
 # requests is only needed if you add any sync HTTP calls.
 # Remove if unused to keep the image lean.

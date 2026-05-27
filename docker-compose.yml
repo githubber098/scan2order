@@ -8,11 +8,19 @@ services:
     environment:
       - OLLAMA_HOST=http://ollama:11434
       - OLLAMA_MODEL=llama3.2:3b
+      # ── Storage backend ────────────────────────────────────────────────────
+      # SQLite is the default (no env var needed).  To switch to MySQL,
+      # uncomment the line below and make sure the 'mysql' service is running.
+      # The data/ volume mount can be removed once MySQL is active.
+      #
+      # - MYSQL_URL=mysql://scan2order:changeme@mysql:3306/scan2order
     mem_limit: 512m
     volumes:
-      - ./data:/app/data
+      - ./data:/app/data      # SQLite sessions.db lives here; safe to keep even with MySQL
     depends_on:
       - ollama
+      # Uncomment when switching to MySQL:
+      # - mysql
 
   ollama:
     image: ollama/ollama:latest
@@ -21,5 +29,27 @@ services:
     volumes:
       - ollama_data:/root/.ollama
 
+  # ── MySQL (opt-in) ──────────────────────────────────────────────────────────
+  # Uncomment this entire block AND the MYSQL_URL line above to use MySQL
+  # instead of SQLite.  The data is persisted in the 'mysql_data' volume so
+  # it survives container restarts and image rebuilds.
+  #
+  # mysql:
+  #   image: mysql:8.0
+  #   restart: unless-stopped
+  #   environment:
+  #     MYSQL_ROOT_PASSWORD: rootpassword
+  #     MYSQL_DATABASE: scan2order
+  #     MYSQL_USER: scan2order
+  #     MYSQL_PASSWORD: changeme
+  #   volumes:
+  #     - mysql_data:/var/lib/mysql
+  #   healthcheck:
+  #     test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "scan2order", "-pchangeme"]
+  #     interval: 10s
+  #     timeout: 5s
+  #     retries: 5
+
 volumes:
   ollama_data:
+  # mysql_data:   # uncomment together with the mysql service above
