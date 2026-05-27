@@ -115,7 +115,27 @@ _STEALTH_SCRIPT = """
 """
 
 _pw = None
+# asyncio.Lock protecting _pw initialization.
+# Without this, two concurrent browser-start requests both see _pw is None,
+# both call async_playwright().start(), and two Playwright instances are
+# created — the first is overwritten and leaked.
+# Double-checked: fast path (no lock) when _pw is already set; slow path
+# (with lock) only on first initialization.
+_pw_lock: asyncio.Lock | None = None
 _sessions: dict[str, "_Session"] = {}
+
+
+def _get_pw_lock() -> asyncio.Lock:
+    """Return the module-level asyncio.Lock, creating it on first call.
+
+    Creating the Lock lazily avoids binding it to whatever event loop happens
+    to exist at import time.  The creation itself is safe because it is a
+    sync call — only one coroutine runs between await points in asyncio.
+    """
+    global _pw_lock
+    if _pw_lock is None:
+        _pw_lock = asyncio.Lock()
+    return _pw_lock
 
 
 class _Session:
@@ -173,10 +193,22 @@ class _Session:
 
 
 async def _get_playwright():
+    """Return the shared Playwright instance, initialising it at most once.
+
+    Uses double-checked locking:
+      1. Fast path: if _pw is already set, return it without acquiring the lock.
+      2. Slow path: acquire the lock, check again (another coroutine may have
+         initialised _pw while we were waiting), then start Playwright.
+    This guarantees exactly one Playwright instance even when two browser-auth
+    requests arrive simultaneously.
+    """
     global _pw
-    if _pw is None:
-        from playwright.async_api import async_playwright
-        _pw = await async_playwright().start()
+    if _pw is not None:
+        return _pw
+    async with _get_pw_lock():
+        if _pw is None:  # re-check inside the lock
+            from playwright.async_api import async_playwright
+            _pw = await async_playwright().start()
     return _pw
 
 

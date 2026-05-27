@@ -104,9 +104,20 @@ def get_store_session(user_id: str, store: str) -> dict:
 
 
 def update_store_cookies(user_id: str, store: str, new_cookies: dict) -> None:
-    existing = get_store_cookies(user_id, store)
-    existing.update(new_cookies)
+    """Merge new_cookies into the stored cookie dict for (user_id, store).
+
+    The read and write are performed inside the same lock so that two
+    concurrent callers cannot both read the same stale cookie dict, merge
+    independently, and then clobber each other's result.
+    """
+    cutoff = time.time() - _TTL_30D
     with _lock:
+        row = _conn.execute(
+            "SELECT cookies FROM sessions WHERE user_id=? AND store=? AND updated_at>?",
+            (user_id, store, cutoff),
+        ).fetchone()
+        existing = json.loads(row["cookies"]) if row else {}
+        existing.update(new_cookies)
         _conn.execute(
             """INSERT INTO sessions (user_id, store, cookies, local_storage, updated_at)
                VALUES (?, ?, ?, '{}', ?)
