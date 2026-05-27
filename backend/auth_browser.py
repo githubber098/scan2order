@@ -41,6 +41,18 @@ _MOBILE_UA = (
     "Chrome/131.0.6778.135 Mobile Safari/537.36"
 )
 
+# Sec-CH-UA Client Hints that MUST match the UA string above.
+# Akamai Bot Manager cross-checks brands/version against the User-Agent header;
+# a mismatch is an immediate block.  These headers are set at the browser
+# context level so they appear on every outgoing request automatically.
+_CLIENT_HINTS = {
+    "Sec-CH-UA": (
+        '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"'
+    ),
+    "Sec-CH-UA-Mobile": "?1",
+    "Sec-CH-UA-Platform": '"Android"',
+}
+
 # Injected before every page navigation to suppress all Playwright/automation
 # detection signals. Wrapped in try/catch blocks so a single failure never
 # breaks the whole script (some properties are non-configurable on some pages).
@@ -239,7 +251,15 @@ async def start(user_id: str, store: str,
         args=[
             "--no-sandbox",
             "--disable-dev-shm-usage",
+            # Suppress the strongest WebDriver detection signal.
             "--disable-blink-features=AutomationControlled",
+            # Reduce differences from a real Chrome binary.
+            "--disable-ipc-flooding-protection",
+            "--disable-renderer-backgrounding",
+            "--disable-backgrounding-occluded-windows",
+            "--disable-client-side-phishing-detection",
+            "--password-store=basic",
+            "--use-mock-keychain",
         ],
     )
 
@@ -248,9 +268,12 @@ async def start(user_id: str, store: str,
         user_agent=_MOBILE_UA,
         is_mobile=True,
         has_touch=True,
-        device_scale_factor=1,
+        device_scale_factor=2,        # real Pixel 8 has 2× density
         locale="en-IN",
         timezone_id="Asia/Kolkata",
+        # Sec-CH-UA Client Hints — Akamai validates these against the UA string.
+        # Without them, or if they don't match, Akamai hard-blocks on first request.
+        extra_http_headers=_CLIENT_HINTS,
     )
     if geolocation:
         ctx_kwargs["geolocation"] = geolocation
@@ -265,11 +288,31 @@ async def start(user_id: str, store: str,
 
     page = await context.new_page()
     await page.add_init_script(_STEALTH_SCRIPT)
+
+    # wait_until="load" (not "domcontentloaded") so Akamai's sensor SDK has
+    # time to run, collect browser telemetry, and set the _abck cookie before
+    # we hand the session back.  "domcontentloaded" is too early — the sensor
+    # SDK fires on window.onload and later, so Akamai sees no telemetry and
+    # immediately hard-blocks.  Timeout raised to 30 s for slow networks.
     await page.goto(
         _STORE_CONFIG[store]["url"],
-        wait_until="domcontentloaded",
-        timeout=20000,
+        wait_until="load",
+        timeout=30000,
     )
+
+    # Brief idle period: Akamai's sensor continues collecting interaction data
+    # for ~2 s after load.  A small random mouse drift mimics real touch input.
+    try:
+        await page.mouse.move(
+            _VIEWPORT_W * 0.3 + 10, _VIEWPORT_H * 0.4,
+        )
+        await page.wait_for_timeout(500)
+        await page.mouse.move(
+            _VIEWPORT_W * 0.5, _VIEWPORT_H * 0.5,
+        )
+        await page.wait_for_timeout(1000)
+    except Exception:
+        pass   # non-fatal if the page closed or errored
 
     _sessions[session_id] = _Session(user_id, store, browser, context, page)
     print(f"[browser] started session {session_id}")

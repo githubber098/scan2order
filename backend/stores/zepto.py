@@ -56,7 +56,17 @@ _COMPATIBLE_COMPONENTS = (
 
 def is_session_valid(user_id: str) -> bool:
     sess = _get_zepto_session(user_id)
-    return bool(sess.get("xsrf_token") and sess.get("device_id"))
+    has_token = bool(sess.get("xsrf_token") and sess.get("device_id"))
+    if has_token and not sess.get("store_id"):
+        # Zepto requires a store_id (set from the serviceability cookie when the
+        # user saves a delivery address inside the Zepto app or website).
+        # Without it the BFF search API returns an empty layout array — searches
+        # appear to succeed but return zero products.  This is NOT a login failure
+        # so we still return True, but we log a clear warning.
+        print(f"[zepto] WARNING: user {user_id[:8]} is authenticated but has no "
+              f"store_id — make sure a delivery address is saved in the Zepto app "
+              f"(Settings → Address) so the serviceability cookie is set.")
+    return has_token
 
 
 def _get_zepto_session(user_id: str) -> dict:
@@ -263,14 +273,119 @@ async def _zepto_api_post(path: str, body: dict, sess: dict,
         return None
 
 
+def _extract_product(pr: dict) -> dict | None:
+    """Extract one canonical product dict from a Zepto productResponse object.
+
+    Returns None if the product is out-of-stock or missing required fields.
+    """
+    if not pr or pr.get("outOfStock"):
+        return None
+
+    variant = pr.get("productVariant") or {}
+    variant_id = variant.get("id") or ""
+    if not variant_id:
+        return None
+
+    sale_paise = pr.get("discountedSellingPrice") or 0
+    mrp_paise = pr.get("mrp") or 0
+    sale = round(sale_paise / 100, 2) if sale_paise else 0.0
+    mrp = round(mrp_paise / 100, 2) if mrp_paise else sale
+    if sale <= 0 and mrp <= 0:
+        return None
+
+    images = variant.get("images") or []
+    image_path = (images[0] or {}).get("path", "") if images else ""
+    image_url = (
+        f"https://cdn.zeptonow.com/production///tr:w-300,ar-100-100/{image_path}"
+        if image_path else ""
+    )
+
+    store_product_id = pr.get("id") or ""
+    discount_applicable = bool(
+        (pr.get("product") or {}).get("discountApplicable", True)
+    )
+
+    return {
+        "name": ((pr.get("product") or {}).get("name") or "")[:120],
+        "price": mrp,
+        "sale_price": sale,
+        "unit": variant.get("formattedPacksize") or "",
+        "image_url": image_url,
+        "product_id": variant_id,
+        "max_qty": variant.get("maxAllowedQuantity") or 99,
+        "store_product_id": store_product_id,
+        "mrp_paise": mrp_paise,
+        "discount_applicable": discount_applicable,
+        "app": APP_NAME,
+        "app_name": DISPLAY_NAME,
+    }
+
+
+def _walk_layout(layout: list) -> list[dict]:
+    """Walk Zepto's layout array and extract product cards.
+
+    Tries the known deep path first:
+      layout[].data.resolver.data.items[].productResponse
+
+    If that yields nothing, falls back to a recursive search for any dict
+    that has a "productResponse" or "productVariant" key — this handles
+    minor structural changes in the BFF API response.
+    """
+    products: list[dict] = []
+
+    # ── Primary path (verified against API v3 responses) ─────────────────────
+    for entry in layout:
+        items = (
+            (((entry.get("data") or {}).get("resolver") or {}).get("data") or {})
+            .get("items") or []
+        )
+        for slot in items:
+            p = _extract_product(slot.get("productResponse") or {})
+            if p:
+                products.append(p)
+                if len(products) >= 8:
+                    return products
+
+    if products:
+        return products
+
+    # ── Fallback: recursive BFS for "productResponse" keys ───────────────────
+    def _bfs(obj, depth=0):
+        if depth > 8 or len(products) >= 8:
+            return
+        if isinstance(obj, dict):
+            if "productResponse" in obj:
+                p = _extract_product(obj["productResponse"] or {})
+                if p:
+                    products.append(p)
+            for v in obj.values():
+                _bfs(v, depth + 1)
+        elif isinstance(obj, list):
+            for item in obj:
+                _bfs(item, depth + 1)
+
+    _bfs(layout)
+    return products
+
+
 async def search_item_api(user_id: str, query: str) -> list[dict]:
-    """Search via Zepto's BFF API. Returns [] on any failure."""
+    """Search via Zepto's BFF API. Returns [] on any failure.
+
+    Common reason for empty results even when authenticated:
+      store_id is missing (no delivery address saved in Zepto app).
+      The BFF API returns an empty layout when store_id is not supplied.
+      Fix: open Zepto app → Settings → Address and save a delivery address.
+    """
     sess = _get_zepto_session(user_id)
     if not sess.get("xsrf_token"):
         print(f"[zepto] search_item_api: no xsrf_token. {_diag_token_status(sess)}")
         return []
 
-    print(f"\n[zepto] === API SEARCH: '{query}' ===")
+    if not sess.get("store_id"):
+        print(f"[zepto] search_item_api: store_id is empty — search will likely "
+              f"return no results. Ensure a delivery address is saved in Zepto app.")
+
+    print(f"\n[zepto] === API SEARCH: '{query}' (store_id={sess.get('store_id') or 'MISSING'}) ===")
     t_start = time.time()
 
     body = {
@@ -287,55 +402,21 @@ async def search_item_api(user_id: str, query: str) -> list[dict]:
     if not data:
         return []
 
-    products: list[dict] = []
-    for layout_entry in (data.get("layout") or []):
-        items = (((layout_entry.get("data") or {}).get("resolver") or {})
-                 .get("data") or {}).get("items") or []
-        for slot in items:
-            pr = slot.get("productResponse") or {}
-            if not pr or pr.get("outOfStock"):
-                continue
+    layout = data.get("layout") or []
+    if not layout:
+        # Log the top-level keys so we can diagnose structure changes.
+        top_keys = list(data.keys())[:10]
+        print(f"[zepto] search: API returned no layout. Top-level keys: {top_keys}")
+        return []
 
-            variant = pr.get("productVariant") or {}
-            variant_id = variant.get("id") or ""
-            if not variant_id:
-                continue
+    products = _walk_layout(layout)
 
-            sale_paise = pr.get("discountedSellingPrice") or 0
-            mrp_paise = pr.get("mrp") or 0
-            sale = round(sale_paise / 100, 2) if sale_paise else 0.0
-            mrp = round(mrp_paise / 100, 2) if mrp_paise else sale
-
-            images = variant.get("images") or []
-            image_path = (images[0] or {}).get("path", "") if images else ""
-            image_url = (
-                f"https://cdn.zeptonow.com/production///tr:w-300,ar-100-100/{image_path}"
-                if image_path else ""
-            )
-
-            store_product_id = pr.get("id") or ""
-            discount_applicable = bool(
-                (pr.get("product") or {}).get("discountApplicable", True)
-            )
-
-            products.append({
-                "name": ((pr.get("product") or {}).get("name") or "")[:120],
-                "price": mrp,
-                "sale_price": sale,
-                "unit": variant.get("formattedPacksize") or "",
-                "image_url": image_url,
-                "product_id": variant_id,
-                "max_qty": variant.get("maxAllowedQuantity") or 99,
-                "store_product_id": store_product_id,
-                "mrp_paise": mrp_paise,
-                "discount_applicable": discount_applicable,
-                "app": APP_NAME,
-                "app_name": DISPLAY_NAME,
-            })
-            if len(products) >= 8:
-                break
-        if len(products) >= 8:
-            break
+    if not products:
+        # Log layout entry types to help diagnose structure changes.
+        entry_types = [e.get("type") or e.get("widgetType") or "?"
+                       for e in layout[:5]]
+        print(f"[zepto] search: layout has {len(layout)} entries but no products extracted. "
+              f"Entry types (first 5): {entry_types}")
 
     print(f"[zepto] === API RESULT: {len(products)} products ({elapsed_ms}ms) ===\n")
     return products
