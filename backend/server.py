@@ -223,8 +223,20 @@ async def browser_auth_start(store: str, request: Request):
     """
     body = await request.json()
     user_id = _require_user_id(body.get("user_id")) or str(uuid.uuid4())
+    # geolocation forwarded from the user's real browser so store location
+    # prompts ("Use my location") resolve correctly inside Playwright.
+    geo_raw = body.get("geolocation")
+    geolocation = None
+    if isinstance(geo_raw, dict):
+        try:
+            geolocation = {
+                "latitude": float(geo_raw["latitude"]),
+                "longitude": float(geo_raw["longitude"]),
+            }
+        except (KeyError, ValueError, TypeError):
+            geolocation = None
     try:
-        session_id = await auth_browser.start(user_id, store)
+        session_id = await auth_browser.start(user_id, store, geolocation)
     except ValueError as e:
         return {"success": False, "error": str(e)}
     return {"success": True, "session_id": session_id, "user_id": user_id}

@@ -314,6 +314,19 @@ let _browserSessionId = null;
 let _screenshotTimer = null;
 let _checkTimer = null;
 
+// Keystroke batching — collect printable chars for 30 ms, send as one string.
+// Avoids one HTTP round-trip per keypress; special keys flush the buffer first.
+let _typeBuffer = '';
+let _typeFlushTimer = null;
+function _flushTypeBuffer() {
+    clearTimeout(_typeFlushTimer);
+    _typeFlushTimer = null;
+    if (!_typeBuffer || !_browserSessionId) { _typeBuffer = ''; return; }
+    const text = _typeBuffer;
+    _typeBuffer = '';
+    _sendBrowserEvent({ type: 'type', text });
+}
+
 // ── Init ─────────────────────────────────────────────────────────────────────
 
 window.addEventListener('load', () => {
@@ -360,8 +373,13 @@ function _browserKeyHandler(e) {
     if (ignore.includes(e.key)) return;
     e.preventDefault();
     if (e.key.length === 1) {
-        _sendBrowserEvent({ type: 'type', text: e.key });
+        // Printable char — accumulate for 30 ms then flush as one string
+        _typeBuffer += e.key;
+        clearTimeout(_typeFlushTimer);
+        _typeFlushTimer = setTimeout(_flushTypeBuffer, 30);
     } else {
+        // Special key — flush any pending text first, then send the key
+        _flushTypeBuffer();
         _sendBrowserEvent({ type: 'key', key: e.key });
     }
 }
@@ -391,11 +409,25 @@ async function openBrowserAuth(store) {
     // Stop any existing session
     if (_browserSessionId) await _closeBrowserSession(false);
 
+    // Request the user's real GPS coordinates so Playwright can pass them
+    // to the store — this makes "Use my location" buttons work inside the
+    // browser relay. We time-out after 4 s so a denied prompt doesn't stall.
+    let geolocation = null;
+    if (navigator.geolocation) {
+        geolocation = await new Promise(resolve => {
+            navigator.geolocation.getCurrentPosition(
+                p => resolve({ latitude: p.coords.latitude, longitude: p.coords.longitude }),
+                () => resolve(null),
+                { timeout: 4000, maximumAge: 60000 }
+            );
+        });
+    }
+
     try {
         const resp = await fetch(`/api/auth/browser/start/${store}`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ user_id: userId }),
+            body: JSON.stringify({ user_id: userId, geolocation }),
         });
         const data = await resp.json();
         if (!data.success) {
@@ -416,8 +448,8 @@ async function openBrowserAuth(store) {
     // Capture all keystrokes globally while the modal is open
     document.addEventListener('keydown', _browserKeyHandler);
 
-    // Refresh screenshot ~3 fps
-    _screenshotTimer = setInterval(_refreshScreenshot, 350);
+    // Refresh screenshot ~5 fps
+    _screenshotTimer = setInterval(_refreshScreenshot, 200);
     _refreshScreenshot();
 
     // Poll for auth cookie detection
@@ -466,8 +498,11 @@ async function _closeBrowserSession(callBackend) {
 async function _closeBrowserModal() {
     clearInterval(_screenshotTimer);
     clearInterval(_checkTimer);
+    clearTimeout(_typeFlushTimer);
     _screenshotTimer = null;
     _checkTimer = null;
+    _typeFlushTimer = null;
+    _typeBuffer = '';
     _browserSessionId = null;
     document.removeEventListener('keydown', _browserKeyHandler);
     document.getElementById('browser-modal').classList.remove('open');

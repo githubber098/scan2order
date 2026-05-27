@@ -41,11 +41,77 @@ _MOBILE_UA = (
     "Chrome/131.0.6778.135 Mobile Safari/537.36"
 )
 
-# Injected before every page navigation to hide Playwright's automation flags.
+# Injected before every page navigation to suppress all Playwright/automation
+# detection signals. Wrapped in try/catch blocks so a single failure never
+# breaks the whole script (some properties are non-configurable on some pages).
 _STEALTH_SCRIPT = """
-    Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
-    Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3] });
-    window.chrome = { runtime: {} };
+(function() {
+    // 1. navigator.webdriver — the strongest bot signal; must be undefined
+    try {
+        Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+    } catch(e) {}
+
+    // 2. window.chrome — headless omits chrome.runtime
+    try {
+        if (!window.chrome) window.chrome = {};
+        if (!window.chrome.runtime) window.chrome.runtime = {};
+        if (!window.chrome.app) window.chrome.app = { isInstalled: false };
+    } catch(e) {}
+
+    // 3. navigator.plugins — headless has 0; real Chrome has several
+    try {
+        Object.defineProperty(navigator, 'plugins', {
+            get: () => { const a = [1, 2, 3]; a.__proto__ = PluginArray.prototype; return a; }
+        });
+    } catch(e) {}
+
+    // 4. navigator.languages — consistent with locale=en-IN
+    try {
+        Object.defineProperty(navigator, 'languages', { get: () => ['en-IN', 'en', 'hi'] });
+    } catch(e) {}
+
+    // 5. navigator.userAgentData — Akamai cross-checks brand list against the
+    //    UA string. Our UA claims Chrome/131 so brands must say Chrome 131 too.
+    //    Playwright sets this automatically from the UA, but the brand strings
+    //    can differ; overriding ensures exact consistency.
+    try {
+        const brands = [
+            { brand: 'Google Chrome', version: '131' },
+            { brand: 'Chromium',      version: '131' },
+            { brand: 'Not_A Brand',   version: '24'  },
+        ];
+        const fullBrands = [
+            { brand: 'Google Chrome', version: '131.0.6778.135' },
+            { brand: 'Chromium',      version: '131.0.6778.135' },
+            { brand: 'Not_A Brand',   version: '24.0.0.0'      },
+        ];
+        Object.defineProperty(navigator, 'userAgentData', {
+            get: () => ({
+                brands,
+                mobile: true,
+                platform: 'Android',
+                getHighEntropyValues: async () => ({
+                    brands: fullBrands,
+                    fullVersionList: fullBrands,
+                    mobile: true,
+                    model: 'Pixel 8',
+                    platform: 'Android',
+                    platformVersion: '14',
+                    uaFullVersion: '131.0.6778.135',
+                }),
+            }),
+        });
+    } catch(e) {}
+
+    // 6. navigator.permissions — some WAFs probe notification permission state
+    try {
+        const _pq = navigator.permissions.query.bind(navigator.permissions);
+        navigator.permissions.query = p =>
+            p.name === 'notifications'
+                ? Promise.resolve({ state: (typeof Notification !== 'undefined' ? Notification.permission : 'default'), onchange: null })
+                : _pq(p);
+    } catch(e) {}
+})();
 """
 
 _pw = None
@@ -69,7 +135,7 @@ class _Session:
         return time.time() - self.last_active > _SESSION_TIMEOUT
 
     async def screenshot_jpeg(self) -> bytes:
-        return await self._page.screenshot(type="jpeg", quality=65)
+        return await self._page.screenshot(type="jpeg", quality=60)
 
     async def click(self, nx: float, ny: float):
         """nx, ny are 0-1 normalised coordinates relative to the viewport."""
@@ -77,7 +143,10 @@ class _Session:
         self.touch()
 
     async def type_text(self, text: str):
-        await self._page.keyboard.type(text, delay=40)
+        # delay=0: characters are typed instantaneously in Playwright.
+        # The JS side already batches characters (30 ms debounce) so we
+        # receive them as short strings rather than one char at a time.
+        await self._page.keyboard.type(text, delay=0)
         self.touch()
 
     async def key_press(self, key: str):
@@ -111,8 +180,16 @@ async def _get_playwright():
     return _pw
 
 
-async def start(user_id: str, store: str) -> str:
-    """Launch a headless Chromium session and navigate to the store login page.
+async def start(user_id: str, store: str,
+                geolocation: Optional[dict] = None) -> str:
+    """Launch a headless Chromium session and navigate to the store homepage.
+
+    Args:
+        user_id:     owner of this session
+        store:       one of 'bigbasket', 'blinkit', 'zepto'
+        geolocation: optional {"latitude": float, "longitude": float} from
+                     the user's browser — passed to the Playwright context so
+                     that store location prompts ("Use my location") work.
 
     Returns the session_id string used by all other functions.
     Closes any existing session for the same (user_id, store) pair first.
@@ -133,7 +210,8 @@ async def start(user_id: str, store: str) -> str:
             "--disable-blink-features=AutomationControlled",
         ],
     )
-    context = await browser.new_context(
+
+    ctx_kwargs = dict(
         viewport={"width": _VIEWPORT_W, "height": _VIEWPORT_H},
         user_agent=_MOBILE_UA,
         is_mobile=True,
@@ -142,6 +220,17 @@ async def start(user_id: str, store: str) -> str:
         locale="en-IN",
         timezone_id="Asia/Kolkata",
     )
+    if geolocation:
+        ctx_kwargs["geolocation"] = geolocation
+        ctx_kwargs["permissions"] = ["geolocation"]
+
+    context = await browser.new_context(**ctx_kwargs)
+
+    # Always grant geolocation even without coordinates so the browser
+    # doesn't show a permission prompt blocking the login flow.
+    if not geolocation:
+        await context.grant_permissions(["geolocation"])
+
     page = await context.new_page()
     await page.add_init_script(_STEALTH_SCRIPT)
     await page.goto(
