@@ -1,91 +1,156 @@
-import os
 import json
+import os
 import secrets
-from upstash_redis import Redis
+import sqlite3
+import threading
+import time
+from pathlib import Path
 
-redis = Redis(
-    url=os.getenv("UPSTASH_REDIS_REST_URL"),
-    token=os.getenv("UPSTASH_REDIS_REST_TOKEN"),
-)
+_DB_DIR = Path(__file__).resolve().parents[2] / "data"
+_DB_DIR.mkdir(parents=True, exist_ok=True)
+
+_conn = sqlite3.connect(str(_DB_DIR / "sessions.db"), check_same_thread=False)
+_conn.row_factory = sqlite3.Row
+_conn.execute("PRAGMA journal_mode=WAL")
+_conn.executescript("""
+    CREATE TABLE IF NOT EXISTS sessions (
+        user_id       TEXT NOT NULL,
+        store         TEXT NOT NULL,
+        cookies       TEXT NOT NULL DEFAULT '{}',
+        local_storage TEXT NOT NULL DEFAULT '{}',
+        updated_at    REAL NOT NULL,
+        PRIMARY KEY (user_id, store)
+    );
+    CREATE TABLE IF NOT EXISTS link_codes (
+        code       TEXT PRIMARY KEY,
+        user_id    TEXT NOT NULL,
+        created_at REAL NOT NULL
+    );
+""")
+_conn.commit()
+_lock = threading.Lock()
 
 _TTL_30D = 60 * 60 * 24 * 30
 _TTL_24H = 60 * 60 * 24
 
 
 def get_user_stores(user_id: str) -> dict:
-    data = redis.get(f"user:{user_id}")
-    if not data:
-        return {}
-    return json.loads(data) if isinstance(data, str) else data
+    cutoff = time.time() - _TTL_30D
+    rows = _conn.execute(
+        "SELECT store, cookies, local_storage FROM sessions WHERE user_id=? AND updated_at>?",
+        (user_id, cutoff),
+    ).fetchall()
+    return {
+        r["store"]: {
+            "connected": True,
+            "cookies": json.loads(r["cookies"]),
+            "local_storage": json.loads(r["local_storage"]),
+        }
+        for r in rows
+    }
 
 
 def connect_store(user_id: str, store: str, cookies: dict,
                   local_storage: dict | None = None) -> None:
-    current = get_user_stores(user_id)
-    current[store] = {
-        "connected": True,
-        "cookies": cookies,
-        "local_storage": local_storage or {},
-    }
-    redis.setex(f"user:{user_id}", _TTL_30D, json.dumps(current))
+    with _lock:
+        _conn.execute(
+            """INSERT INTO sessions (user_id, store, cookies, local_storage, updated_at)
+               VALUES (?, ?, ?, ?, ?)
+               ON CONFLICT(user_id, store) DO UPDATE SET
+                   cookies=excluded.cookies,
+                   local_storage=excluded.local_storage,
+                   updated_at=excluded.updated_at""",
+            (user_id, store, json.dumps(cookies), json.dumps(local_storage or {}), time.time()),
+        )
+        _conn.commit()
 
 
 def disconnect_store(user_id: str, store: str) -> None:
-    current = get_user_stores(user_id)
-    if store in current:
-        del current[store]
-        redis.setex(f"user:{user_id}", _TTL_30D, json.dumps(current))
+    with _lock:
+        _conn.execute("DELETE FROM sessions WHERE user_id=? AND store=?", (user_id, store))
+        _conn.commit()
 
 
 def get_store_cookies(user_id: str, store: str) -> dict:
-    data = get_user_stores(user_id)
-    return data.get(store, {}).get("cookies", {})
+    cutoff = time.time() - _TTL_30D
+    row = _conn.execute(
+        "SELECT cookies FROM sessions WHERE user_id=? AND store=? AND updated_at>?",
+        (user_id, store, cutoff),
+    ).fetchone()
+    return json.loads(row["cookies"]) if row else {}
 
 
 def get_store_local_storage(user_id: str, store: str) -> dict:
-    data = get_user_stores(user_id)
-    return data.get(store, {}).get("local_storage", {})
+    cutoff = time.time() - _TTL_30D
+    row = _conn.execute(
+        "SELECT local_storage FROM sessions WHERE user_id=? AND store=? AND updated_at>?",
+        (user_id, store, cutoff),
+    ).fetchone()
+    return json.loads(row["local_storage"]) if row else {}
 
 
 def get_store_session(user_id: str, store: str) -> dict:
-    """Return {cookies, local_storage} for a store."""
-    data = get_user_stores(user_id)
-    entry = data.get(store, {})
+    cutoff = time.time() - _TTL_30D
+    row = _conn.execute(
+        "SELECT cookies, local_storage FROM sessions WHERE user_id=? AND store=? AND updated_at>?",
+        (user_id, store, cutoff),
+    ).fetchone()
+    if not row:
+        return {"cookies": {}, "local_storage": {}}
     return {
-        "cookies": entry.get("cookies", {}),
-        "local_storage": entry.get("local_storage", {}),
+        "cookies": json.loads(row["cookies"]),
+        "local_storage": json.loads(row["local_storage"]),
     }
 
 
 def update_store_cookies(user_id: str, store: str, new_cookies: dict) -> None:
-    """Merge new_cookies into the stored cookie dict (used for token refresh)."""
-    current = get_user_stores(user_id)
-    entry = current.setdefault(store, {"connected": True, "cookies": {}, "local_storage": {}})
-    entry["cookies"].update(new_cookies)
-    redis.setex(f"user:{user_id}", _TTL_30D, json.dumps(current))
+    existing = get_store_cookies(user_id, store)
+    existing.update(new_cookies)
+    with _lock:
+        _conn.execute(
+            """INSERT INTO sessions (user_id, store, cookies, local_storage, updated_at)
+               VALUES (?, ?, ?, '{}', ?)
+               ON CONFLICT(user_id, store) DO UPDATE SET
+                   cookies=excluded.cookies,
+                   updated_at=excluded.updated_at""",
+            (user_id, store, json.dumps(existing), time.time()),
+        )
+        _conn.commit()
 
 
 def is_store_connected(user_id: str, store: str) -> bool:
-    data = get_user_stores(user_id)
-    return data.get(store, {}).get("connected", False)
+    cutoff = time.time() - _TTL_30D
+    row = _conn.execute(
+        "SELECT 1 FROM sessions WHERE user_id=? AND store=? AND updated_at>?",
+        (user_id, store, cutoff),
+    ).fetchone()
+    return row is not None
 
 
 def create_link_code(user_id: str) -> str:
-    """Generate an 8-char alphanumeric link code. Mobile → web session sharing."""
     code = secrets.token_urlsafe(6)[:8].upper()
-    redis.setex(f"link:{code}", _TTL_24H, user_id)
+    with _lock:
+        _conn.execute(
+            "INSERT OR REPLACE INTO link_codes (code, user_id, created_at) VALUES (?, ?, ?)",
+            (code, user_id, time.time()),
+        )
+        _conn.commit()
     return code
 
 
 def get_user_id_by_code(code: str) -> str | None:
-    val = redis.get(f"link:{code.upper()}")
-    return val if isinstance(val, str) else None
+    cutoff = time.time() - _TTL_24H
+    row = _conn.execute(
+        "SELECT user_id FROM link_codes WHERE code=? AND created_at>?",
+        (code.upper(), cutoff),
+    ).fetchone()
+    return row["user_id"] if row else None
 
 
 def consume_link_code(code: str) -> str | None:
-    """Resolve and delete a link code (one-time use)."""
-    val = redis.get(f"link:{code.upper()}")
-    if val:
-        redis.delete(f"link:{code.upper()}")
-        return val if isinstance(val, str) else None
-    return None
+    user_id = get_user_id_by_code(code)
+    if user_id:
+        with _lock:
+            _conn.execute("DELETE FROM link_codes WHERE code=?", (code.upper(),))
+            _conn.commit()
+    return user_id
