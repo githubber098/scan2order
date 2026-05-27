@@ -19,8 +19,9 @@ from pathlib import Path
 
 from fastapi import FastAPI, Request, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, Response
 
+import auth_browser
 import ocr as ocr_module
 import ranker
 from storage import user_store
@@ -57,7 +58,15 @@ async def lifespan(app: FastAPI):
     if not ocr_module.OCR_AVAILABLE:
         print(f"[startup] OCR error: {ocr_module.OCR_ERROR}")
     print("[startup] Ready\n")
+
+    async def _browser_cleanup_loop():
+        while True:
+            await asyncio.sleep(60)
+            await auth_browser.cleanup_expired()
+
+    cleanup_task = asyncio.create_task(_browser_cleanup_loop())
     yield
+    cleanup_task.cancel()
     print("[shutdown] Shutting down")
 
 
@@ -198,6 +207,97 @@ async def resolve_link_code(code: str):
         for store in _STORE_DISPLAY
     }
     return {"success": True, "user_id": user_id, "stores": stores}
+
+
+# ── Browser-based store auth (Playwright) ────────────────────────────────────
+
+@app.post("/api/auth/browser/start/{store}")
+async def browser_auth_start(store: str, request: Request):
+    """Launch a headless Chromium session for interactive store login.
+
+    Body: {user_id?}  — auto-generated UUID if omitted.
+    Returns: {session_id, user_id}
+
+    The client should poll /screenshot for display, forward events via /event,
+    and poll /check until {done: true} to know when cookies are saved.
+    """
+    body = await request.json()
+    user_id = _require_user_id(body.get("user_id")) or str(uuid.uuid4())
+    try:
+        session_id = await auth_browser.start(user_id, store)
+    except ValueError as e:
+        return {"success": False, "error": str(e)}
+    return {"success": True, "session_id": session_id, "user_id": user_id}
+
+
+@app.get("/api/auth/browser/screenshot/{session_id}")
+async def browser_auth_screenshot(session_id: str):
+    """Return the current page as a JPEG (quality 65). Refreshed on every call."""
+    s = auth_browser.get(session_id)
+    if not s:
+        return Response(status_code=404)
+    jpeg = await s.screenshot_jpeg()
+    return Response(content=jpeg, media_type="image/jpeg",
+                    headers={"Cache-Control": "no-store"})
+
+
+@app.post("/api/auth/browser/event/{session_id}")
+async def browser_auth_event(session_id: str, request: Request):
+    """Forward a mouse/keyboard/scroll event to the headless browser.
+
+    Body shapes:
+      {type: "click",  nx: float, ny: float}   — normalised 0-1 coords
+      {type: "type",   text: str}               — printable character(s)
+      {type: "key",    key: str}                — Playwright key name (Enter, Tab…)
+      {type: "scroll", delta_y: float}
+    """
+    s = auth_browser.get(session_id)
+    if not s:
+        return {"success": False, "error": "session not found or expired"}
+    body = await request.json()
+    ev = body.get("type")
+    try:
+        if ev == "click":
+            await s.click(float(body["nx"]), float(body["ny"]))
+        elif ev == "type":
+            await s.type_text(str(body["text"]))
+        elif ev == "key":
+            await s.key_press(str(body["key"]))
+        elif ev == "scroll":
+            await s.scroll(float(body["delta_y"]))
+        else:
+            return {"success": False, "error": f"unknown event type: {ev}"}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+    return {"success": True}
+
+
+@app.get("/api/auth/browser/check/{session_id}")
+async def browser_auth_check(session_id: str):
+    """Poll for auth completion.
+
+    Returns {done: false} until the store's auth cookie appears, then saves
+    the cookies to SQLite, closes the browser, and returns {done: true, user_id, store}.
+    """
+    s = auth_browser.get(session_id)
+    if not s:
+        return {"done": False, "error": "session not found or expired"}
+    cookies = await s.get_auth_cookies()
+    if cookies:
+        user_store.connect_store(s.user_id, s.store, cookies)
+        print(f"[browser-auth] saved {len(cookies)} cookies for "
+              f"{s.store} user {s.user_id[:8]}…")
+        await auth_browser.close(session_id)
+        return {"done": True, "user_id": s.user_id, "store": s.store}
+    s.touch()
+    return {"done": False}
+
+
+@app.delete("/api/auth/browser/session/{session_id}")
+async def browser_auth_close(session_id: str):
+    """Cancel and close a browser auth session (e.g. user clicked Cancel)."""
+    await auth_browser.close(session_id)
+    return {"success": True}
 
 
 # ── Mobile compatibility endpoints ────────────────────────────────────────────

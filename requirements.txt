@@ -13,5 +13,8 @@ httpx>=0.27.0
 pytesseract>=0.3.13
 Pillow>=11.0.0
 
+# Playwright (headless Chromium for store login relay)
+playwright>=1.44.0
+
 # Optional: Groq LLM ranking fallback
 # groq>=0.8.0  # auto-installed if GROQ_API_KEY is set; safe to add explicitly

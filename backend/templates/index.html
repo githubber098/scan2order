@@ -58,28 +58,31 @@
             font-size: 13px; color: #888; margin-bottom: 10px;
             text-transform: uppercase; letter-spacing: 0.5px;
         }
-        .link-row { display: flex; gap: 8px; align-items: center; }
-        .link-row input {
-            flex: 1; padding: 8px 12px; background: #0a0a1a;
-            border: 1px solid #333; border-radius: 8px; color: #eee;
-            font-size: 14px; font-family: monospace; text-transform: uppercase;
-            letter-spacing: 2px;
+
+        /* Store connect rows */
+        .store-connect-list { display: flex; flex-direction: column; gap: 2px; }
+        .store-connect-row {
+            display: flex; align-items: center; gap: 10px; padding: 7px 0;
         }
-        .link-row input:focus { outline: none; border-color: #4ecdc4; }
-        .link-btn {
-            padding: 8px 14px; background: none; border: 1px solid #4ecdc4;
-            color: #4ecdc4; border-radius: 8px; font-size: 13px; cursor: pointer;
+        .store-connect-name { flex: 1; font-size: 14px; }
+        .btn-connect {
+            padding: 5px 14px; background: none;
+            border: 1px solid #4ecdc4; color: #4ecdc4;
+            border-radius: 8px; font-size: 12px; cursor: pointer; font-weight: 600;
         }
-        .store-dots { display: flex; gap: 16px; margin-top: 10px; flex-wrap: wrap; }
-        .store-dot-item { display: flex; align-items: center; gap: 6px; font-size: 13px; }
+        .btn-connect:hover { background: rgba(78,205,196,0.08); }
+        .btn-connect.connected { border-color: #333; color: #555; }
+        .btn-connect.connected:hover { background: none; }
+
+        /* Status dots */
         .dot {
             width: 8px; height: 8px; border-radius: 50%; display: inline-block;
+            flex-shrink: 0;
         }
         .dot-green { background: #4ecdc4; }
-        .dot-red { background: #666; }
+        .dot-red { background: #555; }
         .dot-yellow { background: #e8a52a; animation: dotPulse 1.6s ease-in-out infinite; }
         @keyframes dotPulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.45; } }
-        .auth-hint { color: #555; font-size: 12px; margin-top: 8px; }
 
         /* OCR scan box */
         .scan-section { margin-bottom: 16px; }
@@ -153,6 +156,45 @@
         .failed-item { color: #e24b4a; }
 
         .skipped-notice { color: #888; font-size: 12px; margin-top: 6px; font-style: italic; }
+
+        /* Browser auth modal */
+        .browser-modal {
+            display: none; position: fixed; inset: 0;
+            background: rgba(0,0,0,0.92); z-index: 1000;
+            flex-direction: column; align-items: center; justify-content: center;
+            padding: 16px;
+        }
+        .browser-modal.open { display: flex; }
+        .browser-box {
+            background: #111122; border: 1px solid #333; border-radius: 16px;
+            width: 100%; max-width: 720px; overflow: hidden;
+        }
+        .browser-titlebar {
+            display: flex; justify-content: space-between; align-items: center;
+            padding: 12px 16px; border-bottom: 1px solid #222;
+        }
+        .browser-title { font-size: 14px; font-weight: 600; color: #4ecdc4; }
+        .browser-hint { font-size: 12px; color: #555; margin-left: 8px; }
+        .browser-close-btn {
+            background: none; border: 1px solid #444; color: #aaa;
+            border-radius: 6px; padding: 4px 10px; cursor: pointer; font-size: 13px;
+        }
+        .browser-close-btn:hover { border-color: #e24b4a; color: #e24b4a; }
+        #browser-screenshot {
+            width: 100%; display: block; cursor: crosshair;
+            background: #000; min-height: 120px;
+        }
+        .browser-footer {
+            padding: 10px 12px; border-top: 1px solid #222;
+            display: flex; gap: 8px; align-items: center;
+        }
+        #browser-type-input {
+            flex: 1; padding: 8px 12px; background: #0a0a1a;
+            border: 1px solid #333; border-radius: 8px;
+            color: #eee; font-size: 13px; font-family: inherit;
+        }
+        #browser-type-input:focus { outline: none; border-color: #4ecdc4; }
+        #browser-auth-status { font-size: 12px; color: #666; white-space: nowrap; flex-shrink: 0; }
     </style>
 </head>
 <body>
@@ -162,29 +204,29 @@
         <p>grocery price comparison across BigBasket, Blinkit &amp; Zepto</p>
     </div>
 
-    <!-- Auth section -->
+    <!-- Auth section: per-store Connect buttons (Playwright login relay) -->
     <div class="auth-section" id="auth-section">
         <h3>Store connections</h3>
-        <div class="link-row">
-            <input id="link-code" type="text" placeholder="Enter link code from app"
-                   maxlength="8" oninput="this.value=this.value.toUpperCase()">
-            <button class="link-btn" onclick="resolveCode()">Connect</button>
-        </div>
-        <div class="store-dots" id="store-dots">
-            <div class="store-dot-item">
+        <div class="store-connect-list">
+            <div class="store-connect-row">
                 <span class="dot dot-red" id="dot-bigbasket"></span>
-                <span>BigBasket</span>
+                <span class="store-connect-name">BigBasket</span>
+                <button class="btn-connect" id="btn-bigbasket"
+                        onclick="openBrowserAuth('bigbasket')">Connect</button>
             </div>
-            <div class="store-dot-item">
+            <div class="store-connect-row">
                 <span class="dot dot-red" id="dot-blinkit"></span>
-                <span>Blinkit</span>
+                <span class="store-connect-name">Blinkit</span>
+                <button class="btn-connect" id="btn-blinkit"
+                        onclick="openBrowserAuth('blinkit')">Connect</button>
             </div>
-            <div class="store-dot-item">
+            <div class="store-connect-row">
                 <span class="dot dot-red" id="dot-zepto"></span>
-                <span>Zepto</span>
+                <span class="store-connect-name">Zepto</span>
+                <button class="btn-connect" id="btn-zepto"
+                        onclick="openBrowserAuth('zepto')">Connect</button>
             </div>
         </div>
-        <p class="auth-hint">Open the scan2order mobile app → Settings → Link to web app</p>
     </div>
 
     <!-- OCR scan -->
@@ -239,50 +281,53 @@ Atta 5kg
     </div>
 </div>
 
+<!-- Browser auth modal: shows a live Playwright screenshot, forwards events -->
+<div class="browser-modal" id="browser-modal">
+    <div class="browser-box">
+        <div class="browser-titlebar">
+            <span>
+                <span class="browser-title" id="browser-title">Login</span>
+                <span class="browser-hint">Log in normally — we'll detect when you're done</span>
+            </span>
+            <button class="browser-close-btn" onclick="closeBrowserSession()">✕ Cancel</button>
+        </div>
+        <img id="browser-screenshot" src="" alt="Loading browser...">
+        <div class="browser-footer">
+            <input id="browser-type-input" type="text"
+                   placeholder="Click on the page above to focus, then type here"
+                   autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false">
+            <span id="browser-auth-status">Waiting for login…</span>
+        </div>
+    </div>
+</div>
+
 <script>
 // ── State ────────────────────────────────────────────────────────────────────
 
-let userId = localStorage.getItem('user_id') || '';
+let userId = localStorage.getItem('user_id');
+if (!userId) {
+    userId = crypto.randomUUID();
+    localStorage.setItem('user_id', userId);
+}
+
 let comparisonData = null;
 let pollTimer = null;
+
+// Browser session state
+let _browserSessionId = null;
+let _screenshotTimer = null;
+let _checkTimer = null;
 
 // ── Init ─────────────────────────────────────────────────────────────────────
 
 window.addEventListener('load', () => {
-    if (userId) {
-        refreshStoreStatus();
-    }
+    refreshStoreStatus();
+    _initBrowserModal();
 });
 
-// ── Auth ─────────────────────────────────────────────────────────────────────
-
-async function resolveCode() {
-    const code = document.getElementById('link-code').value.trim();
-    if (!code || code.length < 4) {
-        showStatus('Enter the link code from the mobile app', 'error');
-        return;
-    }
-    showStatus('Connecting...');
-    try {
-        const resp = await fetch(`/api/auth/link/${encodeURIComponent(code)}`);
-        const data = await resp.json();
-        if (data.success) {
-            userId = data.user_id;
-            localStorage.setItem('user_id', userId);
-            updateStoreDots(data.stores);
-            document.getElementById('link-code').value = '';
-            showStatus('Connected! ' + Object.entries(data.stores)
-                .filter(([, v]) => v).map(([k]) => k).join(', ') + ' ready');
-        } else {
-            showStatus(data.error || 'Invalid code — generate a new one in the app', 'error');
-        }
-    } catch (e) {
-        showStatus('Connection error: ' + e.message, 'error');
-    }
-}
+// ── Auth: store status ────────────────────────────────────────────────────────
 
 async function refreshStoreStatus() {
-    if (!userId) return;
     try {
         const resp = await fetch(`/api/auth/status/${encodeURIComponent(userId)}`);
         const data = await resp.json();
@@ -295,12 +340,144 @@ async function refreshStoreStatus() {
 }
 
 function updateStoreDots(stores) {
+    const storeNames = { bigbasket: 'BigBasket', blinkit: 'Blinkit', zepto: 'Zepto' };
     for (const [store, connected] of Object.entries(stores)) {
         const dot = document.getElementById('dot-' + store);
-        if (dot) {
-            dot.className = 'dot ' + (connected ? 'dot-green' : 'dot-red');
+        const btn = document.getElementById('btn-' + store);
+        if (dot) dot.className = 'dot ' + (connected ? 'dot-green' : 'dot-red');
+        if (btn) {
+            btn.textContent = connected ? 'Reconnect' : 'Connect';
+            btn.classList.toggle('connected', connected);
         }
     }
+}
+
+// ── Browser auth modal ────────────────────────────────────────────────────────
+
+function _initBrowserModal() {
+    const img = document.getElementById('browser-screenshot');
+    const typeInput = document.getElementById('browser-type-input');
+
+    // Click on screenshot → send normalised coords to Playwright
+    img.addEventListener('click', (e) => {
+        const rect = img.getBoundingClientRect();
+        const nx = (e.clientX - rect.left) / rect.width;
+        const ny = (e.clientY - rect.top) / rect.height;
+        _sendBrowserEvent({ type: 'click', nx, ny });
+        typeInput.focus();
+    });
+
+    // Scroll on screenshot → forward deltaY
+    img.addEventListener('wheel', (e) => {
+        e.preventDefault();
+        _sendBrowserEvent({ type: 'scroll', delta_y: e.deltaY });
+    }, { passive: false });
+
+    // Keyboard in type input → forward every keystroke, never let it accumulate
+    typeInput.addEventListener('keydown', (e) => {
+        if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
+            e.preventDefault();
+            _sendBrowserEvent({ type: 'type', text: e.key });
+        } else if (!['Shift', 'Control', 'Alt', 'Meta', 'CapsLock'].includes(e.key)) {
+            e.preventDefault();
+            _sendBrowserEvent({ type: 'key', key: e.key });
+        }
+    });
+}
+
+async function openBrowserAuth(store) {
+    const storeNames = { bigbasket: 'BigBasket', blinkit: 'Blinkit', zepto: 'Zepto' };
+
+    // Stop any existing session
+    if (_browserSessionId) await _closeBrowserSession(false);
+
+    try {
+        const resp = await fetch(`/api/auth/browser/start/${store}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ user_id: userId }),
+        });
+        const data = await resp.json();
+        if (!data.success) {
+            showStatus('Browser session error: ' + (data.error || 'unknown'), 'error');
+            return;
+        }
+        _browserSessionId = data.session_id;
+    } catch (e) {
+        showStatus('Failed to start browser: ' + e.message, 'error');
+        return;
+    }
+
+    document.getElementById('browser-title').textContent =
+        (storeNames[store] || store) + ' login';
+    document.getElementById('browser-auth-status').textContent = 'Waiting for login…';
+    document.getElementById('browser-modal').classList.add('open');
+    document.getElementById('browser-type-input').focus();
+
+    // Refresh screenshot ~3 fps
+    _screenshotTimer = setInterval(_refreshScreenshot, 350);
+    _refreshScreenshot();
+
+    // Poll for auth cookie detection
+    _checkTimer = setInterval(_checkBrowserAuth, 2000);
+}
+
+function _refreshScreenshot() {
+    if (!_browserSessionId) return;
+    const img = document.getElementById('browser-screenshot');
+    img.src = `/api/auth/browser/screenshot/${_browserSessionId}?t=${Date.now()}`;
+}
+
+async function _checkBrowserAuth() {
+    if (!_browserSessionId) return;
+    try {
+        const resp = await fetch(`/api/auth/browser/check/${_browserSessionId}`);
+        const data = await resp.json();
+        if (data.done) {
+            await _closeBrowserModal();
+            // If backend auto-generated a different user_id (shouldn't happen but safe)
+            if (data.user_id && data.user_id !== userId) {
+                userId = data.user_id;
+                localStorage.setItem('user_id', userId);
+            }
+            await refreshStoreStatus();
+            const storeNames = { bigbasket: 'BigBasket', blinkit: 'Blinkit', zepto: 'Zepto' };
+            showStatus((storeNames[data.store] || data.store) + ' connected!');
+        } else if (data.error) {
+            document.getElementById('browser-auth-status').textContent = data.error;
+        }
+    } catch (e) { /* ignore transient errors */ }
+}
+
+function closeBrowserSession() {
+    _closeBrowserSession(true);
+}
+
+async function _closeBrowserSession(callBackend) {
+    if (callBackend && _browserSessionId) {
+        fetch(`/api/auth/browser/session/${_browserSessionId}`, { method: 'DELETE' })
+            .catch(() => {});
+    }
+    await _closeBrowserModal();
+}
+
+async function _closeBrowserModal() {
+    clearInterval(_screenshotTimer);
+    clearInterval(_checkTimer);
+    _screenshotTimer = null;
+    _checkTimer = null;
+    _browserSessionId = null;
+    document.getElementById('browser-modal').classList.remove('open');
+    document.getElementById('browser-screenshot').src = '';
+}
+
+async function _sendBrowserEvent(payload) {
+    if (!_browserSessionId) return;
+    fetch(`/api/auth/browser/event/${_browserSessionId}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+    }).catch(() => {});
 }
 
 // ── OCR ──────────────────────────────────────────────────────────────────────
@@ -336,11 +513,6 @@ async function ocrImage(event) {
 // ── Compare ──────────────────────────────────────────────────────────────────
 
 async function startCompare() {
-    if (!userId) {
-        showStatus('Enter your link code first (from the mobile app)', 'error');
-        return;
-    }
-
     const raw = document.getElementById('grocery-list').value.trim();
     if (!raw) {
         showStatus('Enter a grocery list or scan a photo', 'error');
@@ -351,7 +523,6 @@ async function startCompare() {
         .map(line => line.trim())
         .filter(line => line.length > 0)
         .map(line => {
-            // Parse "Tomatoes 500g" -> {name: "Tomatoes", qty: "500g"}
             const m = line.match(/^(.+?)\s+(\d+(?:\.\d+)?\s*(?:kg|g|gm|ml|l|L|pcs?|pieces?|pack))$/i);
             if (m) return { name: m[1].trim(), qty: m[2].trim() };
             return { name: line };
@@ -367,7 +538,6 @@ async function startCompare() {
     document.getElementById('progress-bar-wrap').style.display = 'block';
     document.getElementById('status-wrap').innerHTML = '';
 
-    // Start progress polling
     let lastDone = 0;
     pollTimer = setInterval(async () => {
         try {
@@ -420,7 +590,6 @@ function renderResults(data) {
     document.getElementById('results-section').style.display = 'block';
     document.getElementById('status-wrap').innerHTML = '';
 
-    // Item cards
     const cardsEl = document.getElementById('item-cards');
     cardsEl.innerHTML = '';
 
@@ -474,7 +643,6 @@ function renderResults(data) {
         cardsEl.appendChild(card);
     }
 
-    // Summary card
     if (grandTotal > 0) {
         document.getElementById('grand-total').textContent = '₹' + grandTotal.toFixed(0);
         const cartList = document.getElementById('cart-list');
@@ -502,7 +670,7 @@ function renderResults(data) {
 // ── Add to carts ──────────────────────────────────────────────────────────────
 
 async function addAllToCarts() {
-    if (!comparisonData || !userId) return;
+    if (!comparisonData) return;
 
     document.getElementById('add-btn').disabled = true;
     document.getElementById('cart-result-wrap').innerHTML = '';
@@ -527,21 +695,17 @@ async function addAllToCarts() {
 function renderCartResult(results) {
     const wrap = document.getElementById('cart-result-wrap');
     wrap.innerHTML = '';
-    let anyFailed = false;
 
     for (const [storeName, r] of Object.entries(results)) {
         const storeLabel = { bigbasket: 'BigBasket', blinkit: 'Blinkit', zepto: 'Zepto' }[storeName] || storeName;
         const added = r.added || [];
         const failed = r.failed || [];
-        if (failed.length > 0) anyFailed = true;
 
         const div = document.createElement('div');
         div.className = 'cart-result' + (failed.length > 0 ? ' has-failed' : '');
 
         let html = `<strong>${escHtml(storeLabel)}</strong>: ${added.length} added`;
-        if (failed.length > 0) {
-            html += `, ${failed.length} failed`;
-        }
+        if (failed.length > 0) html += `, ${failed.length} failed`;
 
         const checkoutUrls = {
             bigbasket: 'https://www.bigbasket.com/basket/',
@@ -552,10 +716,8 @@ function renderCartResult(results) {
             html += ` — <a href="${checkoutUrls[storeName]}" target="_blank" style="color:#4ecdc4">Open cart →</a>`;
         }
 
-        if (failed.length > 0) {
-            for (const f of failed.slice(0, 3)) {
-                html += `<div class="failed-item">✗ ${escHtml(f.matched_name || f.name || '')}${f.failed_reason ? ': ' + escHtml(f.failed_reason) : ''}</div>`;
-            }
+        for (const f of failed.slice(0, 3)) {
+            html += `<div class="failed-item">✗ ${escHtml(f.matched_name || f.name || '')}${f.failed_reason ? ': ' + escHtml(f.failed_reason) : ''}</div>`;
         }
 
         div.innerHTML = html;
