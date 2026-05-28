@@ -21,4 +21,7 @@ WORKDIR /app/backend
 
 EXPOSE 8000
 
-CMD ["uvicorn", "server:app", "--host", "0.0.0.0", "--port", "8000"]
+# -u: unbuffered Python stdout/stderr so lines hit the log file immediately.
+# tee -a: append every line to the persistent data volume log file AND keep
+# writing to stdout so `docker compose logs` still works normally.
+CMD ["/bin/sh", "-c", "python -u -m uvicorn server:app --host 0.0.0.0 --port 8000 2>&1 | tee -a /app/data/server.log"]

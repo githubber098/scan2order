@@ -79,44 +79,19 @@ _CLIENT_HINTS = {
 # breaks the whole script (some properties are non-configurable on some pages).
 _STEALTH_SCRIPT = """
 (function() {
-    // 1. navigator.webdriver — the strongest bot signal; must be undefined
-    try {
-        Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
-    } catch(e) {}
-
-    // 2. window.chrome — headless omits chrome.runtime
-    try {
-        if (!window.chrome) window.chrome = {};
-        if (!window.chrome.runtime) window.chrome.runtime = {};
-        if (!window.chrome.app) window.chrome.app = { isInstalled: false };
-    } catch(e) {}
-
-    // 3. navigator.plugins — headless has 0; real Chrome has several
+    try { Object.defineProperty(navigator, 'webdriver', { get: () => undefined }); } catch(e) {}
+    try { if (!window.chrome) window.chrome = {}; window.chrome.runtime = window.chrome.runtime || {}; } catch(e) {}
     try {
         Object.defineProperty(navigator, 'plugins', {
             get: () => { const a = [1, 2, 3]; a.__proto__ = PluginArray.prototype; return a; }
         });
     } catch(e) {}
-
-    // 4. navigator.languages — consistent with locale=en-IN
-    try {
-        Object.defineProperty(navigator, 'languages', { get: () => ['en-IN', 'en', 'hi'] });
-    } catch(e) {}
-
-    // 5. navigator.userAgentData — Akamai cross-checks brand list against the
-    //    UA string. Our UA claims Chrome/131 so brands must say Chrome 131 too.
-    //    Playwright sets this automatically from the UA, but the brand strings
-    //    can differ; overriding ensures exact consistency.
+    try { Object.defineProperty(navigator, 'languages', { get: () => ['en-IN', 'en', 'hi'] }); } catch(e) {}
     try {
         const brands = [
             { brand: 'Google Chrome', version: '131' },
             { brand: 'Chromium',      version: '131' },
             { brand: 'Not_A Brand',   version: '24'  },
-        ];
-        const fullBrands = [
-            { brand: 'Google Chrome', version: '131.0.6778.135' },
-            { brand: 'Chromium',      version: '131.0.6778.135' },
-            { brand: 'Not_A Brand',   version: '24.0.0.0'      },
         ];
         Object.defineProperty(navigator, 'userAgentData', {
             get: () => ({
@@ -124,19 +99,17 @@ _STEALTH_SCRIPT = """
                 mobile: true,
                 platform: 'Android',
                 getHighEntropyValues: async () => ({
-                    brands: fullBrands,
-                    fullVersionList: fullBrands,
-                    mobile: true,
-                    model: 'Pixel 8',
-                    platform: 'Android',
-                    platformVersion: '14',
-                    uaFullVersion: '131.0.6778.135',
+                    brands: [
+                        { brand: 'Google Chrome', version: '131.0.6778.135' },
+                        { brand: 'Chromium',      version: '131.0.6778.135' },
+                        { brand: 'Not_A Brand',   version: '24.0.0.0' },
+                    ],
+                    mobile: true, model: 'Pixel 8', platform: 'Android',
+                    platformVersion: '14', uaFullVersion: '131.0.6778.135',
                 }),
             }),
         });
     } catch(e) {}
-
-    // 6. navigator.permissions — some WAFs probe notification permission state
     try {
         const _pq = navigator.permissions.query.bind(navigator.permissions);
         navigator.permissions.query = p =>
@@ -146,6 +119,23 @@ _STEALTH_SCRIPT = """
     } catch(e) {}
 })();
 """
+
+# Analytics/tracking domains that generate constant background network
+# traffic and keep Chromium CPU-bound, hurting screenshot framerate.
+_BLOCKED_PATTERNS = [
+    "**/google-analytics.com/**",
+    "**/googletagmanager.com/**",
+    "**/doubleclick.net/**",
+    "**/googlesyndication.com/**",
+    "**/facebook.net/**",
+    "**/fbcdn.net/**",
+    "**/hotjar.com/**",
+    "**/segment.io/**",
+    "**/segment.com/**",
+    "**/mixpanel.com/**",
+    "**/*.mp4",
+    "**/*.webm",
+]
 
 _pw = None
 # asyncio.Lock protecting _pw initialization.
@@ -188,7 +178,7 @@ class _Session:
         return time.time() - self.last_active > _SESSION_TIMEOUT
 
     async def screenshot_jpeg(self) -> bytes:
-        return await self._page.screenshot(type="jpeg", quality=60)
+        return await self._page.screenshot(type="jpeg", quality=50)
 
     async def click(self, nx: float, ny: float):
         """nx, ny are 0-1 normalised coordinates relative to the viewport."""
@@ -196,9 +186,8 @@ class _Session:
         self.touch()
 
     async def type_text(self, text: str):
-        # delay=0: characters are typed instantaneously in Playwright.
-        # The JS side already batches characters (30 ms debounce) so we
-        # receive them as short strings rather than one char at a time.
+        # delay=0: JS side batches chars (30 ms debounce) so text arrives
+        # as short strings; Playwright types them all at once, no per-char delay.
         await self._page.keyboard.type(text, delay=0)
         self.touch()
 
@@ -291,9 +280,11 @@ async def start(user_id: str, store: str,
     Args:
         user_id:     owner of this session
         store:       one of 'bigbasket', 'blinkit', 'zepto'
-        geolocation: optional {"latitude": float, "longitude": float} from
-                     the user's browser — passed to the Playwright context so
-                     that store location prompts ("Use my location") work.
+        geolocation: optional {"latitude": float, "longitude": float} obtained
+                     from the user's real browser GPS — forwarded to Playwright
+                     so store location prompts resolve correctly.
+                     If None, no geolocation permission is granted; the store
+                     will fall back to IP-based location detection.
 
     Returns the session_id string used by all other functions.
     Closes any existing session for the same (user_id, store) pair first.
@@ -323,7 +314,7 @@ async def start(user_id: str, store: str,
         ],
     )
 
-    ctx_kwargs = dict(
+    ctx_kwargs: dict = dict(
         viewport={"width": _VIEWPORT_W, "height": _VIEWPORT_H},
         user_agent=_MOBILE_UA,
         is_mobile=True,
@@ -336,17 +327,29 @@ async def start(user_id: str, store: str,
         extra_http_headers=_CLIENT_HINTS,
     )
     if geolocation:
+        # Only grant geolocation when we have real coordinates to back it up.
+        # Granting without coordinates makes Playwright return (0,0) which
+        # stores interpret as "outside service area" and show error messages.
         ctx_kwargs["geolocation"] = geolocation
         ctx_kwargs["permissions"] = ["geolocation"]
 
     context = await browser.new_context(**ctx_kwargs)
 
-    # Always grant geolocation even without coordinates so the browser
-    # doesn't show a permission prompt blocking the login flow.
-    if not geolocation:
-        await context.grant_permissions(["geolocation"])
-
     page = await context.new_page()
+
+    # Block analytics/tracking to reduce background CPU and improve framerate
+    for pattern in _BLOCKED_PATTERNS:
+        await page.route(pattern, lambda r: r.abort())
+
+    # playwright-stealth: patches canvas, WebGL, timing, and dozens of other
+    # signals that Akamai and similar WAFs use for bot detection.
+    try:
+        from playwright_stealth import stealth_async
+        await stealth_async(page)
+    except ImportError:
+        pass  # falls back to manual patches below
+
+    # Additional mobile-specific stealth patches on top of playwright-stealth
     await page.add_init_script(_STEALTH_SCRIPT)
 
     # wait_until="load" (not "domcontentloaded") so Akamai's sensor SDK has

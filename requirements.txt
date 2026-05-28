@@ -15,6 +15,10 @@ Pillow>=11.0.0
 
 # Playwright (headless Chromium for store login relay)
 playwright>=1.44.0
+playwright-stealth>=1.0.6  # patches canvas/WebGL/timing to defeat WAF bot detection
 
 # Optional: Groq LLM ranking fallback
 # groq>=0.8.0  # auto-installed if GROQ_API_KEY is set; safe to add explicitly
+
+# Testing
+pytest>=8.0.0

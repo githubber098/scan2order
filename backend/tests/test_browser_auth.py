@@ -12,6 +12,8 @@ Covers:
   DELETE /api/auth/browser/session/{sid}       — cancel session
 """
 
+from unittest.mock import AsyncMock, MagicMock, patch
+
 import pytest
 
 
@@ -182,6 +184,38 @@ class TestBrowserCheck:
         data = r.json()
         assert data["done"] is False
         assert "error" in data
+
+    def test_check_calls_touch_while_pending(self, client, clean_db):
+        """touch() must be called on each poll while auth is not yet complete.
+
+        Uses a raw MagicMock (not the conftest fixture) to assert the exact
+        call.  touch() keeps the 10-min inactivity timer from expiring while
+        the user is actively looking at the screenshot.
+        """
+        mock_s = MagicMock()
+        mock_s.get_auth_cookies = AsyncMock(return_value=None)
+        mock_s.auth_status_message = AsyncMock(return_value="Waiting for login…")
+        with patch("auth_browser.get", return_value=mock_s):
+            r = client.get("/api/auth/browser/check/any-session--blinkit")
+            assert r.json()["done"] is False
+            mock_s.touch.assert_called_once()
+
+    def test_check_done_calls_close_with_session_id(self, client, clean_db):
+        """When auth completes, close() must be awaited with the exact session_id
+        so the Playwright browser is actually torn down and not left hanging.
+        """
+        uid = "close-verify-user-aaa"
+        sid = f"{uid}--blinkit"
+        mock_s = MagicMock()
+        mock_s.user_id = uid
+        mock_s.store = "blinkit"
+        mock_s.get_auth_cookies = AsyncMock(
+            return_value={"gr_1_accessToken": "tok-close-test"})
+        with patch("auth_browser.get", return_value=mock_s), \
+             patch("auth_browser.close", new_callable=AsyncMock) as close_mock:
+            r = client.get(f"/api/auth/browser/check/{sid}")
+            assert r.json()["done"] is True
+            close_mock.assert_awaited_once_with(sid)
 
 
 # ── DELETE /session ───────────────────────────────────────────────────────────
