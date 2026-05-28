@@ -11,6 +11,7 @@ Session expires after 10 min of inactivity.
 """
 
 import asyncio
+import json
 import time
 from typing import Optional
 
@@ -35,10 +36,15 @@ _STORE_CONFIG = {
     "blinkit": {
         "url": "https://blinkit.com/",
         "auth_cookie": "gr_1_accessToken",
-        # Blinkit's v2 search API returns HTTP 404 with no location context.
-        # wait_for uses OR logic (any one present = done) because the exact
-        # cookie name varies: web UI may set lat/lng, gr_1_merchantId, or merchant_id.
+        # Blinkit's web UI does NOT reliably set lat/lng/merchant_id as browser
+        # cookies — it stores delivery context in localStorage instead.
+        # wait_for_ls: check these localStorage keys via page.evaluate(); any
+        # one present with a non-empty value means address setup is done.
         "wait_for": ["lat", "gr_1_merchantId", "merchant_id"],
+        "wait_for_ls": [
+            "merchant_id", "lat", "gr_1_merchantId",
+            "delivery_address", "current_location", "userAddress",
+        ],
         "wait_hint": (
             "✅ Login detected!  Now tap the location pin at the top of the page "
             "and save a delivery address.  The window will close automatically."
@@ -47,9 +53,12 @@ _STORE_CONFIG = {
     "zepto": {
         "url": "https://www.zeptonow.com/",
         "auth_cookie": "accessToken",
-        # serviceability is set by Zepto when a delivery address is confirmed.
-        # It contains the store_id the BFF search API needs to return results.
+        # Zepto sets serviceability = "{}" as soon as the page loads (before
+        # the user picks an address).  A real serviceability value contains
+        # store_id and is much longer than 2 chars.  Require ≥ 20 chars so the
+        # empty placeholder never triggers phase-2 completion.
         "wait_for": ["serviceability"],
+        "wait_for_val_len": {"serviceability": 20},
         "wait_hint": (
             "✅ Login detected!  Now tap the location pin at the top of the page "
             "and confirm your delivery address.  The window will close automatically."
@@ -200,16 +209,64 @@ class _Session:
         await self._page.mouse.wheel(0, delta_y)
         self.touch()
 
+    async def _location_ready(self, kv: dict) -> bool:
+        """Return True when phase-2 (delivery address) requirements are met.
+
+        Checks in order:
+          1. Cookie OR logic with optional minimum value-length per cookie
+             (wait_for + wait_for_val_len).  Prevents Zepto's early empty
+             serviceability = "{}" from counting as a real address.
+          2. localStorage key check via page.evaluate() (wait_for_ls).
+             Blinkit stores delivery context in localStorage, not cookies.
+
+        Logs every cookie present (excluding auth) when still waiting, so the
+        correct key name can be identified from server logs.
+        """
+        cfg = _STORE_CONFIG[self.store]
+        wait_for = cfg.get("wait_for", [])
+        val_len = cfg.get("wait_for_val_len", {})
+        wait_for_ls = cfg.get("wait_for_ls", [])
+
+        if not wait_for and not wait_for_ls:
+            return True
+
+        def _cookie_ok(k: str) -> bool:
+            return len(kv.get(k, "")) >= val_len.get(k, 1)
+
+        if wait_for and any(_cookie_ok(k) for k in wait_for):
+            return True
+
+        if wait_for_ls:
+            try:
+                ls_raw = await self._page.evaluate(
+                    "() => JSON.stringify(Object.fromEntries("
+                    "  Array.from({length: localStorage.length}, (_, i) => "
+                    "    [localStorage.key(i), localStorage.getItem(localStorage.key(i))]"
+                    "))"
+                )
+                ls: dict = json.loads(ls_raw or "{}")
+                if any(ls.get(k) for k in wait_for_ls):
+                    return True
+            except Exception as exc:
+                print(f"[browser] {self.store}: localStorage check failed: {exc}")
+
+        present = [k for k in kv if k != cfg["auth_cookie"]]
+        print(
+            f"[browser] {self.store}: phase-2 waiting. "
+            f"wait_for={wait_for} val_len={val_len} wait_for_ls={wait_for_ls}. "
+            f"Cookies present ({len(present)}): {present[:30]}"
+        )
+        return False
+
     async def get_auth_cookies(self) -> Optional[dict]:
         """Return all cookies only when the session is fully ready, else None.
 
         Phase 1 — wait for auth_cookie (login complete).
-        Phase 2 — wait for every cookie in wait_for (delivery address saved).
+        Phase 2 — wait for delivery address via _location_ready().
         Only when both phases are done do we save cookies and close the session.
         """
         cfg = _STORE_CONFIG[self.store]
         auth_key = cfg["auth_cookie"]
-        wait_for = cfg.get("wait_for", [])
 
         cookies = await self._context.cookies()
         kv = {c["name"]: c["value"] for c in cookies}
@@ -217,10 +274,8 @@ class _Session:
         if not kv.get(auth_key):
             return None                     # phase 1: not logged in yet
 
-        # phase 2: wait until ANY of the location cookies appears (OR logic).
-        # Different stores set different cookie names for delivery location.
-        if wait_for and not any(kv.get(k) for k in wait_for):
-            return None
+        if not await self._location_ready(kv):
+            return None                     # phase 2: no delivery address yet
 
         return kv                           # all done — close session
 
@@ -232,7 +287,6 @@ class _Session:
         """
         cfg = _STORE_CONFIG[self.store]
         auth_key = cfg["auth_cookie"]
-        wait_for = cfg.get("wait_for", [])
         wait_hint = cfg.get("wait_hint", "")
 
         cookies = await self._context.cookies()
@@ -241,8 +295,8 @@ class _Session:
         if not kv.get(auth_key):
             return "Waiting for login…"
 
-        if wait_for and not any(kv.get(k) for k in wait_for):
-            return wait_hint                # phase 2: no location cookie yet
+        if not await self._location_ready(kv):
+            return wait_hint                # phase 2: no delivery address yet
 
         return ""                           # done (caller checks get_auth_cookies)
 
