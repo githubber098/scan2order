@@ -1,7 +1,8 @@
 """stores/zepto.py - Zepto httpx store module.
 
 Adapted from scan2order2/automators/zepto.py.
-All Playwright dependencies removed. Session sourced from Redis via user_store.
+All Playwright dependencies removed. Session sourced from SQLite (or MySQL when
+MYSQL_URL is set) via storage.user_store.
 Cookie-only auth: xsrf_token, device_id, session_id, store_id expected in cookies.
 """
 
@@ -13,17 +14,13 @@ from urllib.parse import unquote
 import httpx
 
 from storage.user_store import get_store_session, update_store_cookies
+from stores._common import MOBILE_UA as _MOBILE_UA
 from stores.zepto_sign import compute_signature
 
 APP_NAME = "zepto"
 DISPLAY_NAME = "Zepto"
 BASE_URL = "https://www.zeptonow.com"
 _API_BASE = "https://bff-gateway.zepto.com"
-
-_MOBILE_UA = (
-    "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 "
-    "(KHTML, like Gecko) Chrome/145.0.0.0 Mobile Safari/537.36"
-)
 
 # Compatible-components string captured from a live session (v15.22.2).
 _COMPATIBLE_COMPONENTS = (
@@ -70,7 +67,7 @@ def is_session_valid(user_id: str) -> bool:
 
 
 def _get_zepto_session(user_id: str) -> dict:
-    """Pull Zepto tokens from Redis cookies.
+    """Pull Zepto tokens from the user_store cookies dict (SQLite/MySQL backed).
 
     Applies same normalization as scan2order2's _get_zepto_session.
     Cookie-only path; localStorage fallback is a TODO if tokens are missing.
@@ -193,7 +190,7 @@ async def _zepto_api_post(path: str, body: dict, sess: dict,
 
     Manages cookies manually to avoid httpx jar dedup issues on token refresh.
     On 401, refreshes via /api/auth/refresh-auth and retries.
-    Persists refreshed cookies back to Redis.
+    Persists refreshed cookies back via user_store.update_store_cookies.
     """
     if not sess.get("xsrf_token") or not sess.get("device_id"):
         print(f"[zepto] API: missing xsrf_token or device_id. {_diag_token_status(sess)}")

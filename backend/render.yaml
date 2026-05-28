@@ -2,13 +2,33 @@ services:
   - type: web
     name: scan2order-backend
     runtime: python
-    buildCommand: pip install -r requirements.txt
+    # Render builds from repo root by default; cd into backend/ so Playwright
+    # browsers install into the right cache and uvicorn finds server:app.
+    buildCommand: |
+      pip install -r requirements.txt && \
+      playwright install chromium
     startCommand: uvicorn server:app --host 0.0.0.0 --port $PORT
     envVars:
-      - key: UPSTASH_REDIS_REST_URL
-        sync: false          # set in Render dashboard
-      - key: UPSTASH_REDIS_REST_TOKEN
-        sync: false          # set in Render dashboard
-      - key: GROQ_API_KEY
-        sync: false          # optional — leave blank to disable AI ranking
+      # Required: signs HMAC session cookies. Without this, every restart
+      # invalidates all user logins. Generate with:
+      #   python3 -c "import secrets; print(secrets.token_hex(32))"
+      - key: SECRET_KEY
+        sync: false        # set in Render dashboard
+      # Optional: enables GET /api/logs?key=... for remote log access
+      - key: LOG_API_KEY
+        sync: false
+      # Optional: point at an external Ollama instance (Render has no GPU,
+      # so co-locating Ollama is not viable here). Leave unset to skip the
+      # LLM ranking fallback — the algorithmic ranker still works.
+      - key: OLLAMA_HOST
+        sync: false
+      - key: OLLAMA_MODEL
+        value: llama3.2:3b
+      # Optional: switch from SQLite to MySQL/MariaDB.
+      # Format: mysql://USER:PASSWORD@HOST:PORT/DATABASE
+      - key: MYSQL_URL
+        sync: false
     autoDeploy: true
+    # NOTE: Render's free tier does not persist /app/data between deploys.
+    # If you want SQLite to survive restarts, attach a Render Disk to
+    # /app/data, or use MYSQL_URL with an external managed database.

@@ -1,8 +1,10 @@
 """ranker.py - Product comparison, relevance filtering, and ranking.
 
 Algorithmic logic ported verbatim from scan2order2/server.py and
-scan2order2/automators/base.py. Groq LLM ranking added as optional fallback
-from scan2order1/backend/agents/ranking_agent.py.
+scan2order2/automators/base.py. Local Ollama LLM ranking is used as an
+optional fallback when the algorithmic ranker finds no winner; the model
+is selected via the OLLAMA_MODEL env var (default llama3.2:3b) and reached
+via OLLAMA_HOST (default http://ollama:11434 in docker-compose).
 """
 
 import asyncio

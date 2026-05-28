@@ -20,15 +20,11 @@ from urllib.parse import quote
 import httpx
 
 from storage.user_store import get_store_cookies
+from stores._common import MOBILE_UA as _MOBILE_UA
 
 APP_NAME = "blinkit"
 DISPLAY_NAME = "Blinkit"
 BASE_URL = "https://blinkit.com"
-
-_MOBILE_UA = (
-    "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 "
-    "(KHTML, like Gecko) Chrome/145.0.0.0 Mobile Safari/537.36"
-)
 
 # Headers used for the direct JSON search API and for cart operations.
 # auth_key is added per-call once we have the token.

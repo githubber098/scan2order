@@ -1,7 +1,8 @@
 """stores/bigbasket.py - BigBasket httpx store module.
 
 Adapted from scan2order2/automators/bigbasket.py.
-All Playwright dependencies removed. Cookies sourced from Redis via user_store.
+All Playwright dependencies removed. Cookies sourced from SQLite (or MySQL when
+MYSQL_URL is set) via storage.user_store.
 """
 
 import time
@@ -10,15 +11,11 @@ import httpx
 from urllib.parse import quote
 
 from storage.user_store import get_store_cookies, update_store_cookies
+from stores._common import MOBILE_UA as _MOBILE_UA
 
 APP_NAME = "bigbasket"
 DISPLAY_NAME = "BigBasket"
 BASE_URL = "https://www.bigbasket.com"
-
-_MOBILE_UA = (
-    "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 "
-    "(KHTML, like Gecko) Chrome/145.0.0.0 Mobile Safari/537.36"
-)
 
 
 def is_session_valid(user_id: str) -> bool:
@@ -30,7 +27,7 @@ async def _ensure_csurftoken(client: httpx.AsyncClient, user_id: str) -> str:
     """Ensure the httpx client has a fresh csurftoken cookie.
 
     If missing, warmup with a GET to bigbasket.com/ which triggers Set-Cookie.
-    Persists the new token back to Redis. Returns "" on failure.
+    Persists the new token back via user_store.update_store_cookies. Returns "" on failure.
     """
     csurftoken = client.cookies.get("csurftoken") or ""
     if csurftoken:
