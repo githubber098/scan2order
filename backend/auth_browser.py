@@ -35,13 +35,10 @@ _STORE_CONFIG = {
     "blinkit": {
         "url": "https://blinkit.com/",
         "auth_cookie": "gr_1_accessToken",
-        # merchant_id is set by Blinkit when the user selects a delivery address.
-        # Without it the search API returns no results.
-        "wait_for": ["merchant_id"],
-        "wait_hint": (
-            "✅ Login detected!  Now tap the location pin at the top of the page "
-            "and save a delivery address.  The window will close automatically."
-        ),
+        # No wait_for: Blinkit does not expose merchant_id as a browser cookie —
+        # it comes from API responses and is stored in app state.  Waiting for it
+        # kept the session permanently open.  The auth token alone is sufficient;
+        # Blinkit's API uses the account's saved address automatically.
     },
     "zepto": {
         "url": "https://www.zeptonow.com/",
