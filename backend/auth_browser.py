@@ -20,18 +20,39 @@ _SESSION_TIMEOUT = 600  # 10 minutes
 
 # Navigate to the homepage for every store so WAFs don't see a bot
 # landing directly on a login/auth URL (Akamai blocks that pattern).
+#
+# BigBasket is NOT listed here — Akamai's Bot Manager hard-blocks Playwright
+# regardless of stealth settings (TLS fingerprint mismatch).  BigBasket must
+# be connected via the mobile app WebView (undetectable) and shared to the
+# web UI via the 8-char link code.
+#
+# wait_for   : extra cookies that must appear before the session is closed.
+#              auth_cookie signals "login complete"; wait_for signals "setup
+#              complete" (delivery address saved).  Without a delivery address
+#              the store BFF APIs return empty search results.
+# wait_hint  : message shown in the browser relay UI while waiting.
 _STORE_CONFIG = {
-    "bigbasket": {
-        "url": "https://www.bigbasket.com/",
-        "auth_cookie": "BBAUTHTOKEN",
-    },
     "blinkit": {
         "url": "https://blinkit.com/",
         "auth_cookie": "gr_1_accessToken",
+        # merchant_id is set by Blinkit when the user selects a delivery address.
+        # Without it the search API returns no results.
+        "wait_for": ["merchant_id"],
+        "wait_hint": (
+            "✅ Login detected!  Now tap the location pin at the top of the page "
+            "and save a delivery address.  The window will close automatically."
+        ),
     },
     "zepto": {
         "url": "https://www.zeptonow.com/",
         "auth_cookie": "accessToken",
+        # serviceability is set by Zepto when a delivery address is confirmed.
+        # It contains the store_id the BFF search API needs to return results.
+        "wait_for": ["serviceability"],
+        "wait_hint": (
+            "✅ Login detected!  Now tap the location pin at the top of the page "
+            "and confirm your delivery address.  The window will close automatically."
+        ),
     },
 }
 
@@ -190,11 +211,50 @@ class _Session:
         self.touch()
 
     async def get_auth_cookies(self) -> Optional[dict]:
-        """Return all cookies if the store's auth cookie is present, else None."""
-        auth_key = _STORE_CONFIG[self.store]["auth_cookie"]
+        """Return all cookies only when the session is fully ready, else None.
+
+        Phase 1 — wait for auth_cookie (login complete).
+        Phase 2 — wait for every cookie in wait_for (delivery address saved).
+        Only when both phases are done do we save cookies and close the session.
+        """
+        cfg = _STORE_CONFIG[self.store]
+        auth_key = cfg["auth_cookie"]
+        wait_for = cfg.get("wait_for", [])
+
         cookies = await self._context.cookies()
         kv = {c["name"]: c["value"] for c in cookies}
-        return kv if kv.get(auth_key) else None
+
+        if not kv.get(auth_key):
+            return None                     # phase 1: not logged in yet
+
+        for key in wait_for:
+            if not kv.get(key):
+                return None                 # phase 2: delivery address not set
+
+        return kv                           # all done — close session
+
+    async def auth_status_message(self) -> str:
+        """Return a human-readable status string for the browser relay UI.
+
+        Called by the /check endpoint on every poll so the user knows what
+        step they're on without reading the Playwright screenshot carefully.
+        """
+        cfg = _STORE_CONFIG[self.store]
+        auth_key = cfg["auth_cookie"]
+        wait_for = cfg.get("wait_for", [])
+        wait_hint = cfg.get("wait_hint", "")
+
+        cookies = await self._context.cookies()
+        kv = {c["name"]: c["value"] for c in cookies}
+
+        if not kv.get(auth_key):
+            return "Waiting for login…"
+
+        for key in wait_for:
+            if not kv.get(key):
+                return wait_hint            # phase 2 in progress
+
+        return ""                           # done (caller checks get_auth_cookies)
 
     async def close(self):
         for obj in (self._context, self._browser):

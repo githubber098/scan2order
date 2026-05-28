@@ -8,6 +8,11 @@ services:
     environment:
       - OLLAMA_HOST=http://ollama:11434
       - OLLAMA_MODEL=llama3.2:3b
+      # ── Auth ───────────────────────────────────────────────────────────────
+      # REQUIRED: sign session cookies.  Generate with:
+      #   python3 -c "import secrets; print(secrets.token_hex(32))"
+      # Without this, all users are logged out on every container restart.
+      # - SECRET_KEY=your-64-char-hex-string-here
       # ── Storage backend ────────────────────────────────────────────────────
       # SQLite is the default (no env var needed).  To switch to MySQL,
       # uncomment the line below and make sure the 'mysql' service is running.

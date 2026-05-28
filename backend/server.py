@@ -2,13 +2,22 @@
 
 Multi-user, cloud-deployable FastAPI server.
 No Playwright — all store interactions via httpx.
-Sessions stored in Upstash Redis (per-user cookies).
+Sessions stored in SQLite (or MySQL via MYSQL_URL env var).
 
 Serves two audiences:
   1. Mobile app (scan2order1 API contract: /scan, /search, /order,
      /connect-account, /account-status/{user_id}, /health)
   2. Web UI (scan2order2 API contract: /api/compare, /api/cart/add-all,
      /api/ocr, /api/search, /api/version, /api/auth/*)
+
+Web UI authentication
+─────────────────────
+Users register / log in with email + password.  A 6-day HMAC-signed
+session cookie (scan2order_session) is set on login.  The "/" route
+reads this cookie and injects the user_id into the HTML so the web
+UI does not need to call any extra endpoint.
+
+Mobile auth is unchanged: user_id is sent in the request body.
 """
 
 import asyncio
@@ -19,8 +28,9 @@ from pathlib import Path
 
 from fastapi import FastAPI, Request, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, Response
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 
+import auth
 import auth_browser
 import ocr as ocr_module
 import ranker
@@ -29,15 +39,51 @@ from stores import bigbasket, blinkit, zepto
 
 BASE_DIR = Path(__file__).parent
 APP_VERSION = "1.0.0"
-_INDEX_HTML = BASE_DIR / "templates" / "index.html"
+_INDEX_HTML  = BASE_DIR / "templates" / "index.html"
+_LOGIN_HTML  = BASE_DIR / "templates" / "login.html"
+
+_SESSION_MAX_AGE = auth.SESSION_TTL   # 6 days
 
 
-def _serve_index() -> HTMLResponse:
+def _serve_index(user_id: str) -> HTMLResponse:
+    """Serve index.html with the authenticated user_id injected as a script tag."""
     if _INDEX_HTML.exists():
-        return HTMLResponse(content=_INDEX_HTML.read_text(encoding="utf-8"))
-    return HTMLResponse("""<!DOCTYPE html><html><body>
-<h1>scan2order</h1><p>Backend running.</p>
-<p><a href="/docs">API docs</a></p></body></html>""")
+        html = _INDEX_HTML.read_text(encoding="utf-8")
+        # The placeholder comment is replaced server-side so the JS never needs
+        # to make an extra /api/auth/me round-trip on page load.
+        html = html.replace(
+            "<!-- USER_ID_PLACEHOLDER -->",
+            f'<script>window._SERVER_USER_ID = {repr(user_id)};</script>',
+        )
+        return HTMLResponse(content=html)
+    return HTMLResponse(f"""<!DOCTYPE html><html><body>
+<h1>scan2order</h1><p>Backend running. <a href="/login">Login</a></p>
+</body></html>""")
+
+
+def _serve_login() -> HTMLResponse:
+    if _LOGIN_HTML.exists():
+        return HTMLResponse(content=_LOGIN_HTML.read_text(encoding="utf-8"))
+    return HTMLResponse("<h1>Login page missing</h1>", status_code=500)
+
+
+def _set_session_cookie(response: Response, user_id: str) -> None:
+    token = auth.create_session_token(user_id)
+    response.set_cookie(
+        key=auth.COOKIE_NAME,
+        value=token,
+        max_age=_SESSION_MAX_AGE,
+        httponly=True,
+        samesite="lax",
+        secure=False,   # set True if HTTPS-only deployment
+    )
+
+
+def _get_session_user(request: Request) -> str | None:
+    token = request.cookies.get(auth.COOKIE_NAME)
+    if not token:
+        return None
+    return auth.verify_session_token(token)
 
 
 # ── Store display names ─────────────────────────────────────────────────────
@@ -131,11 +177,103 @@ async def api_version():
 # ── Web UI ───────────────────────────────────────────────────────────────────
 
 @app.get("/", response_class=HTMLResponse)
-async def home():
-    return _serve_index()
+async def home(request: Request):
+    user_id = _get_session_user(request)
+    if not user_id:
+        return RedirectResponse("/login", status_code=302)
+    return _serve_index(user_id)
 
 
-# ── Auth endpoints ────────────────────────────────────────────────────────────
+@app.get("/login", response_class=HTMLResponse)
+async def login_page(request: Request):
+    # If already logged in, skip the login page
+    if _get_session_user(request):
+        return RedirectResponse("/", status_code=302)
+    return _serve_login()
+
+
+# ── User account endpoints ────────────────────────────────────────────────────
+
+@app.post("/api/auth/signup")
+async def api_signup(request: Request):
+    """Register a new account with email + password.
+
+    Body: {email, password}
+    On success: sets a 6-day session cookie and returns {success, user_id, email}.
+    On conflict: returns {success: false, error: "Email already registered"}.
+    """
+    body = await request.json()
+    email    = (body.get("email") or "").strip().lower()
+    password = (body.get("password") or "").strip()
+
+    if not email or "@" not in email:
+        return JSONResponse({"success": False, "error": "Invalid email address"})
+    if len(password) < 8:
+        return JSONResponse({"success": False,
+                             "error": "Password must be at least 8 characters"})
+
+    user_id      = str(uuid.uuid4())
+    password_hash = auth.hash_password(password)
+
+    ok = user_store.create_user(user_id, email, password_hash)
+    if not ok:
+        return JSONResponse({"success": False, "error": "Email already registered"})
+
+    resp = JSONResponse({"success": True, "user_id": user_id, "email": email})
+    _set_session_cookie(resp, user_id)
+    print(f"[auth] signup: {email} → {user_id[:8]}…")
+    return resp
+
+
+@app.post("/api/auth/login")
+async def api_login(request: Request):
+    """Authenticate with email + password.
+
+    Body: {email, password}
+    On success: sets a 6-day session cookie and returns {success, user_id, email}.
+    On failure: returns {success: false, error: "Invalid email or password"}.
+    """
+    body = await request.json()
+    email    = (body.get("email") or "").strip().lower()
+    password = (body.get("password") or "").strip()
+
+    user = user_store.get_user_by_email(email)
+    if not user or not auth.verify_password(password, user["password"]):
+        return JSONResponse({"success": False,
+                             "error": "Invalid email or password"})
+
+    user_store.update_last_login(user["user_id"])
+    resp = JSONResponse({"success": True,
+                         "user_id": user["user_id"], "email": user["email"]})
+    _set_session_cookie(resp, user["user_id"])
+    print(f"[auth] login: {email} ({user['user_id'][:8]}…)")
+    return resp
+
+
+@app.post("/api/auth/logout")
+async def api_logout():
+    """Clear the session cookie."""
+    resp = JSONResponse({"success": True})
+    resp.delete_cookie(auth.COOKIE_NAME)
+    return resp
+
+
+@app.get("/api/auth/me")
+async def api_me(request: Request):
+    """Return the currently logged-in user, or 401 if not authenticated."""
+    user_id = _get_session_user(request)
+    if not user_id:
+        return JSONResponse({"error": "not authenticated"}, status_code=401)
+    user = user_store.get_user_by_id(user_id)
+    if not user:
+        # Token valid but user deleted — clear cookie
+        resp = JSONResponse({"error": "user not found"}, status_code=401)
+        resp.delete_cookie(auth.COOKIE_NAME)
+        return resp
+    return {"user_id": user["user_id"], "email": user["email"]}
+
+
+# ── Store-session auth endpoints ──────────────────────────────────────────────
 
 @app.post("/api/auth/connect")
 async def api_auth_connect(request: Request):
@@ -288,8 +426,13 @@ async def browser_auth_event(session_id: str, request: Request):
 async def browser_auth_check(session_id: str):
     """Poll for auth completion.
 
-    Returns {done: false} until the store's auth cookie appears, then saves
-    the cookies to SQLite, closes the browser, and returns {done: true, user_id, store}.
+    Phase 1: returns {done: false, message: "Waiting for login…"} until the
+             store's primary auth cookie appears.
+    Phase 2: returns {done: false, message: "<delivery address hint>"} while
+             waiting for location cookies (merchant_id / serviceability) so
+             the user knows to set their delivery address before we close.
+    Done:    saves all cookies to SQLite, closes the browser, returns
+             {done: true, user_id, store}.
     """
     s = auth_browser.get(session_id)
     if not s:
@@ -302,7 +445,8 @@ async def browser_auth_check(session_id: str):
         await auth_browser.close(session_id)
         return {"done": True, "user_id": s.user_id, "store": s.store}
     s.touch()
-    return {"done": False}
+    message = await s.auth_status_message()
+    return {"done": False, "message": message}
 
 
 @app.delete("/api/auth/browser/session/{session_id}")

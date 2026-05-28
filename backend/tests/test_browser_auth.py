@@ -59,11 +59,20 @@ class TestBrowserStart:
         })
         assert r.json()["success"] is True
 
-    def test_start_all_three_stores(self, client, mock_browser, clean_db):
-        for store in ("bigbasket", "blinkit", "zepto"):
+    def test_start_supported_stores(self, client, mock_browser, clean_db):
+        """Blinkit and Zepto are supported in the browser relay."""
+        for store in ("blinkit", "zepto"):
             r = client.post(f"/api/auth/browser/start/{store}",
                             json={"user_id": f"user-{store}"})
             assert r.json()["success"] is True, f"Failed to start {store}"
+
+    def test_bigbasket_is_mobile_only(self, client, mock_browser, clean_db):
+        """BigBasket is excluded from the browser relay (Akamai blocks Playwright)."""
+        r = client.post("/api/auth/browser/start/bigbasket",
+                        json={"user_id": "user-bb"})
+        assert r.json()["success"] is False
+        assert "bigbasket" in r.json().get("error", "").lower() or \
+               "unknown" in r.json().get("error", "").lower()
 
 
 # ── /screenshot ───────────────────────────────────────────────────────────────

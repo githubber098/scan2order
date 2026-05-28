@@ -40,6 +40,13 @@ CREATE TABLE IF NOT EXISTS link_codes (
     user_id    TEXT NOT NULL,
     created_at REAL NOT NULL
 );
+CREATE TABLE IF NOT EXISTS users (
+    user_id    TEXT PRIMARY KEY,
+    email      TEXT UNIQUE NOT NULL,
+    password   TEXT NOT NULL,
+    created_at REAL NOT NULL,
+    last_login REAL
+);
 """
 
 TEST_USER_ID = "test-user-aaaabbbb"
@@ -283,8 +290,15 @@ class FakeBrowserSession:
 
     async def get_auth_cookies(self) -> dict | None:
         if self._authed:
-            return {"gr_1_accessToken": "fake-authed-token", "gr_1_deviceId": "fake"}
+            return {"gr_1_accessToken": "fake-authed-token", "gr_1_deviceId": "fake",
+                    "merchant_id": "fake-merchant", "serviceability": "{}"}
         return None
+
+    async def auth_status_message(self) -> str:
+        """Return the current phase message (matches the real _Session interface)."""
+        if self._authed:
+            return ""
+        return "Waiting for login…"
 
     async def close(self) -> None:
         pass

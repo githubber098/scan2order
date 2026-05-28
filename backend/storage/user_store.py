@@ -156,6 +156,13 @@ _SQLITE_DDL = """
         code       TEXT PRIMARY KEY,
         user_id    TEXT NOT NULL,
         created_at REAL NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS users (
+        user_id    TEXT PRIMARY KEY,
+        email      TEXT UNIQUE NOT NULL,
+        password   TEXT NOT NULL,
+        created_at REAL NOT NULL,
+        last_login REAL
     )
 """
 
@@ -175,6 +182,14 @@ _MYSQL_DDL = """
         user_id    VARCHAR(255) NOT NULL,
         created_at DOUBLE       NOT NULL,
         PRIMARY KEY (code)
+    )
+    ;
+    CREATE TABLE IF NOT EXISTS users (
+        user_id    VARCHAR(255) PRIMARY KEY,
+        email      VARCHAR(255) UNIQUE NOT NULL,
+        password   VARCHAR(255) NOT NULL,
+        created_at DOUBLE NOT NULL,
+        last_login DOUBLE
     )
 """
 
@@ -366,3 +381,50 @@ def consume_link_code(code: str) -> str | None:
             _conn.execute("DELETE FROM link_codes WHERE code=?", (code.upper(),))
             _conn.commit()
     return user_id
+
+
+# ── User account CRUD ─────────────────────────────────────────────────────────
+
+def create_user(user_id: str, email: str, password_hash: str) -> bool:
+    """Insert a new user row.  Returns False if the email is already taken."""
+    with _lock:
+        try:
+            _conn.execute(
+                "INSERT INTO users (user_id, email, password, created_at)"
+                " VALUES (?, ?, ?, ?)",
+                (user_id, email.lower().strip(), password_hash, time.time()),
+            )
+            _conn.commit()
+            return True
+        except Exception:
+            return False   # UNIQUE violation on email
+
+
+def get_user_by_email(email: str) -> dict | None:
+    row = _conn.execute(
+        "SELECT user_id, email, password FROM users WHERE email=?",
+        (email.lower().strip(),),
+    ).fetchone()
+    if not row:
+        return None
+    return {"user_id": row["user_id"], "email": row["email"],
+            "password": row["password"]}
+
+
+def get_user_by_id(user_id: str) -> dict | None:
+    row = _conn.execute(
+        "SELECT user_id, email FROM users WHERE user_id=?",
+        (user_id,),
+    ).fetchone()
+    if not row:
+        return None
+    return {"user_id": row["user_id"], "email": row["email"]}
+
+
+def update_last_login(user_id: str) -> None:
+    with _lock:
+        _conn.execute(
+            "UPDATE users SET last_login=? WHERE user_id=?",
+            (time.time(), user_id),
+        )
+        _conn.commit()

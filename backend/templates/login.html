@@ -1,0 +1,319 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>scan2order: sign in</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            background: #0a0a1a;
+            color: #e0e0e0;
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+
+        .container {
+            width: 100%;
+            max-width: 380px;
+        }
+
+        .logo {
+            text-align: center;
+            margin-bottom: 32px;
+        }
+        .logo h1 {
+            font-size: 26px;
+            background: linear-gradient(135deg, #4ecdc4, #2db5ad);
+            background-clip: text;
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+        .logo p {
+            color: #667;
+            font-size: 13px;
+            margin-top: 4px;
+        }
+
+        /* Tab switcher */
+        .tabs {
+            display: flex;
+            background: #111122;
+            border: 1px solid #222;
+            border-radius: 12px;
+            padding: 4px;
+            margin-bottom: 20px;
+        }
+        .tab-btn {
+            flex: 1;
+            padding: 9px;
+            border: none;
+            border-radius: 9px;
+            background: none;
+            color: #666;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background 0.15s, color 0.15s;
+            font-family: inherit;
+        }
+        .tab-btn.active {
+            background: linear-gradient(135deg, #4ecdc4, #2db5ad);
+            color: #001;
+        }
+
+        /* Card */
+        .card {
+            background: #111122;
+            border: 1px solid #222;
+            border-radius: 14px;
+            padding: 24px;
+        }
+
+        /* Form fields */
+        .field {
+            margin-bottom: 14px;
+        }
+        .field label {
+            display: block;
+            font-size: 12px;
+            color: #888;
+            margin-bottom: 6px;
+            text-transform: uppercase;
+            letter-spacing: 0.4px;
+        }
+        .field input {
+            width: 100%;
+            padding: 12px 14px;
+            background: #0a0a1a;
+            border: 1px solid #333;
+            border-radius: 10px;
+            color: #eee;
+            font-size: 15px;
+            font-family: inherit;
+            transition: border-color 0.15s;
+        }
+        .field input:focus {
+            outline: none;
+            border-color: #4ecdc4;
+        }
+        .field input::placeholder {
+            color: #444;
+        }
+
+        /* Submit button */
+        .btn-primary {
+            width: 100%;
+            padding: 14px;
+            margin-top: 6px;
+            border: none;
+            border-radius: 12px;
+            font-size: 15px;
+            font-weight: 600;
+            cursor: pointer;
+            background: linear-gradient(135deg, #4ecdc4, #2db5ad);
+            color: #001;
+            transition: opacity 0.15s;
+            font-family: inherit;
+        }
+        .btn-primary:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        /* Error message */
+        .error-msg {
+            display: none;
+            margin-top: 12px;
+            padding: 10px 14px;
+            background: #1a0a0a;
+            border-left: 3px solid #e24b4a;
+            border-radius: 6px;
+            font-size: 13px;
+            color: #e24b4a;
+        }
+        .error-msg.visible {
+            display: block;
+        }
+
+        /* Forgot password */
+        .forgot-wrap {
+            text-align: right;
+            margin-top: 6px;
+        }
+        .forgot-link {
+            font-size: 12px;
+            color: #555;
+            text-decoration: none;
+            cursor: default;
+            pointer-events: none;
+        }
+
+        /* Hidden utility */
+        .hidden { display: none; }
+    </style>
+</head>
+<body>
+<div class="container">
+    <div class="logo">
+        <h1>scan2order</h1>
+        <p>grocery price comparison across BigBasket, Blinkit &amp; Zepto</p>
+    </div>
+
+    <div class="tabs">
+        <button class="tab-btn active" id="tab-signin" onclick="switchTab('signin')">Sign In</button>
+        <button class="tab-btn" id="tab-signup" onclick="switchTab('signup')">Create Account</button>
+    </div>
+
+    <div class="card">
+        <!-- Sign In form -->
+        <form id="form-signin" onsubmit="handleSignin(event)">
+            <div class="field">
+                <label for="signin-email">Email</label>
+                <input type="email" id="signin-email" placeholder="you@example.com" autocomplete="email" required>
+            </div>
+            <div class="field">
+                <label for="signin-password">Password</label>
+                <input type="password" id="signin-password" placeholder="••••••••" autocomplete="current-password" required>
+            </div>
+            <div class="forgot-wrap">
+                <a class="forgot-link" tabindex="-1">Forgot password?</a>
+            </div>
+            <button class="btn-primary" type="submit" id="signin-btn">Sign in</button>
+            <div class="error-msg" id="signin-error"></div>
+        </form>
+
+        <!-- Create Account form -->
+        <form id="form-signup" class="hidden" onsubmit="handleSignup(event)">
+            <div class="field">
+                <label for="signup-email">Email</label>
+                <input type="email" id="signup-email" placeholder="you@example.com" autocomplete="email" required>
+            </div>
+            <div class="field">
+                <label for="signup-password">Password</label>
+                <input type="password" id="signup-password" placeholder="••••••••" autocomplete="new-password" required>
+            </div>
+            <div class="field">
+                <label for="signup-confirm">Confirm password</label>
+                <input type="password" id="signup-confirm" placeholder="••••••••" autocomplete="new-password" required>
+            </div>
+            <button class="btn-primary" type="submit" id="signup-btn">Create account</button>
+            <div class="error-msg" id="signup-error"></div>
+        </form>
+    </div>
+</div>
+
+<script>
+// ── Tab switching ─────────────────────────────────────────────────────────────
+
+function switchTab(tab) {
+    const isSignin = tab === 'signin';
+    document.getElementById('tab-signin').classList.toggle('active', isSignin);
+    document.getElementById('tab-signup').classList.toggle('active', !isSignin);
+    document.getElementById('form-signin').classList.toggle('hidden', !isSignin);
+    document.getElementById('form-signup').classList.toggle('hidden', isSignin);
+    // Clear any error messages when switching tabs
+    document.getElementById('signin-error').classList.remove('visible');
+    document.getElementById('signup-error').classList.remove('visible');
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+function showError(id, msg) {
+    const el = document.getElementById(id);
+    el.textContent = msg;
+    el.classList.add('visible');
+}
+
+function hideError(id) {
+    document.getElementById(id).classList.remove('visible');
+}
+
+// ── Sign in ───────────────────────────────────────────────────────────────────
+
+async function handleSignin(e) {
+    e.preventDefault();
+    hideError('signin-error');
+
+    const email    = document.getElementById('signin-email').value.trim();
+    const password = document.getElementById('signin-password').value;
+    const btn      = document.getElementById('signin-btn');
+
+    btn.disabled = true;
+    btn.textContent = 'Signing in…';
+
+    try {
+        const resp = await fetch('/api/auth/login', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ email, password }),
+        });
+        const data = await resp.json();
+
+        if (!resp.ok || data.error) {
+            showError('signin-error', data.error || 'Sign in failed. Please try again.');
+            return;
+        }
+
+        // Success — redirect to main app
+        window.location.href = '/';
+    } catch (err) {
+        showError('signin-error', 'Network error. Please check your connection.');
+    } finally {
+        btn.disabled = false;
+        btn.textContent = 'Sign in';
+    }
+}
+
+// ── Create account ────────────────────────────────────────────────────────────
+
+async function handleSignup(e) {
+    e.preventDefault();
+    hideError('signup-error');
+
+    const email    = document.getElementById('signup-email').value.trim();
+    const password = document.getElementById('signup-password').value;
+    const confirm  = document.getElementById('signup-confirm').value;
+    const btn      = document.getElementById('signup-btn');
+
+    if (password !== confirm) {
+        showError('signup-error', 'Passwords do not match.');
+        return;
+    }
+    if (password.length < 8) {
+        showError('signup-error', 'Password must be at least 8 characters.');
+        return;
+    }
+
+    btn.disabled = true;
+    btn.textContent = 'Creating account…';
+
+    try {
+        const resp = await fetch('/api/auth/signup', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ email, password }),
+        });
+        const data = await resp.json();
+
+        if (!resp.ok || data.error) {
+            showError('signup-error', data.error || 'Account creation failed. Please try again.');
+            return;
+        }
+
+        // Success — redirect to main app
+        window.location.href = '/';
+    } catch (err) {
+        showError('signup-error', 'Network error. Please check your connection.');
+    } finally {
+        btn.disabled = false;
+        btn.textContent = 'Create account';
+    }
+}
+</script>
+</body>
+</html>
