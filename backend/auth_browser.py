@@ -35,10 +35,14 @@ _STORE_CONFIG = {
     "blinkit": {
         "url": "https://blinkit.com/",
         "auth_cookie": "gr_1_accessToken",
-        # No wait_for: Blinkit does not expose merchant_id as a browser cookie —
-        # it comes from API responses and is stored in app state.  Waiting for it
-        # kept the session permanently open.  The auth token alone is sufficient;
-        # Blinkit's API uses the account's saved address automatically.
+        # Blinkit's v2 search API returns HTTP 404 with no location context.
+        # wait_for uses OR logic (any one present = done) because the exact
+        # cookie name varies: web UI may set lat/lng, gr_1_merchantId, or merchant_id.
+        "wait_for": ["lat", "gr_1_merchantId", "merchant_id"],
+        "wait_hint": (
+            "✅ Login detected!  Now tap the location pin at the top of the page "
+            "and save a delivery address.  The window will close automatically."
+        ),
     },
     "zepto": {
         "url": "https://www.zeptonow.com/",
@@ -213,9 +217,10 @@ class _Session:
         if not kv.get(auth_key):
             return None                     # phase 1: not logged in yet
 
-        for key in wait_for:
-            if not kv.get(key):
-                return None                 # phase 2: delivery address not set
+        # phase 2: wait until ANY of the location cookies appears (OR logic).
+        # Different stores set different cookie names for delivery location.
+        if wait_for and not any(kv.get(k) for k in wait_for):
+            return None
 
         return kv                           # all done — close session
 
@@ -236,9 +241,8 @@ class _Session:
         if not kv.get(auth_key):
             return "Waiting for login…"
 
-        for key in wait_for:
-            if not kv.get(key):
-                return wait_hint            # phase 2 in progress
+        if wait_for and not any(kv.get(k) for k in wait_for):
+            return wait_hint                # phase 2: no location cookie yet
 
         return ""                           # done (caller checks get_auth_cookies)
 
