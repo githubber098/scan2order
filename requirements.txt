@@ -17,6 +17,9 @@ Pillow>=11.0.0
 playwright>=1.44.0
 playwright-stealth>=1.0.6  # patches canvas/WebGL/timing to defeat WAF bot detection
 
+# SMS OTP (phone-based auth)
+twilio>=9.0.0
+
 # Optional: Groq LLM ranking fallback
 # groq>=0.8.0  # auto-installed if GROQ_API_KEY is set; safe to add explicitly
 

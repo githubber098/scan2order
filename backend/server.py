@@ -12,10 +12,9 @@ Serves two audiences:
 
 Web UI authentication
 ─────────────────────
-Users register / log in with email + password.  A 6-day HMAC-signed
-session cookie (scan2order_session) is set on login.  The "/" route
-reads this cookie and injects the user_id into the HTML so the web
-UI does not need to call any extra endpoint.
+Phone number + SMS OTP.  A 6-digit code is sent via Twilio; on correct
+entry a 6-day HMAC-signed session cookie (scan2order_session) is set.
+The "/" route reads this cookie and injects the user_id into the HTML.
 
 Mobile auth is unchanged: user_id is sent in the request body.
 """
@@ -34,6 +33,7 @@ import auth
 import auth_browser
 import ocr as ocr_module
 import ranker
+import sms
 from storage import user_store
 from stores import bigbasket, blinkit, zepto
 
@@ -194,59 +194,57 @@ async def login_page(request: Request):
 
 # ── User account endpoints ────────────────────────────────────────────────────
 
-@app.post("/api/auth/signup")
-async def api_signup(request: Request):
-    """Register a new account with email + password.
+@app.post("/api/auth/send-otp")
+async def api_send_otp(request: Request):
+    """Send a 6-digit SMS OTP to the given phone number.
 
-    Body: {email, password}
-    On success: sets a 6-day session cookie and returns {success, user_id, email}.
-    On conflict: returns {success: false, error: "Email already registered"}.
+    Body: {phone}
+    Rate-limited to one request per 60 seconds per phone.
     """
     body = await request.json()
-    email    = (body.get("email") or "").strip().lower()
-    password = (body.get("password") or "").strip()
+    phone = auth.normalize_phone(body.get("phone", ""))
+    if not phone:
+        return JSONResponse({"success": False, "error": "Invalid phone number"})
 
-    if not email or "@" not in email:
-        return JSONResponse({"success": False, "error": "Invalid email address"})
-    if len(password) < 8:
+    if user_store.is_otp_rate_limited(phone):
         return JSONResponse({"success": False,
-                             "error": "Password must be at least 8 characters"})
+                             "error": "Please wait 60 seconds before requesting a new code"})
 
-    user_id      = str(uuid.uuid4())
-    password_hash = auth.hash_password(password)
+    code = auth.generate_otp()
+    user_store.save_otp(phone, code)
 
-    ok = user_store.create_user(user_id, email, password_hash)
+    ok = sms.send_otp(phone, code)
     if not ok:
-        return JSONResponse({"success": False, "error": "Email already registered"})
+        return JSONResponse({"success": False,
+                             "error": "Failed to send SMS. Check server Twilio config."})
 
-    resp = JSONResponse({"success": True, "user_id": user_id, "email": email})
-    _set_session_cookie(resp, user_id)
-    print(f"[auth] signup: {email} → {user_id[:8]}…")
-    return resp
+    print(f"[auth] OTP sent to {phone[:4]}****")
+    return JSONResponse({"success": True})
 
 
-@app.post("/api/auth/login")
-async def api_login(request: Request):
-    """Authenticate with email + password.
+@app.post("/api/auth/verify-otp")
+async def api_verify_otp(request: Request):
+    """Verify the SMS OTP. Creates the account if new, sets session cookie.
 
-    Body: {email, password}
-    On success: sets a 6-day session cookie and returns {success, user_id, email}.
-    On failure: returns {success: false, error: "Invalid email or password"}.
+    Body: {phone, code}
+    On success: sets session cookie, returns {success, user_id}.
     """
     body = await request.json()
-    email    = (body.get("email") or "").strip().lower()
-    password = (body.get("password") or "").strip()
+    phone = auth.normalize_phone(body.get("phone", ""))
+    code  = str(body.get("code", "")).strip()
 
-    user = user_store.get_user_by_email(email)
-    if not user or not auth.verify_password(password, user["password"]):
-        return JSONResponse({"success": False,
-                             "error": "Invalid email or password"})
+    if not phone or not code:
+        return JSONResponse({"success": False, "error": "Phone and code required"})
 
-    user_store.update_last_login(user["user_id"])
-    resp = JSONResponse({"success": True,
-                         "user_id": user["user_id"], "email": user["email"]})
-    _set_session_cookie(resp, user["user_id"])
-    print(f"[auth] login: {email} ({user['user_id'][:8]}…)")
+    if not user_store.verify_and_consume_otp(phone, code):
+        return JSONResponse({"success": False, "error": "Invalid or expired code"})
+
+    user_id = user_store.get_or_create_user(phone)
+    user_store.update_last_login(user_id)
+
+    resp = JSONResponse({"success": True, "user_id": user_id})
+    _set_session_cookie(resp, user_id)
+    print(f"[auth] verified: {phone[:4]}**** → {user_id[:8]}…")
     return resp
 
 
@@ -266,11 +264,10 @@ async def api_me(request: Request):
         return JSONResponse({"error": "not authenticated"}, status_code=401)
     user = user_store.get_user_by_id(user_id)
     if not user:
-        # Token valid but user deleted — clear cookie
         resp = JSONResponse({"error": "user not found"}, status_code=401)
         resp.delete_cookie(auth.COOKIE_NAME)
         return resp
-    return {"user_id": user["user_id"], "email": user["email"]}
+    return {"user_id": user["user_id"], "phone": user["phone"]}
 
 
 # ── Store-session auth endpoints ──────────────────────────────────────────────

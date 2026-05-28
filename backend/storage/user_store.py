@@ -28,10 +28,13 @@ import sqlite3
 import threading
 import time
 import urllib.parse
+import uuid
 from pathlib import Path
 
-_TTL_30D = 60 * 60 * 24 * 30
-_TTL_24H = 60 * 60 * 24
+_TTL_30D  = 60 * 60 * 24 * 30
+_TTL_24H  = 60 * 60 * 24
+_OTP_TTL  = 10 * 60   # 10 minutes
+_OTP_RATE = 60        # seconds between OTP requests per phone
 
 _MYSQL_URL: str | None = os.environ.get("MYSQL_URL")
 # e.g. mysql://scan2order:secretpassword@mysql:3306/scan2order
@@ -159,15 +162,20 @@ _SQLITE_DDL = """
     );
     CREATE TABLE IF NOT EXISTS users (
         user_id    TEXT PRIMARY KEY,
-        email      TEXT UNIQUE NOT NULL,
-        password   TEXT NOT NULL,
+        phone      TEXT UNIQUE NOT NULL,
         created_at REAL NOT NULL,
         last_login REAL
+    );
+    CREATE TABLE IF NOT EXISTS otp_codes (
+        phone      TEXT PRIMARY KEY,
+        code       TEXT NOT NULL,
+        expires_at REAL NOT NULL,
+        used       INTEGER NOT NULL DEFAULT 0,
+        created_at REAL NOT NULL
     )
 """
 
-# MySQL TEXT columns cannot carry a non-NULL DEFAULT in MySQL < 8.0.13;
-# the application always passes explicit values so no DEFAULT is needed.
+# MySQL TEXT columns cannot carry a non-NULL DEFAULT in MySQL < 8.0.13.
 _MYSQL_DDL = """
     CREATE TABLE IF NOT EXISTS sessions (
         user_id       VARCHAR(255) NOT NULL,
@@ -182,14 +190,21 @@ _MYSQL_DDL = """
         user_id    VARCHAR(255) NOT NULL,
         created_at DOUBLE       NOT NULL,
         PRIMARY KEY (code)
-    )
-    ;
+    );
     CREATE TABLE IF NOT EXISTS users (
-        user_id    VARCHAR(255) PRIMARY KEY,
-        email      VARCHAR(255) UNIQUE NOT NULL,
-        password   VARCHAR(255) NOT NULL,
-        created_at DOUBLE NOT NULL,
-        last_login DOUBLE
+        user_id    VARCHAR(255) NOT NULL,
+        phone      VARCHAR(20)  UNIQUE NOT NULL,
+        created_at DOUBLE       NOT NULL,
+        last_login DOUBLE,
+        PRIMARY KEY (user_id)
+    );
+    CREATE TABLE IF NOT EXISTS otp_codes (
+        phone      VARCHAR(20) NOT NULL,
+        code       CHAR(6)     NOT NULL,
+        expires_at DOUBLE      NOT NULL,
+        used       TINYINT     NOT NULL DEFAULT 0,
+        created_at DOUBLE      NOT NULL,
+        PRIMARY KEY (phone)
     )
 """
 
@@ -216,6 +231,15 @@ if _MYSQL_URL:
     _SQL_UPSERT_LINK_CODE = (
         "REPLACE INTO link_codes (code, user_id, created_at) VALUES (%s, %s, %s)"
     )
+    _SQL_UPSERT_OTP = """
+        INSERT INTO otp_codes (phone, code, expires_at, used, created_at)
+        VALUES (%s, %s, %s, 0, %s)
+        ON DUPLICATE KEY UPDATE
+            code       = VALUES(code),
+            expires_at = VALUES(expires_at),
+            used       = 0,
+            created_at = VALUES(created_at)
+    """
 else:
     _SQL_UPSERT_SESSION = """
         INSERT INTO sessions (user_id, store, cookies, local_storage, updated_at)
@@ -235,11 +259,37 @@ else:
     _SQL_UPSERT_LINK_CODE = (
         "INSERT OR REPLACE INTO link_codes (code, user_id, created_at) VALUES (?, ?, ?)"
     )
+    _SQL_UPSERT_OTP = """
+        INSERT INTO otp_codes (phone, code, expires_at, used, created_at)
+        VALUES (?, ?, ?, 0, ?)
+        ON CONFLICT(phone) DO UPDATE SET
+            code       = excluded.code,
+            expires_at = excluded.expires_at,
+            used       = 0,
+            created_at = excluded.created_at
+    """
+
+# ── Schema migration helper ────────────────────────────────────────────────────
+
+def _migrate(conn) -> None:
+    """Drop and recreate the users table if it still has the old email+password schema."""
+    try:
+        conn.execute("SELECT phone FROM users LIMIT 1")
+    except Exception:
+        # Old schema (email+password) or table missing — drop and let DDL recreate it.
+        try:
+            conn.execute("DROP TABLE IF EXISTS users")
+            conn.commit()
+            print("[user_store] migrated users table to phone-based schema")
+        except Exception:
+            pass
+
 
 # ── Connection initialisation ──────────────────────────────────────────────────
 
 if _MYSQL_URL:
     _conn: _MySQLDB | sqlite3.Connection = _MySQLDB(_MYSQL_URL)
+    _migrate(_conn)
     _conn.executescript(_MYSQL_DDL)
     print(f"[user_store] using MySQL backend: {_MYSQL_URL.split('@')[-1]}")
 else:
@@ -248,6 +298,7 @@ else:
     _conn = sqlite3.connect(str(_DB_DIR / "sessions.db"), check_same_thread=False)
     _conn.row_factory = sqlite3.Row
     _conn.execute("PRAGMA journal_mode=WAL")
+    _migrate(_conn)
     _conn.executescript(_SQLITE_DDL)
     _conn.commit()
     print("[user_store] using SQLite backend")
@@ -385,40 +436,30 @@ def consume_link_code(code: str) -> str | None:
 
 # ── User account CRUD ─────────────────────────────────────────────────────────
 
-def create_user(user_id: str, email: str, password_hash: str) -> bool:
-    """Insert a new user row.  Returns False if the email is already taken."""
+def get_or_create_user(phone: str) -> str:
+    """Return the user_id for *phone*, creating a new account if none exists."""
     with _lock:
-        try:
-            _conn.execute(
-                "INSERT INTO users (user_id, email, password, created_at)"
-                " VALUES (?, ?, ?, ?)",
-                (user_id, email.lower().strip(), password_hash, time.time()),
-            )
-            _conn.commit()
-            return True
-        except Exception:
-            return False   # UNIQUE violation on email
-
-
-def get_user_by_email(email: str) -> dict | None:
-    row = _conn.execute(
-        "SELECT user_id, email, password FROM users WHERE email=?",
-        (email.lower().strip(),),
-    ).fetchone()
-    if not row:
-        return None
-    return {"user_id": row["user_id"], "email": row["email"],
-            "password": row["password"]}
+        row = _conn.execute(
+            "SELECT user_id FROM users WHERE phone=?", (phone,)
+        ).fetchone()
+        if row:
+            return row["user_id"]
+        uid = str(uuid.uuid4())
+        _conn.execute(
+            "INSERT INTO users (user_id, phone, created_at) VALUES (?, ?, ?)",
+            (uid, phone, time.time()),
+        )
+        _conn.commit()
+        return uid
 
 
 def get_user_by_id(user_id: str) -> dict | None:
     row = _conn.execute(
-        "SELECT user_id, email FROM users WHERE user_id=?",
-        (user_id,),
+        "SELECT user_id, phone FROM users WHERE user_id=?", (user_id,)
     ).fetchone()
     if not row:
         return None
-    return {"user_id": row["user_id"], "email": row["email"]}
+    return {"user_id": row["user_id"], "phone": row["phone"]}
 
 
 def update_last_login(user_id: str) -> None:
@@ -428,3 +469,43 @@ def update_last_login(user_id: str) -> None:
             (time.time(), user_id),
         )
         _conn.commit()
+
+
+# ── OTP management ────────────────────────────────────────────────────────────
+
+def is_otp_rate_limited(phone: str) -> bool:
+    """True if an OTP was issued for *phone* within the last OTP_RATE seconds."""
+    row = _conn.execute(
+        "SELECT created_at FROM otp_codes WHERE phone=?", (phone,)
+    ).fetchone()
+    if not row:
+        return False
+    return (time.time() - row["created_at"]) < _OTP_RATE
+
+
+def save_otp(phone: str, code: str) -> None:
+    """Upsert a fresh OTP for *phone*, replacing any existing entry."""
+    with _lock:
+        _conn.execute(
+            _SQL_UPSERT_OTP,
+            (phone, code, time.time() + _OTP_TTL, time.time()),
+        )
+        _conn.commit()
+
+
+def verify_and_consume_otp(phone: str, code: str) -> bool:
+    """Return True and mark the OTP used if *code* is valid and unexpired."""
+    now = time.time()
+    with _lock:
+        row = _conn.execute(
+            "SELECT code, expires_at, used FROM otp_codes WHERE phone=?", (phone,)
+        ).fetchone()
+        if not row:
+            return False
+        if row["used"] or row["expires_at"] < now:
+            return False
+        if row["code"] != code:
+            return False
+        _conn.execute("UPDATE otp_codes SET used=1 WHERE phone=?", (phone,))
+        _conn.commit()
+        return True
