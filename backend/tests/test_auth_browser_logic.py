@@ -56,6 +56,11 @@ def _session(store: str, cookies: dict, local_storage: dict | None = None,
 
 
 # ── Blinkit: _location_ready via get_auth_cookies ────────────────────────────
+#
+# Ground truth from live session logs (2026-05-29):
+#   After address selection Blinkit sets: gr_1_lat, gr_1_lon, gr_1_locality,
+#   gr_1_landmark.  Plain 'lat', 'merchant_id', 'gr_1_merchantId' are NOT set.
+#   The localStorage JS had a syntax bug (missing ')') so LS fallback never ran.
 
 class TestBlinkitLocationReady:
     BLINKIT_AUTH = {"gr_1_accessToken": "tok"}
@@ -71,19 +76,25 @@ class TestBlinkitLocationReady:
         assert await s.get_auth_cookies() is None
 
     @pytest.mark.asyncio
-    async def test_lat_cookie_completes_phase2(self):
-        cookies = {**self.BLINKIT_AUTH, "lat": "12.9716"}
+    async def test_gr1_lat_cookie_completes_phase2(self):
+        """gr_1_lat is the real cookie Blinkit sets (confirmed from live logs)."""
+        cookies = {**self.BLINKIT_AUTH, "gr_1_lat": "12.9716"}
         s = _session("blinkit", cookies)
         result = await s.get_auth_cookies()
         assert result is not None
         assert result["gr_1_accessToken"] == "tok"
 
     @pytest.mark.asyncio
-    async def test_dlat_not_in_wait_for_but_ls_can_save_it(self):
-        # dlat is not in wait_for cookies, but if it's in localStorage it works
+    async def test_lat_cookie_still_accepted_as_fallback(self):
+        """Plain 'lat' kept in wait_for as a future-proof fallback."""
+        cookies = {**self.BLINKIT_AUTH, "lat": "12.9716"}
+        s = _session("blinkit", cookies)
+        assert await s.get_auth_cookies() is not None
+
+    @pytest.mark.asyncio
+    async def test_dlat_not_in_wait_for_returns_none(self):
         cookies = {**self.BLINKIT_AUTH}
         s = _session("blinkit", cookies, local_storage={"dlat": "12.9716"})
-        # dlat is not in wait_for_ls either — should remain None
         assert await s.get_auth_cookies() is None
 
     @pytest.mark.asyncio

@@ -37,11 +37,11 @@ _STORE_CONFIG = {
     "blinkit": {
         "url": "https://blinkit.com/",
         "auth_cookie": "gr_1_accessToken",
-        # Blinkit's web UI does NOT reliably set lat/lng/merchant_id as browser
-        # cookies — it stores delivery context in localStorage instead.
-        # wait_for_ls: check these localStorage keys via page.evaluate(); any
-        # one present with a non-empty value means address setup is done.
-        "wait_for": ["lat", "gr_1_merchantId", "merchant_id"],
+        # Ground truth from live DevTools (2026-05-29): after setting a delivery
+        # address Blinkit sets gr_1_lat, gr_1_lon, gr_1_locality, gr_1_landmark.
+        # The plain 'lat' cookie is NOT set; neither is merchant_id.
+        # Keep 'lat' and 'merchant_id' as fallbacks in case the API changes.
+        "wait_for": ["gr_1_lat", "lat", "gr_1_merchantId", "merchant_id"],
         "wait_for_ls": [
             "merchant_id", "lat", "gr_1_merchantId",
             "delivery_address", "current_location", "userAddress",
@@ -272,7 +272,7 @@ class _Session:
                     "() => JSON.stringify(Object.fromEntries("
                     "  Array.from({length: localStorage.length}, (_, i) => "
                     "    [localStorage.key(i), localStorage.getItem(localStorage.key(i))]"
-                    "))"
+                    ")))"
                 )
                 ls: dict = json.loads(ls_raw or "{}")
                 for k in wait_for_ls:
