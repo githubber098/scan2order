@@ -134,7 +134,16 @@ class TestBlinkitLocationReady:
         assert await s.get_auth_cookies() is None
 
 
-# ── Zepto: minimum value-length guard ────────────────────────────────────────
+# ── Zepto: storeId content check + localStorage fallback ─────────────────────
+#
+# Ground truth from DevTools:
+#   Before address: serviceability = {"timeSaved":1779990039045}   (27 chars, no storeId)
+#   After  address: serviceability = {"primaryStore":{"serviceable":true,"storeId":"..."},...}
+#
+# The cookie is URL-encoded in the browser; Playwright returns it encoded.
+# Zepto also writes user-position to localStorage:
+#   Before: {"state":{"userPosition":null,...},"version":0}
+#   After:  {"state":{"userPosition":{"latitude":12.99,"longitude":77.72,...},...},...}
 
 class TestZeptoLocationReady:
     ZEPTO_AUTH = {"accessToken": "ztok"}
@@ -145,34 +154,33 @@ class TestZeptoLocationReady:
         assert await s.get_auth_cookies() is None
 
     @pytest.mark.asyncio
-    async def test_empty_serviceability_returns_none(self):
-        # Zepto sets serviceability = "{}" early — must NOT complete phase 2
-        cookies = {**self.ZEPTO_AUTH, "serviceability": "{}"}
+    async def test_absent_serviceability_returns_none(self):
+        s = _session("zepto", self.ZEPTO_AUTH)
+        assert await s.get_auth_cookies() is None
+
+    @pytest.mark.asyncio
+    async def test_time_saved_only_cookie_returns_none(self):
+        """The early placeholder {"timeSaved":...} has no storeId → still waiting."""
+        cookies = {**self.ZEPTO_AUTH,
+                   "serviceability": '{"timeSaved":1779990039045}'}
         s = _session("zepto", cookies)
         assert await s.get_auth_cookies() is None
 
     @pytest.mark.asyncio
-    async def test_short_serviceability_returns_none(self):
-        # Any value under 20 chars is treated as placeholder
-        cookies = {**self.ZEPTO_AUTH, "serviceability": '{"a":1}'}
+    async def test_url_encoded_time_saved_returns_none(self):
+        """URL-encoded form of the early placeholder — as Playwright actually returns it."""
+        cookies = {**self.ZEPTO_AUTH,
+                   "serviceability": "%7B%22timeSaved%22%3A1779990039045%7D"}
         s = _session("zepto", cookies)
         assert await s.get_auth_cookies() is None
 
     @pytest.mark.asyncio
-    async def test_exactly_19_chars_returns_none(self):
-        cookies = {**self.ZEPTO_AUTH, "serviceability": "x" * 19}
-        s = _session("zepto", cookies)
-        assert await s.get_auth_cookies() is None
-
-    @pytest.mark.asyncio
-    async def test_exactly_20_chars_completes_phase2(self):
-        cookies = {**self.ZEPTO_AUTH, "serviceability": "x" * 20}
-        s = _session("zepto", cookies)
-        assert await s.get_auth_cookies() is not None
-
-    @pytest.mark.asyncio
-    async def test_real_serviceability_value_completes_phase2(self):
-        real_val = '{"store_id":"ZPT001","lat":12.97,"lng":77.59,"city":"Bangalore"}'
+    async def test_real_serviceability_decoded_completes_phase2(self):
+        """Full serviceability JSON with storeId (decoded form) → done."""
+        real_val = ('{"primaryStore":{"serviceable":true,'
+                    '"storeId":"03b26203-507f-4489-b0ff-b34eb42a2215",'
+                    '"etaInMinutes":10},'
+                    '"storeDetailedInfo":{"city":"Bengaluru"}}')
         cookies = {**self.ZEPTO_AUTH, "serviceability": real_val}
         s = _session("zepto", cookies)
         result = await s.get_auth_cookies()
@@ -180,9 +188,44 @@ class TestZeptoLocationReady:
         assert result["accessToken"] == "ztok"
 
     @pytest.mark.asyncio
-    async def test_absent_serviceability_returns_none(self):
-        s = _session("zepto", self.ZEPTO_AUTH)
+    async def test_real_serviceability_url_encoded_completes_phase2(self):
+        """Full serviceability JSON URL-encoded (exactly as Playwright returns it) → done."""
+        from urllib.parse import quote
+        real_val = ('{"primaryStore":{"serviceable":true,'
+                    '"storeId":"03b26203-507f-4489-b0ff-b34eb42a2215"}}')
+        cookies = {**self.ZEPTO_AUTH, "serviceability": quote(real_val)}
+        s = _session("zepto", cookies)
+        assert await s.get_auth_cookies() is not None
+
+    # ── localStorage fallback ─────────────────────────────────────────────────
+
+    @pytest.mark.asyncio
+    async def test_ls_user_position_null_returns_none(self):
+        """user-position LS key present but userPosition is null → still waiting."""
+        ls_val = '{"state":{"userPosition":null,"userGpsCoords":null,"_hasHydrated":true},"version":0}'
+        s = _session("zepto", self.ZEPTO_AUTH,
+                     local_storage={"user-position": ls_val})
         assert await s.get_auth_cookies() is None
+
+    @pytest.mark.asyncio
+    async def test_ls_user_position_with_coords_completes_phase2(self):
+        """user-position LS key with real latitude/longitude → done."""
+        ls_val = ('{"state":{"userPosition":{"latitude":12.9922995,'
+                  '"longitude":77.7299169,"placeId":"jRTwmZ9rmw","name":"Hoodi"},'
+                  '"_hasHydrated":true},"version":0}')
+        s = _session("zepto", self.ZEPTO_AUTH,
+                     local_storage={"user-position": ls_val})
+        assert await s.get_auth_cookies() is not None
+
+    @pytest.mark.asyncio
+    async def test_ls_takes_precedence_when_cookie_absent(self):
+        """Cookie check fails, but valid LS → still completes phase 2."""
+        ls_val = ('{"state":{"userPosition":{"latitude":12.99,"longitude":77.72},'
+                  '"_hasHydrated":true},"version":0}')
+        # No serviceability cookie at all
+        s = _session("zepto", self.ZEPTO_AUTH,
+                     local_storage={"user-position": ls_val})
+        assert await s.get_auth_cookies() is not None
 
 
 # ── auth_status_message transitions ──────────────────────────────────────────
@@ -221,7 +264,10 @@ class TestAuthStatusMessage:
 
     @pytest.mark.asyncio
     async def test_zepto_real_serviceability_returns_empty(self):
-        real_val = '{"store_id":"ZPT001","lat":12.97,"lng":77.59,"city":"Bangalore"}'
+        # Must use "storeId" (camelCase) — the actual Zepto key from DevTools.
+        real_val = ('{"primaryStore":{"serviceable":true,'
+                    '"storeId":"03b26203-507f-4489-b0ff-b34eb42a2215"},'
+                    '"storeDetailedInfo":{"city":"Bengaluru"}}')
         cookies = {"accessToken": "ztok", "serviceability": real_val}
         s = _session("zepto", cookies)
         assert await s.auth_status_message() == ""

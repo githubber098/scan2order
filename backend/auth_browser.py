@@ -14,6 +14,7 @@ import asyncio
 import json
 import time
 from typing import Optional
+from urllib.parse import unquote
 
 _VIEWPORT_W = 430
 _VIEWPORT_H = 700
@@ -53,12 +54,21 @@ _STORE_CONFIG = {
     "zepto": {
         "url": "https://www.zeptonow.com/",
         "auth_cookie": "accessToken",
-        # Zepto sets serviceability = "{}" as soon as the page loads (before
-        # the user picks an address).  A real serviceability value contains
-        # store_id and is much longer than 2 chars.  Require ≥ 20 chars so the
-        # empty placeholder never triggers phase-2 completion.
+        # Zepto sets serviceability immediately on page load with only a
+        # timestamp: {"timeSaved":1779990039045}  (27 chars, no storeId).
+        # After the user confirms an address it becomes a full object:
+        # {"primaryStore":{"serviceable":true,"storeId":"..."},...}
+        # Requiring the substring "storeId" in the URL-decoded value cleanly
+        # distinguishes the two forms regardless of value length.
         "wait_for": ["serviceability"],
-        "wait_for_val_len": {"serviceability": 20},
+        "wait_for_cookie_contains": {"serviceability": "storeId"},
+        # Fallback: Zepto writes user-position to localStorage when an address
+        # is confirmed.  The value transitions from {userPosition: null} to
+        # {userPosition: {latitude: ..., longitude: ...}}.  Checking for the
+        # key '"latitude"' (with quotes, as it appears in the JSON string) is
+        # sufficient to distinguish real coordinates from the null placeholder.
+        "wait_for_ls": ["user-position"],
+        "wait_for_ls_contains": {"user-position": '"latitude"'},
         "wait_hint": (
             "✅ Login detected!  Now tap the location pin at the top of the page "
             "and confirm your delivery address.  The window will close automatically."
@@ -213,25 +223,45 @@ class _Session:
         """Return True when phase-2 (delivery address) requirements are met.
 
         Checks in order:
-          1. Cookie OR logic with optional minimum value-length per cookie
-             (wait_for + wait_for_val_len).  Prevents Zepto's early empty
-             serviceability = "{}" from counting as a real address.
-          2. localStorage key check via page.evaluate() (wait_for_ls).
-             Blinkit stores delivery context in localStorage, not cookies.
+          1. Cookie OR logic: any wait_for cookie whose URL-decoded value
+             passes the optional minimum-length (wait_for_val_len) and
+             optional substring check (wait_for_cookie_contains).
+          2. localStorage OR logic: any wait_for_ls key whose stored string
+             passes the optional substring check (wait_for_ls_contains).
+             Blinkit keeps delivery context in localStorage, not cookies.
+             Zepto writes user-position with lat/lng to localStorage when an
+             address is confirmed.
 
-        Logs every cookie present (excluding auth) when still waiting, so the
-        correct key name can be identified from server logs.
+        Logs all present cookies (excluding auth) when still waiting so the
+        server log reveals the correct key name if our candidates are wrong.
         """
         cfg = _STORE_CONFIG[self.store]
         wait_for = cfg.get("wait_for", [])
         val_len = cfg.get("wait_for_val_len", {})
+        cookie_contains = cfg.get("wait_for_cookie_contains", {})
         wait_for_ls = cfg.get("wait_for_ls", [])
+        ls_contains = cfg.get("wait_for_ls_contains", {})
 
         if not wait_for and not wait_for_ls:
             return True
 
         def _cookie_ok(k: str) -> bool:
-            return len(kv.get(k, "")) >= val_len.get(k, 1)
+            raw = kv.get(k, "")
+            if not raw:
+                return False
+            # Playwright returns cookie values as the browser stores them —
+            # typically URL-encoded for JSON-value cookies set via
+            # document.cookie.  Decode before length / substring checks.
+            try:
+                decoded = unquote(raw)
+            except Exception:
+                decoded = raw
+            if len(decoded) < val_len.get(k, 1):
+                return False
+            required = cookie_contains.get(k)
+            if required and required not in decoded:
+                return False
+            return True
 
         if wait_for and any(_cookie_ok(k) for k in wait_for):
             return True
@@ -245,15 +275,24 @@ class _Session:
                     "))"
                 )
                 ls: dict = json.loads(ls_raw or "{}")
-                if any(ls.get(k) for k in wait_for_ls):
-                    return True
+                for k in wait_for_ls:
+                    val = ls.get(k)
+                    if not val:
+                        continue
+                    required_substr = ls_contains.get(k)
+                    if required_substr:
+                        if required_substr in val:
+                            return True
+                    else:
+                        return True  # presence alone is sufficient
             except Exception as exc:
                 print(f"[browser] {self.store}: localStorage check failed: {exc}")
 
         present = [k for k in kv if k != cfg["auth_cookie"]]
         print(
             f"[browser] {self.store}: phase-2 waiting. "
-            f"wait_for={wait_for} val_len={val_len} wait_for_ls={wait_for_ls}. "
+            f"wait_for={wait_for} cookie_contains={cookie_contains} "
+            f"wait_for_ls={wait_for_ls}. "
             f"Cookies present ({len(present)}): {present[:30]}"
         )
         return False
