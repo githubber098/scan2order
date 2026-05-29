@@ -380,26 +380,33 @@ async def _search_playwright(user_id: str, query: str, cookies: dict) -> list[di
 
         page = await ctx.new_page()
 
-        # Intercept responses to find the real search API endpoint
+        # Log every API request and response to find the correct search endpoint.
+        _api_calls: list[str] = []
+
+        def on_request(req):
+            u = req.url
+            if any(x in u for x in ("/v1/", "/v2/", "/v3/", "/api/", "/search")):
+                short = u.split("?")[0]
+                if short not in _api_calls:
+                    _api_calls.append(short)
+                    print(f"[blinkit] Playwright REQ: {req.method} {short}")
+
         async def on_response(resp):
             try:
-                if not any(x in resp.url for x in ("/v1/", "/v2/", "/v3/",
-                                                    "/api/", "/search")):
+                u = resp.url
+                if not any(x in u for x in ("/v1/", "/v2/", "/v3/",
+                                             "/api/", "/search")):
                     return
                 if "json" not in resp.headers.get("content-type", ""):
                     return
                 body = await resp.json()
-                if not isinstance(body, dict):
-                    return
-                objs = body.get("objects") or body.get("response", {}).get("objects")
-                if isinstance(objs, list) and any(
-                        o.get("type") == "product" for o in objs):
-                    print(f"[blinkit] Playwright found search API: {resp.url}")
-                    print(f"[blinkit] Playwright API sample: "
-                          f"{str(body)[:300]}")
+                snippet = str(body)[:300]
+                print(f"[blinkit] Playwright RESP {resp.status}: "
+                      f"{u.split('?')[0]} → {snippet}")
             except Exception:
                 pass
 
+        page.on("request", on_request)
         page.on("response", on_response)
 
         await page.goto(f"{BASE_URL}/s/?q={quote(query)}",
