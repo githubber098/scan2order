@@ -213,6 +213,9 @@ async def search_item_api(user_id: str, query: str) -> list[dict]:
            or cookies.get("dlng") or "")
     merchant_id = cookies.get("merchant_id") or cookies.get("gr_1_merchantId") or ""
 
+    print(f"[blinkit] location: lat={lat!r} lng={lng!r} merchant_id={merchant_id!r}")
+    print(f"[blinkit] all cookie keys: {sorted(cookies.keys())}")
+
     api_headers = {**_API_HEADERS_BASE, "auth_key": access_token}
     if lat:
         api_headers["lat"] = str(lat)
@@ -236,7 +239,8 @@ async def search_item_api(user_id: str, query: str) -> list[dict]:
             except Exception as e:
                 print(f"[blinkit] Strategy 1: JSON parse error: {e} ({elapsed_ms}ms)")
         else:
-            print(f"[blinkit] Strategy 1: HTTP {resp.status_code} ({elapsed_ms}ms)")
+            print(f"[blinkit] Strategy 1: HTTP {resp.status_code} ({elapsed_ms}ms) "
+                  f"body={resp.text[:200]!r}")
     except Exception as e:
         elapsed_ms = int((time.time() - t_start) * 1000)
         print(f"[blinkit] Strategy 1: request failed: {e} ({elapsed_ms}ms)")
@@ -257,7 +261,8 @@ async def search_item_api(user_id: str, query: str) -> list[dict]:
             products = _parse_ssr_response(resp.text)
             print(f"[blinkit] Strategy 2 (SSR): {len(products)} products ({elapsed_ms}ms)")
         else:
-            print(f"[blinkit] Strategy 2 (SSR): HTTP {resp.status_code} ({elapsed_ms}ms)")
+            print(f"[blinkit] Strategy 2 (SSR): HTTP {resp.status_code} ({elapsed_ms}ms) "
+                  f"body={resp.text[:200]!r}")
     except Exception as e:
         elapsed_ms = int((time.time() - t_start) * 1000)
         print(f"[blinkit] Strategy 2 (SSR): request failed: {e} ({elapsed_ms}ms)")
