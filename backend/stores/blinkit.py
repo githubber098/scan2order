@@ -387,9 +387,15 @@ async def _search_playwright(user_id: str, query: str, cookies: dict) -> list[di
             u = req.url
             if any(x in u for x in ("/v1/", "/v2/", "/v3/", "/api/", "/search")):
                 short = u.split("?")[0]
-                if short not in _api_calls:
+                body_str = ""
+                if req.method == "POST":
+                    try:
+                        body_str = f" BODY={req.post_data[:500]!r}"
+                    except Exception:
+                        pass
+                if short not in _api_calls or req.method == "POST":
                     _api_calls.append(short)
-                    print(f"[blinkit] Playwright REQ: {req.method} {short}")
+                    print(f"[blinkit] Playwright REQ: {req.method} {short}{body_str}")
 
         async def on_response(resp):
             try:
@@ -400,7 +406,9 @@ async def _search_playwright(user_id: str, query: str, cookies: dict) -> list[di
                 if "json" not in resp.headers.get("content-type", ""):
                     return
                 body = await resp.json()
-                snippet = str(body)[:300]
+                # Log full response for the search endpoint; truncate others
+                limit = 2000 if "layout/search" in u else 300
+                snippet = str(body)[:limit]
                 print(f"[blinkit] Playwright RESP {resp.status}: "
                       f"{u.split('?')[0]} → {snippet}")
             except Exception:
