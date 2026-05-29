@@ -205,9 +205,12 @@ async def search_item_api(user_id: str, query: str) -> list[dict]:
         "start": "0",
         "size": "20",
     }
-    # Location headers improve relevance but are not required for auth.
-    lat = cookies.get("lat") or cookies.get("dlat") or ""
-    lng = cookies.get("lng") or cookies.get("dlng") or ""
+    # Location headers — Blinkit returns HTTP 404 without them.
+    # The web UI relay saves gr_1_lat / gr_1_lon; mobile may save plain lat / lng.
+    lat = (cookies.get("gr_1_lat") or cookies.get("lat")
+           or cookies.get("dlat") or "")
+    lng = (cookies.get("gr_1_lon") or cookies.get("lng")
+           or cookies.get("dlng") or "")
     merchant_id = cookies.get("merchant_id") or cookies.get("gr_1_merchantId") or ""
 
     api_headers = {**_API_HEADERS_BASE, "auth_key": access_token}
@@ -275,9 +278,11 @@ async def add_to_cart_api(user_id: str, product_id: str, count: int = 1) -> dict
     if not access_token:
         return {"success": False, "reason": "not logged in (no gr_1_accessToken)"}
 
-    # Location context from cookies - set when user saves delivery address in app.
-    lat = cookies.get("lat") or cookies.get("dlat") or cookies.get("delivery_lat") or ""
-    lng = cookies.get("lng") or cookies.get("dlng") or cookies.get("delivery_lng") or ""
+    # Location context — web relay saves gr_1_lat/gr_1_lon; mobile saves lat/lng.
+    lat = (cookies.get("gr_1_lat") or cookies.get("lat")
+           or cookies.get("dlat") or cookies.get("delivery_lat") or "")
+    lng = (cookies.get("gr_1_lon") or cookies.get("lng")
+           or cookies.get("dlng") or cookies.get("delivery_lng") or "")
     merchant_id = cookies.get("merchant_id") or cookies.get("gr_1_merchantId") or ""
 
     print(f"\n[blinkit] === API ADD: pid={product_id} qty={count} ===")
