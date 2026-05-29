@@ -453,23 +453,24 @@ async def start(user_id: str, store: str,
                 ct = response.headers.get("content-type", "")
                 if "json" not in ct:
                     return
+                url = response.url
+                # Skip analytics, fonts, images — only log actual API calls
+                if not any(x in url for x in ("/v1/", "/v2/", "/v3/",
+                                               "/api/", "/location/",
+                                               "/listing/", "/search")):
+                    return
                 body = await response.json()
-                mid = None
-                if isinstance(body, dict):
-                    mid = (body.get("merchant_id") or body.get("gr_1_merchantId")
-                           or (body.get("data") or {}).get("merchant_id")
-                           or (body.get("store") or {}).get("merchant_id")
-                           or (body.get("store_info") or {}).get("merchant_id"))
-                if mid:
-                    print(f"[browser] blinkit: captured merchant_id={mid!r} "
-                          f"from {response.url}")
-                    _captured["merchant_id"] = str(mid)
-                elif any(k in response.url for k in
-                         ("merchant", "store", "location", "serviceability")):
-                    # Log all store/location-related API responses so we can
-                    # identify the correct endpoint from the server logs.
-                    snippet = str(body)[:300]
-                    print(f"[browser] blinkit API: {response.url} → {snippet}")
+                snippet = str(body)[:400]
+                print(f"[browser] blinkit API {response.status}: "
+                      f"{url.split('?')[0]} → {snippet}")
+                # Search for merchant_id anywhere in the response
+                body_str = str(body)
+                import re as _re
+                m = _re.search(r'["\']merchant_id["\']\s*[:=]\s*["\']?(\w+)', body_str)
+                if m:
+                    mid = m.group(1)
+                    print(f"[browser] blinkit: captured merchant_id={mid!r}")
+                    _captured["merchant_id"] = mid
             except Exception:
                 pass
 

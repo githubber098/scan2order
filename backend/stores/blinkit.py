@@ -199,14 +199,7 @@ async def search_item_api(user_id: str, query: str) -> list[dict]:
 
     # ── Strategy 1: direct JSON API ──────────────────────────────────────────
     v2_url = f"{BASE_URL}/v2/search"
-    v2_params = {
-        "search_type": "keyword",
-        "q": query,
-        "start": "0",
-        "size": "20",
-    }
-    # Location headers — Blinkit returns HTTP 404 without them.
-    # The web UI relay saves gr_1_lat / gr_1_lon; mobile may save plain lat / lng.
+    # Location context — web relay saves gr_1_lat/gr_1_lon; mobile saves lat/lng.
     lat = (cookies.get("gr_1_lat") or cookies.get("lat")
            or cookies.get("dlat") or "")
     lng = (cookies.get("gr_1_lon") or cookies.get("lng")
@@ -215,6 +208,22 @@ async def search_item_api(user_id: str, query: str) -> list[dict]:
 
     print(f"[blinkit] location: lat={lat!r} lng={lng!r} merchant_id={merchant_id!r}")
     print(f"[blinkit] all cookie keys: {sorted(cookies.keys())}")
+
+    # Send lat/lng/merchant_id as BOTH headers AND query params — the v2 API
+    # "no Route matched" error suggests a routing constraint may require them
+    # as query params rather than headers.
+    v2_params: dict = {
+        "search_type": "keyword",
+        "q": query,
+        "start": "0",
+        "size": "20",
+    }
+    if lat:
+        v2_params["lat"] = str(lat)
+    if lng:
+        v2_params["lng"] = str(lng)
+    if merchant_id:
+        v2_params["merchant_id"] = str(merchant_id)
 
     api_headers = {**_API_HEADERS_BASE, "auth_key": access_token}
     if lat:
