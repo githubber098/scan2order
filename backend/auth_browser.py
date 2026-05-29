@@ -316,6 +316,15 @@ class _Session:
         if not await self._location_ready(kv):
             return None                     # phase 2: no delivery address yet
 
+        # For Blinkit: if the response interceptor captured a merchant_id that
+        # Blinkit never wrote as a cookie, inject it so search_item_api can use
+        # it as a header (required for /v2/search to route correctly).
+        captured = getattr(self._page, "_blinkit_captured", {})
+        if captured.get("merchant_id") and not kv.get("merchant_id"):
+            kv["merchant_id"] = captured["merchant_id"]
+            print(f"[browser] blinkit: injecting captured "
+                  f"merchant_id={kv['merchant_id']!r} into saved cookies")
+
         return kv                           # all done — close session
 
     async def auth_status_message(self) -> str:
@@ -430,6 +439,43 @@ async def start(user_id: str, store: str,
     context = await browser.new_context(**ctx_kwargs)
 
     page = await context.new_page()
+
+    # For Blinkit: intercept all JSON API responses to capture merchant_id.
+    # Blinkit's web app automatically calls a store-discovery endpoint after
+    # seeing lat/lng cookies; the response contains the merchant_id needed for
+    # search API calls.  We log every URL + merchant-related field so we can
+    # see exactly which endpoint returns it.
+    if store == "blinkit":
+        _captured: dict = {}
+
+        async def _capture_blinkit_response(response):
+            try:
+                ct = response.headers.get("content-type", "")
+                if "json" not in ct:
+                    return
+                body = await response.json()
+                mid = None
+                if isinstance(body, dict):
+                    mid = (body.get("merchant_id") or body.get("gr_1_merchantId")
+                           or (body.get("data") or {}).get("merchant_id")
+                           or (body.get("store") or {}).get("merchant_id")
+                           or (body.get("store_info") or {}).get("merchant_id"))
+                if mid:
+                    print(f"[browser] blinkit: captured merchant_id={mid!r} "
+                          f"from {response.url}")
+                    _captured["merchant_id"] = str(mid)
+                elif any(k in response.url for k in
+                         ("merchant", "store", "location", "serviceability")):
+                    # Log all store/location-related API responses so we can
+                    # identify the correct endpoint from the server logs.
+                    snippet = str(body)[:300]
+                    print(f"[browser] blinkit API: {response.url} → {snippet}")
+            except Exception:
+                pass
+
+        page.on("response", _capture_blinkit_response)
+        # Store reference so _location_ready can access captured data
+        page._blinkit_captured = _captured  # type: ignore[attr-defined]
 
     # Block analytics/tracking to reduce background CPU and improve framerate
     for pattern in _BLOCKED_PATTERNS:
