@@ -198,7 +198,9 @@ async def search_item_api(user_id: str, query: str) -> list[dict]:
     t_start = time.time()
 
     # ── Strategy 1: direct JSON API ──────────────────────────────────────────
-    v2_url = f"{BASE_URL}/v2/search"
+    # All Blinkit v2 endpoints use trailing slashes; /v2/search (no slash)
+    # gives "no Route matched with those values" regardless of params.
+    v2_url = f"{BASE_URL}/v2/search/"
     # Location context — web relay saves gr_1_lat/gr_1_lon; mobile saves lat/lng.
     lat = (cookies.get("gr_1_lat") or cookies.get("lat")
            or cookies.get("dlat") or "")
