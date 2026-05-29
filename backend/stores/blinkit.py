@@ -1,15 +1,17 @@
 """stores/blinkit.py - Blinkit httpx store module.
 
 Search strategy (in order):
-  1. Blinkit's internal v2 JSON search API — reliable, no HTML parsing.
-     GET /v2/search?search_type=keyword&q={query}&start=0&size=20
-     Auth: auth_key header (same token used by the cart API).
-  2. __NEXT_DATA__ SSR fallback — used if the v2 API returns no results
-     or a non-200 status (e.g. Blinkit changes the endpoint).
+  1. POST /v1/layout/search — Blinkit's current search API (layout-based).
+     Returns product snippets with cart_item data embedded.
+     Requires derived auth_key (from /v2/accounts/auth_key/) + merchant_id.
+  2. __NEXT_DATA__ SSR — dead since Blinkit moved to full client-side React;
+     kept as a no-op safety net.
+  3. Playwright DOM scraping — fallback if Strategy 1 fails; slow (~4s) but
+     reliable; also discovers new API changes via network interceptor.
 
-Cart add via Blinkit's internal v2 API.
+Cart add via Blinkit's /v2/client/user_cart/ API.
 Auth cookie: gr_1_accessToken (stored via user_store.connect_store).
-Location cookies (lat, lng, merchant_id) extracted from stored cookies.
+Location: gr_1_lat/gr_1_lon cookies + merchant_id (captured during auth).
 """
 
 import re
@@ -173,6 +175,87 @@ def _parse_ssr_response(html: str) -> list[dict]:
     return products
 
 
+async def _get_auth_key(access_token: str, cookies: dict) -> str:
+    """Exchange gr_1_accessToken for the derived API auth key.
+
+    Blinkit's web app calls /v2/accounts/auth_key/ on every page load to
+    convert the session cookie into a SHA256-hashed API key used as the
+    auth_key header on all subsequent API calls.
+    Falls back to raw access_token on any error.
+    """
+    headers = {**_API_HEADERS_BASE, "auth_key": access_token}
+    try:
+        async with httpx.AsyncClient(timeout=6.0) as client:
+            resp = await client.get(
+                f"{BASE_URL}/v2/accounts/auth_key/",
+                headers=headers,
+                cookies=cookies,
+            )
+        if resp.status_code == 200:
+            key = resp.json().get("auth_key", "")
+            if key:
+                return key
+    except Exception as e:
+        print(f"[blinkit] _get_auth_key failed: {e}")
+    return access_token
+
+
+def _parse_layout_search_response(data: dict) -> list[dict]:
+    """Parse POST /v1/layout/search response into the canonical product format.
+
+    Each product snippet has the structure:
+      {"data": {"identity": {"id": "<product_id>"},
+                "name": {"text": "<name>"},
+                "variant": {"text": "<unit>"},
+                "normal_price": {"text": "₹27"},
+                "mrp": {"text": "₹32"},
+                "image": {"url": "..."},
+                "atc_action": {"add_to_cart": {"cart_item": {
+                    "product_id": 530158, "price": 27, "mrp": 32,
+                    "unit": "1 kg", "image_url": "..."}}}}}
+    """
+    snippets = (data.get("response") or {}).get("snippets") or []
+    products = []
+    for snippet in snippets:
+        d = snippet.get("data") or {}
+        cart_item = ((d.get("atc_action") or {})
+                     .get("add_to_cart", {})
+                     .get("cart_item") or {})
+        if not cart_item:
+            continue
+        product_id = str(cart_item.get("product_id") or "")
+        if not product_id:
+            continue
+        name = (cart_item.get("product_name")
+                or (d.get("name") or {}).get("text") or "")
+        if not name:
+            continue
+        # Skip disabled/out-of-stock (stepper state = "disabled")
+        stepper_title = ((d.get("stepper_data") or {})
+                         .get("state", {}).get("title", {}).get("text", ""))
+        if stepper_title == "disabled":
+            continue
+        price = float(cart_item.get("price") or 0)
+        mrp = float(cart_item.get("mrp") or price)
+        if price <= 0:
+            continue
+        unit = cart_item.get("unit") or ""
+        image_url = cart_item.get("image_url") or ""
+        products.append({
+            "name": name[:120],
+            "price": mrp,
+            "sale_price": price,
+            "unit": unit,
+            "image_url": image_url,
+            "product_id": product_id,
+            "app": APP_NAME,
+            "app_name": DISPLAY_NAME,
+        })
+        if len(products) >= 8:
+            break
+    return products
+
+
 async def search_item_api(user_id: str, query: str) -> list[dict]:
     """Search Blinkit for *query*.
 
@@ -197,10 +280,6 @@ async def search_item_api(user_id: str, query: str) -> list[dict]:
     print(f"\n[blinkit] === API SEARCH: '{query}' ===")
     t_start = time.time()
 
-    # ── Strategy 1: direct JSON API ──────────────────────────────────────────
-    # All Blinkit v2 endpoints use trailing slashes; /v2/search (no slash)
-    # gives "no Route matched with those values" regardless of params.
-    v2_url = f"{BASE_URL}/v2/search/"
     # Location context — web relay saves gr_1_lat/gr_1_lon; mobile saves lat/lng.
     lat = (cookies.get("gr_1_lat") or cookies.get("lat")
            or cookies.get("dlat") or "")
@@ -209,46 +288,45 @@ async def search_item_api(user_id: str, query: str) -> list[dict]:
     merchant_id = cookies.get("merchant_id") or cookies.get("gr_1_merchantId") or ""
 
     print(f"[blinkit] location: lat={lat!r} lng={lng!r} merchant_id={merchant_id!r}")
-    print(f"[blinkit] all cookie keys: {sorted(cookies.keys())}")
 
-    # Send lat/lng/merchant_id as BOTH headers AND query params — the v2 API
-    # "no Route matched" error suggests a routing constraint may require them
-    # as query params rather than headers.
-    v2_params: dict = {
-        "search_type": "keyword",
-        "q": query,
-        "start": "0",
-        "size": "20",
-    }
-    if lat:
-        v2_params["lat"] = str(lat)
-    if lng:
-        v2_params["lng"] = str(lng)
-    if merchant_id:
-        v2_params["merchant_id"] = str(merchant_id)
-
-    api_headers = {**_API_HEADERS_BASE, "auth_key": access_token}
-    if lat:
-        api_headers["lat"] = str(lat)
-    if lng:
-        api_headers["lng"] = str(lng)
-    if merchant_id:
-        api_headers["merchant_id"] = str(merchant_id)
-
+    # ── Strategy 1: POST /v1/layout/search ───────────────────────────────────
+    # Blinkit's current search API. The web app first calls /v2/accounts/auth_key/
+    # to exchange the gr_1_accessToken cookie for a derived API key (SHA256 hash),
+    # then POSTs to /v1/layout/search with that key in the auth_key header.
     products: list[dict] = []
     try:
-        async with httpx.AsyncClient(timeout=12.0, follow_redirects=True) as client:
-            resp = await client.get(v2_url, params=v2_params, headers=api_headers,
-                                    cookies=cookies)
+        api_auth_key = await _get_auth_key(access_token, cookies)
+        layout_headers = {**_API_HEADERS_BASE, "auth_key": api_auth_key}
+        if lat:
+            layout_headers["lat"] = str(lat)
+        if lng:
+            layout_headers["lng"] = str(lng)
+        if merchant_id:
+            layout_headers["merchant_id"] = str(merchant_id)
+
+        layout_body = {
+            "q": query,
+            "applied_filters": None,
+            "postback_meta": {},
+            "processed_rails": {},
+            "monet_assets": [],
+        }
+
+        async with httpx.AsyncClient(timeout=12.0) as client:
+            resp = await client.post(
+                f"{BASE_URL}/v1/layout/search",
+                json=layout_body,
+                headers=layout_headers,
+                cookies=cookies,
+            )
         elapsed_ms = int((time.time() - t_start) * 1000)
         if resp.status_code == 200:
             try:
-                data = resp.json()
-                products = _parse_api_response(data)
-                print(f"[blinkit] Strategy 1 (v2 API): {len(products)} products "
+                products = _parse_layout_search_response(resp.json())
+                print(f"[blinkit] Strategy 1 (layout/search): {len(products)} products "
                       f"({elapsed_ms}ms)")
             except Exception as e:
-                print(f"[blinkit] Strategy 1: JSON parse error: {e} ({elapsed_ms}ms)")
+                print(f"[blinkit] Strategy 1: parse error: {e} ({elapsed_ms}ms)")
         else:
             print(f"[blinkit] Strategy 1: HTTP {resp.status_code} ({elapsed_ms}ms) "
                   f"body={resp.text[:200]!r}")
