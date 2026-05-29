@@ -136,6 +136,24 @@
             font-weight: 700; margin-left: 6px;
         }
 
+        /* Swap / shortlist alternatives */
+        .swap-row {
+            display: flex; justify-content: space-between; align-items: center;
+            padding: 8px 10px; background: #0d0d1e; border-radius: 8px;
+            border: 1px solid #1e1e3e; margin-top: 4px; cursor: pointer;
+            transition: background 0.12s, border-color 0.12s;
+        }
+        .swap-row:hover { background: #111130; border-color: #3a3a5a; }
+        .swap-row.swap-selected { border-color: #4ecdc4; background: #0a1a1a; }
+        .swap-more-btn {
+            display: block; width: 100%; padding: 6px; margin-top: 6px;
+            background: none; border: 1px dashed #2a2a3a; color: #555;
+            border-radius: 8px; font-size: 12px; cursor: pointer; text-align: center;
+            transition: color 0.12s, border-color 0.12s;
+        }
+        .swap-more-btn:hover { border-color: #4ecdc4; color: #4ecdc4; }
+        .swap-hidden { display: none; }
+
         /* Grand total + cart actions */
         .summary-card {
             background: #1a1a2e; border: 1px solid #333;
@@ -694,14 +712,17 @@ function renderResults(data) {
     const cardsEl = document.getElementById('item-cards');
     cardsEl.innerHTML = '';
 
-    for (const entry of comparison) {
+    for (let i = 0; i < comparison.length; i++) {
+        const entry = comparison[i];
         const item = entry.item || {};
         const prices = entry.prices || {};
         const cheapestApp = entry.cheapest_app;
         const selectedPid = entry.selected_pid;
+        const shortlist = entry.shortlist || [];
 
         const card = document.createElement('div');
         card.className = 'item-card';
+        card.dataset.idx = String(i);
 
         const nameEl = document.createElement('div');
         nameEl.className = 'item-name';
@@ -717,30 +738,37 @@ function renderResults(data) {
             continue;
         }
 
-        const grid = document.createElement('div');
-        grid.className = 'app-results';
-
-        for (const [storeName, products] of Object.entries(prices)) {
-            for (const p of (products || []).slice(0, 2)) {
-                const isCheapest = storeName === cheapestApp && p.product_id === selectedPid;
-                const row = document.createElement('div');
-                row.className = 'product-row' + (isCheapest ? ' cheapest' : '');
-
-                const price = p.sale_price || p.price || 0;
-                const storeLabel = { bigbasket: 'BigBasket', blinkit: 'Blinkit', zepto: 'Zepto' }[storeName] || storeName;
-
-                row.innerHTML = `
-                    <div class="product-info">
-                        <div class="product-name">${escHtml(p.name || '')}${isCheapest ? '<span class="best-badge">BEST</span>' : ''}</div>
-                        <div class="product-meta">${escHtml(storeLabel)}${p.unit ? ' · ' + escHtml(p.unit) : ''}</div>
-                    </div>
-                    <div class="product-price${isCheapest ? ' cheapest' : ''}">₹${price.toFixed(0)}</div>
-                `;
-                grid.appendChild(row);
-            }
+        // ── Winner row (always first, highlighted) ───────────────────────────
+        const winnerProds = prices[cheapestApp] || [];
+        const winnerProd = winnerProds.find(p => p.product_id === selectedPid) || winnerProds[0];
+        if (winnerProd) {
+            card.appendChild(_makeSwapRow(i, winnerProd, cheapestApp, true));
         }
 
-        card.appendChild(grid);
+        // ── Shortlist: first 2 always visible ────────────────────────────────
+        for (const sp of shortlist.slice(0, 2)) {
+            card.appendChild(_makeSwapRow(i, sp, sp.app, false));
+        }
+
+        // ── "Show N more" expander for the rest ───────────────────────────────
+        if (shortlist.length > 2) {
+            const moreCount = shortlist.length - 2;
+            const moreWrap = document.createElement('div');
+            moreWrap.className = 'swap-hidden';
+            for (const sp of shortlist.slice(2)) {
+                moreWrap.appendChild(_makeSwapRow(i, sp, sp.app, false));
+            }
+            const moreBtn = document.createElement('button');
+            moreBtn.className = 'swap-more-btn';
+            moreBtn.textContent = `▾ ${moreCount} more alternative${moreCount !== 1 ? 's' : ''}`;
+            moreBtn.onclick = () => {
+                moreWrap.classList.remove('swap-hidden');
+                moreBtn.style.display = 'none';
+            };
+            card.appendChild(moreBtn);
+            card.appendChild(moreWrap);
+        }
+
         cardsEl.appendChild(card);
     }
 
@@ -766,6 +794,116 @@ function renderResults(data) {
         document.getElementById('skipped-notice').textContent =
             `Skipped (not connected): ${skipped.join(', ')}`;
     }
+}
+
+// ── Swap / shortlist helpers ─────────────────────────────────────────────────
+
+const _STORE_LABELS = { bigbasket: 'BigBasket', blinkit: 'Blinkit', zepto: 'Zepto' };
+
+function _makeSwapRow(entryIndex, prod, app, isSelected) {
+    const row = document.createElement('div');
+    row.className = 'swap-row' + (isSelected ? ' swap-selected' : '');
+    row.dataset.app = app;
+    row.dataset.pid = prod.product_id;
+    const price = prod.sale_price || prod.price || 0;
+    const storeLabel = _STORE_LABELS[app] || app;
+    row.innerHTML = `
+        <div class="product-info">
+            <div class="product-name">${escHtml(prod.name || '')}${isSelected ? '<span class="best-badge">✓</span>' : ''}</div>
+            <div class="product-meta">${escHtml(storeLabel)}${prod.unit ? ' · ' + escHtml(prod.unit) : ''}</div>
+        </div>
+        <div class="product-price${isSelected ? ' cheapest' : ''}">₹${price.toFixed(0)}</div>
+    `;
+    row.onclick = () => swapSelection(entryIndex, app, prod.product_id, price);
+    return row;
+}
+
+function swapSelection(entryIndex, app, pid, price) {
+    const entry = comparisonData.comparison[entryIndex];
+    if (entry.cheapest_app === app && entry.selected_pid === pid) return; // already selected
+
+    entry.cheapest_app = app;
+    entry.selected_pid = pid;
+    entry.cheapest_price = price;
+
+    // Move the green border to the newly selected row
+    const card = document.querySelector(`.item-card[data-idx="${entryIndex}"]`);
+    if (card) {
+        card.querySelectorAll('.swap-row').forEach(row => {
+            const sel = row.dataset.app === app && row.dataset.pid === pid;
+            row.classList.toggle('swap-selected', sel);
+            // Move the ✓ badge
+            const nameEl = row.querySelector('.product-name');
+            if (!nameEl) return;
+            const badge = nameEl.querySelector('.best-badge');
+            if (sel && !badge) {
+                const b = document.createElement('span');
+                b.className = 'best-badge';
+                b.textContent = '✓';
+                nameEl.appendChild(b);
+            } else if (!sel && badge) {
+                badge.remove();
+            }
+            // Price colour
+            const priceEl = row.querySelector('.product-price');
+            if (priceEl) priceEl.classList.toggle('cheapest', sel);
+        });
+    }
+
+    _rebuildCarts();
+}
+
+function _rebuildCarts() {
+    const carts = {};
+    let grandTotal = 0;
+
+    for (let i = 0; i < comparisonData.comparison.length; i++) {
+        const entry = comparisonData.comparison[i];
+        const app = entry.cheapest_app;
+        if (!app || !entry.cheapest_price) continue;
+        if (!carts[app]) carts[app] = { items: [], total: 0 };
+
+        // Find the selected product in the store's result list
+        const storeProds = entry.prices[app] || [];
+        const prod = storeProds.find(p => p.product_id === entry.selected_pid)
+                  || storeProds[0] || {};
+
+        const count = Math.max(1, parseInt((entry.item && entry.item.count) || 1));
+        const price = entry.cheapest_price;
+
+        carts[app].items.push({
+            ...(entry.item || {}),
+            price,
+            product_id: entry.selected_pid || prod.product_id,
+            fc_id: prod.fc_id,
+            search_query: entry.search_query || '',
+            matched_name: prod.name || '',
+            matched_unit: prod.unit || '',
+            comparison_index: i,
+        });
+        carts[app].total += price * count;
+        grandTotal += price * count;
+    }
+
+    comparisonData.carts = carts;
+    comparisonData.grand_total = grandTotal;
+
+    // Re-render summary section
+    document.getElementById('grand-total').textContent = '₹' + grandTotal.toFixed(0);
+    const cartList = document.getElementById('cart-list');
+    cartList.innerHTML = '';
+    for (const [storeName, cartData] of Object.entries(carts)) {
+        const storeLabel = _STORE_LABELS[storeName] || storeName;
+        const div = document.createElement('div');
+        div.className = 'cart-store';
+        let html = `<div class="cart-store-name">${escHtml(storeLabel)} — ₹${cartData.total.toFixed(0)}</div>`;
+        for (const itm of (cartData.items || [])) {
+            html += `<div class="cart-item-row"><span>${escHtml(itm.matched_name || itm.name || '')}</span><span class="cart-item-price">₹${(itm.price || 0).toFixed(0)}</span></div>`;
+        }
+        div.innerHTML = html;
+        cartList.appendChild(div);
+    }
+    document.getElementById('summary-card').style.display = grandTotal > 0 ? 'block' : 'none';
 }
 
 // ── Add to carts ──────────────────────────────────────────────────────────────
