@@ -278,9 +278,144 @@ async def search_item_api(user_id: str, query: str) -> list[dict]:
         elapsed_ms = int((time.time() - t_start) * 1000)
         print(f"[blinkit] Strategy 2 (SSR): request failed: {e} ({elapsed_ms}ms)")
 
+    if products:
+        print(f"[blinkit] === API RESULT: {len(products)} products "
+              f"({int((time.time() - t_start)*1000)}ms) ===\n")
+        return products
+
+    # ── Strategy 3: Playwright DOM scraping ──────────────────────────────────
+    # Strategies 1 and 2 both rely on API endpoints that have changed.
+    # This strategy loads the real search page in a headless browser with the
+    # saved cookies, waits for React to render products, then scrapes the DOM.
+    # Also intercepts the network to log the correct search API URL so
+    # Strategy 1 can be fixed once we know the real endpoint.
+    print(f"[blinkit] SSR fallback empty → trying Playwright strategy")
+    try:
+        products = await _search_playwright(user_id, query, cookies)
+        print(f"[blinkit] Strategy 3 (Playwright): {len(products)} products "
+              f"({int((time.time() - t_start)*1000)}ms)")
+    except Exception as e:
+        print(f"[blinkit] Strategy 3 failed: {e}")
+
     print(f"[blinkit] === API RESULT: {len(products)} products "
           f"({int((time.time() - t_start)*1000)}ms) ===\n")
     return products
+
+
+# ── Playwright search (Strategy 3) ───────────────────────────────────────────
+
+_PW_SEARCH_SCRIPT = """
+() => {
+    const results = [];
+    const cards = document.querySelectorAll('div[role="button"][tabindex="0"][id]');
+    cards.forEach(card => {
+        const id = card.id || '';
+        if (!/^\d+$/.test(id)) return;
+        const txt = (card.innerText || '').toLowerCase();
+        if (txt.includes('out of stock') || txt.includes('notify me') ||
+            txt.includes('sold out')) return;
+
+        const nameEl = card.querySelector('.tw-line-clamp-2');
+        const unitEl = card.querySelector('.tw-line-clamp-1');
+
+        let saleEl = null;
+        for (const el of card.querySelectorAll('div.tw-font-semibold')) {
+            const t = (el.textContent || '').trim();
+            if (!t.startsWith('₹')) continue;
+            let p = el, struck = false;
+            while (p && p !== card) {
+                if ((p.className || '').includes('line-through')) { struck=true; break; }
+                p = p.parentElement;
+            }
+            if (!struck) { saleEl = el; break; }
+        }
+        const mrpEl = card.querySelector('.tw-line-through');
+        const px = el => {
+            if (!el) return 0;
+            return parseFloat((el.textContent||'').replace(/[^\d.]/g,''))||0;
+        };
+        const sale = px(saleEl), mrp = px(mrpEl)||sale;
+        const name = nameEl ? (nameEl.textContent||'').trim() : '';
+        const unit = unitEl ? (unitEl.textContent||'').trim() : '';
+        if (name && sale > 0) {
+            results.push({
+                name: name.slice(0,120), price: mrp, sale_price: sale,
+                unit, image_url: '', product_id: id,
+                app: 'blinkit', app_name: 'Blinkit'
+            });
+        }
+    });
+    return results.slice(0, 8);
+}
+"""
+
+
+async def _search_playwright(user_id: str, query: str, cookies: dict) -> list[dict]:
+    """Load Blinkit search page in headless Chromium, scrape rendered products.
+
+    Also intercepts JSON API responses so the correct search endpoint URL is
+    logged — once identified, Strategy 1 can use it directly.
+    """
+    import auth_browser as _ab
+    pw = await _ab._get_playwright()
+
+    browser = await pw.chromium.launch(
+        headless=True,
+        args=["--no-sandbox", "--disable-dev-shm-usage",
+              "--disable-blink-features=AutomationControlled"],
+    )
+    try:
+        ctx = await browser.new_context(
+            user_agent=_MOBILE_UA,
+            is_mobile=True, has_touch=True,
+            locale="en-IN", timezone_id="Asia/Kolkata",
+        )
+        pw_cookies = [
+            {"name": k, "value": v, "domain": "blinkit.com", "path": "/",
+             "httpOnly": False, "secure": True, "sameSite": "Lax"}
+            for k, v in cookies.items()
+            if k not in ("__cf_bm", "_cfuvid")
+        ]
+        await ctx.add_cookies(pw_cookies)
+
+        page = await ctx.new_page()
+
+        # Intercept responses to find the real search API endpoint
+        async def on_response(resp):
+            try:
+                if not any(x in resp.url for x in ("/v1/", "/v2/", "/v3/",
+                                                    "/api/", "/search")):
+                    return
+                if "json" not in resp.headers.get("content-type", ""):
+                    return
+                body = await resp.json()
+                if not isinstance(body, dict):
+                    return
+                objs = body.get("objects") or body.get("response", {}).get("objects")
+                if isinstance(objs, list) and any(
+                        o.get("type") == "product" for o in objs):
+                    print(f"[blinkit] Playwright found search API: {resp.url}")
+                    print(f"[blinkit] Playwright API sample: "
+                          f"{str(body)[:300]}")
+            except Exception:
+                pass
+
+        page.on("response", on_response)
+
+        await page.goto(f"{BASE_URL}/s/?q={quote(query)}",
+                        wait_until="domcontentloaded", timeout=25000)
+        # Wait for React to hydrate and render product cards
+        try:
+            await page.wait_for_selector(
+                'div[role="button"][tabindex="0"][id]', timeout=10000)
+        except Exception:
+            pass
+        await page.wait_for_timeout(1500)
+
+        products = await page.evaluate(_PW_SEARCH_SCRIPT)
+        return [p for p in products if p.get("product_id")]
+    finally:
+        await browser.close()
 
 
 async def add_to_cart_api(user_id: str, product_id: str, count: int = 1) -> dict:
