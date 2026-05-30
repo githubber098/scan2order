@@ -496,7 +496,7 @@ async def _search_playwright(
         # Log every API request and response to find the correct search endpoint.
         _api_calls: list[str] = []
 
-        def on_request(req):
+        async def on_request(req):
             u = req.url
             if any(x in u for x in ("/v1/", "/v2/", "/v3/", "/api/", "/search")):
                 short = u.split("?")[0]
@@ -507,19 +507,22 @@ async def _search_playwright(
                     except Exception:
                         pass
                     if "/v1/layout/search" in u and "/layout/search" not in str(_api_calls):
-                        # Log headers of the FIRST layout/search POST for debugging
+                        # Use all_headers() to capture Cookie header (not in req.headers)
                         try:
-                            hdrs = dict(req.headers)
+                            hdrs = await req.all_headers()
                             interesting = {k: v for k, v in hdrs.items()
                                            if k.lower() in (
                                                "auth_key", "lat", "lng",
                                                "merchant_id", "cookie",
                                                "origin", "referer",
                                            )}
+                            # Truncate cookie to avoid flooding logs
+                            if "cookie" in interesting:
+                                interesting["cookie"] = interesting["cookie"][:300]
                             print(f"[blinkit] Playwright first layout/search "
                                   f"HEADERS: {interesting}")
-                        except Exception:
-                            pass
+                        except Exception as he:
+                            print(f"[blinkit] header capture error: {he}")
                 if short not in _api_calls or req.method == "POST":
                     _api_calls.append(short)
                     print(f"[blinkit] Playwright REQ: {req.method} {short}{body_str}")
