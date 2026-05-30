@@ -17,7 +17,7 @@ Location: gr_1_lat/gr_1_lon cookies + merchant_id (captured during auth).
 import re
 import json
 import time
-from urllib.parse import quote
+from urllib.parse import quote, unquote
 
 import httpx
 
@@ -272,7 +272,9 @@ async def search_item_api(user_id: str, query: str) -> list[dict]:
     Returns [] on complete failure.
     """
     cookies = get_store_cookies(user_id, APP_NAME)
-    access_token = cookies.get("gr_1_accessToken", "")
+    # Playwright stores cookie values URL-encoded (e.g. v2%3A%3A... → v2::...).
+    # Decode before using as a header or passing to _get_auth_key().
+    access_token = unquote(cookies.get("gr_1_accessToken", ""))
     if not access_token:
         print(f"[blinkit] search_item_api: no gr_1_accessToken for user {user_id[:8]}")
         return []
@@ -522,7 +524,7 @@ async def add_to_cart_api(user_id: str, product_id: str, count: int = 1) -> dict
     Returns {"success": True, "count_added": N} or {"success": False, "reason": str}.
     """
     cookies = get_store_cookies(user_id, APP_NAME)
-    access_token = cookies.get("gr_1_accessToken", "")
+    access_token = unquote(cookies.get("gr_1_accessToken", ""))
     if not access_token:
         return {"success": False, "reason": "not logged in (no gr_1_accessToken)"}
 
