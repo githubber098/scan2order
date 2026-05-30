@@ -21,7 +21,7 @@ from urllib.parse import quote, unquote
 
 import httpx
 
-from storage.user_store import get_store_cookies
+from storage.user_store import get_store_cookies, update_store_cookies
 
 APP_NAME = "blinkit"
 DISPLAY_NAME = "Blinkit"
@@ -183,14 +183,21 @@ async def _get_auth_key(access_token: str, cookies: dict) -> str:
     what you get back, not what you send in).
     Falls back to raw access_token on any error.
     """
-    # Send base headers WITHOUT auth_key — just let the cookie authenticate
+    # Send base headers WITHOUT auth_key — just let the cookie authenticate.
+    # Origin and Referer are required; without them Blinkit returns 400.
     headers = {k: v for k, v in _API_HEADERS_BASE.items() if k != "auth_key"}
+    headers["Origin"] = BASE_URL
+    headers["Referer"] = f"{BASE_URL}/"
+    # Decode cookie values — Playwright URL-encodes them internally but the
+    # server expects the original decoded values (e.g. v2:: not v2%3A%3A).
+    decoded_cookies = {k: unquote(v) if isinstance(v, str) else v
+                       for k, v in cookies.items()}
     try:
         async with httpx.AsyncClient(timeout=6.0) as client:
             resp = await client.get(
                 f"{BASE_URL}/v2/accounts/auth_key/",
                 headers=headers,
-                cookies=cookies,
+                cookies=decoded_cookies,
             )
         print(f"[blinkit] _get_auth_key: HTTP {resp.status_code} "
               f"body={resp.text[:120]!r}")
@@ -276,8 +283,10 @@ async def search_item_api(user_id: str, query: str) -> list[dict]:
     """
     cookies = get_store_cookies(user_id, APP_NAME)
     # Playwright stores cookie values URL-encoded (e.g. v2%3A%3A... → v2::...).
-    # Decode before using as a header or passing to _get_auth_key().
-    access_token = unquote(cookies.get("gr_1_accessToken", ""))
+    # Decode all values so httpx sends what the server originally set.
+    decoded_cookies = {k: unquote(v) if isinstance(v, str) else v
+                       for k, v in cookies.items()}
+    access_token = decoded_cookies.get("gr_1_accessToken", "")
     if not access_token:
         print(f"[blinkit] search_item_api: no gr_1_accessToken for user {user_id[:8]}")
         return []
@@ -286,23 +295,36 @@ async def search_item_api(user_id: str, query: str) -> list[dict]:
     t_start = time.time()
 
     # Location context — web relay saves gr_1_lat/gr_1_lon; mobile saves lat/lng.
-    lat = (cookies.get("gr_1_lat") or cookies.get("lat")
-           or cookies.get("dlat") or "")
-    lng = (cookies.get("gr_1_lon") or cookies.get("lng")
-           or cookies.get("dlng") or "")
-    merchant_id = cookies.get("merchant_id") or cookies.get("gr_1_merchantId") or ""
+    lat = (decoded_cookies.get("gr_1_lat") or decoded_cookies.get("lat")
+           or decoded_cookies.get("dlat") or "")
+    lng = (decoded_cookies.get("gr_1_lon") or decoded_cookies.get("lng")
+           or decoded_cookies.get("dlng") or "")
+    merchant_id = (decoded_cookies.get("merchant_id")
+                   or decoded_cookies.get("gr_1_merchantId") or "")
 
     print(f"[blinkit] location: lat={lat!r} lng={lng!r} merchant_id={merchant_id!r}")
 
     # ── Strategy 1: POST /v1/layout/search ───────────────────────────────────
     products: list[dict] = []
     try:
-        api_auth_key = await _get_auth_key(access_token, cookies)
+        # Use a cached derived key if Playwright captured one on a previous run.
+        # Otherwise derive it fresh from /v2/accounts/auth_key/.
+        cached_key = decoded_cookies.get("api_auth_key", "")
+        if cached_key:
+            api_auth_key = cached_key
+            print(f"[blinkit] Using cached derived auth key prefix={api_auth_key[:12]!r}")
+        else:
+            api_auth_key = await _get_auth_key(access_token, decoded_cookies)
         is_derived = (api_auth_key != access_token)
         print(f"[blinkit] auth_key derived={is_derived} "
               f"key_prefix={api_auth_key[:12]!r}")
 
-        layout_headers = {**_API_HEADERS_BASE, "auth_key": api_auth_key}
+        layout_headers = {
+            **_API_HEADERS_BASE,
+            "auth_key": api_auth_key,
+            "Origin": BASE_URL,
+            "Referer": f"{BASE_URL}/",
+        }
         if lat:
             layout_headers["lat"] = str(lat)
         if lng:
@@ -319,14 +341,13 @@ async def search_item_api(user_id: str, query: str) -> list[dict]:
         }
         print(f"[blinkit] Strategy 1 POST headers keys: "
               f"{[k for k in layout_headers if k not in _API_HEADERS_BASE]}")
-        print(f"[blinkit] Strategy 1 cookies sent: {sorted(cookies.keys())}")
 
         async with httpx.AsyncClient(timeout=12.0) as client:
             resp = await client.post(
                 f"{BASE_URL}/v1/layout/search",
                 json=layout_body,
                 headers=layout_headers,
-                cookies=cookies,
+                cookies=decoded_cookies,
             )
         elapsed_ms = int((time.time() - t_start) * 1000)
         if resp.status_code == 200:
@@ -378,9 +399,13 @@ async def search_item_api(user_id: str, query: str) -> list[dict]:
     # Strategy 1 can be fixed once we know the real endpoint.
     print(f"[blinkit] SSR fallback empty → trying Playwright strategy")
     try:
-        products = await _search_playwright(user_id, query, cookies)
+        products, pw_auth_key = await _search_playwright(user_id, query, cookies)
         print(f"[blinkit] Strategy 3 (Playwright): {len(products)} products "
               f"({int((time.time() - t_start)*1000)}ms)")
+        # Cache the derived auth key so Strategy 1 succeeds on the next call.
+        if pw_auth_key:
+            update_store_cookies(user_id, APP_NAME, {"api_auth_key": pw_auth_key})
+            print(f"[blinkit] Cached derived auth key for future Strategy 1 use")
     except Exception as e:
         print(f"[blinkit] Strategy 3 failed: {e}")
 
@@ -391,7 +416,7 @@ async def search_item_api(user_id: str, query: str) -> list[dict]:
 
 # ── Playwright search (Strategy 3) ───────────────────────────────────────────
 
-_PW_SEARCH_SCRIPT = """
+_PW_SEARCH_SCRIPT = r"""
 () => {
     const results = [];
     const cards = document.querySelectorAll('div[role="button"][tabindex="0"][id]');
@@ -437,11 +462,13 @@ _PW_SEARCH_SCRIPT = """
 """
 
 
-async def _search_playwright(user_id: str, query: str, cookies: dict) -> list[dict]:
+async def _search_playwright(
+    user_id: str, query: str, cookies: dict
+) -> tuple[list[dict], str]:
     """Load Blinkit search page in headless Chromium, scrape rendered products.
 
-    Also intercepts JSON API responses so the correct search endpoint URL is
-    logged — once identified, Strategy 1 can use it directly.
+    Returns (products, derived_auth_key). derived_auth_key is the SHA256 key
+    captured from the /v2/accounts/auth_key/ response; empty string if not seen.
     """
     import auth_browser as _ab
     pw = await _ab._get_playwright()
@@ -451,6 +478,7 @@ async def _search_playwright(user_id: str, query: str, cookies: dict) -> list[di
         args=["--no-sandbox", "--disable-dev-shm-usage",
               "--disable-blink-features=AutomationControlled"],
     )
+    captured: dict = {"auth_key": ""}
     try:
         ctx = await browser.new_context(
             user_agent=_MOBILE_UA,
@@ -461,7 +489,7 @@ async def _search_playwright(user_id: str, query: str, cookies: dict) -> list[di
             {"name": k, "value": v, "domain": "blinkit.com", "path": "/",
              "httpOnly": False, "secure": True, "sameSite": "Lax"}
             for k, v in cookies.items()
-            if k not in ("__cf_bm", "_cfuvid")
+            if k not in ("__cf_bm", "_cfuvid", "api_auth_key")
         ]
         await ctx.add_cookies(pw_cookies)
 
@@ -493,6 +521,9 @@ async def _search_playwright(user_id: str, query: str, cookies: dict) -> list[di
                 if "json" not in resp.headers.get("content-type", ""):
                     return
                 body = await resp.json()
+                # Capture derived auth key for caching
+                if "/v2/accounts/auth_key/" in u and body.get("auth_key"):
+                    captured["auth_key"] = body["auth_key"]
                 # Log full response for the search endpoint; truncate others
                 limit = 2000 if "layout/search" in u else 300
                 snippet = str(body)[:limit]
@@ -515,7 +546,7 @@ async def _search_playwright(user_id: str, query: str, cookies: dict) -> list[di
         await page.wait_for_timeout(1500)
 
         products = await page.evaluate(_PW_SEARCH_SCRIPT)
-        return [p for p in products if p.get("product_id")]
+        return [p for p in products if p.get("product_id")], captured["auth_key"]
     finally:
         await browser.close()
 
@@ -527,21 +558,26 @@ async def add_to_cart_api(user_id: str, product_id: str, count: int = 1) -> dict
     Returns {"success": True, "count_added": N} or {"success": False, "reason": str}.
     """
     cookies = get_store_cookies(user_id, APP_NAME)
-    access_token = unquote(cookies.get("gr_1_accessToken", ""))
+    decoded_cookies = {k: unquote(v) if isinstance(v, str) else v
+                       for k, v in cookies.items()}
+    access_token = decoded_cookies.get("gr_1_accessToken", "")
     if not access_token:
         return {"success": False, "reason": "not logged in (no gr_1_accessToken)"}
 
     # Location context — web relay saves gr_1_lat/gr_1_lon; mobile saves lat/lng.
-    lat = (cookies.get("gr_1_lat") or cookies.get("lat")
-           or cookies.get("dlat") or cookies.get("delivery_lat") or "")
-    lng = (cookies.get("gr_1_lon") or cookies.get("lng")
-           or cookies.get("dlng") or cookies.get("delivery_lng") or "")
-    merchant_id = cookies.get("merchant_id") or cookies.get("gr_1_merchantId") or ""
+    lat = (decoded_cookies.get("gr_1_lat") or decoded_cookies.get("lat")
+           or decoded_cookies.get("dlat") or decoded_cookies.get("delivery_lat") or "")
+    lng = (decoded_cookies.get("gr_1_lon") or decoded_cookies.get("lng")
+           or decoded_cookies.get("dlng") or decoded_cookies.get("delivery_lng") or "")
+    merchant_id = (decoded_cookies.get("merchant_id")
+                   or decoded_cookies.get("gr_1_merchantId") or "")
 
     print(f"\n[blinkit] === API ADD: pid={product_id} qty={count} ===")
     t_start = time.time()
 
-    headers = {**_API_HEADERS_BASE, "auth_key": access_token}
+    # Prefer cached derived auth key; fall back to raw token.
+    api_auth_key = decoded_cookies.get("api_auth_key") or access_token
+    headers = {**_API_HEADERS_BASE, "auth_key": api_auth_key}
     if lat:
         headers["lat"] = str(lat)
     if lng:
