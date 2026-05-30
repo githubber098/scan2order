@@ -368,8 +368,15 @@ Atta 5kg
 // The server reads the session cookie and writes window._SERVER_USER_ID
 // before serving this page, so no async fetch is needed here.
 let userId = window._SERVER_USER_ID || null;
-if (!userId) { window.location.href = '/login'; }
-else { initConnectBanner(); }
+if (!userId) {
+    window.location.href = '/login';
+} else {
+    // Defer to the next tick so the let-declared state initConnectBanner()
+    // touches (_connectChannel, _connectTarget — declared far below) is past
+    // its temporal dead zone. Calling it synchronously here throws a
+    // ReferenceError and silently kills the rest of this script.
+    setTimeout(initConnectBanner, 0);
+}
 
 let comparisonData = null;
 let pollTimer = null;
