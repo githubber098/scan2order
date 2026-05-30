@@ -231,6 +231,20 @@ class TestDeleteAccount:
         assert user_store.get_user_by_id(uid) is None
         assert not user_store.is_store_connected(uid, "blinkit")
 
+    def test_disconnect_all_requires_auth(self, client, clean_db):
+        r = client.post("/api/auth/disconnect-all")
+        assert r.status_code == 401
+
+    def test_disconnect_all_keeps_account(self, client, clean_db):
+        from storage import user_store
+        self._login_email(client, clean_db)
+        uid = client.get("/api/auth/me").json()["user_id"]
+        user_store.connect_store(uid, "blinkit", {"gr_1_accessToken": "t"})
+        r = client.post("/api/auth/disconnect-all")
+        assert r.json()["success"] is True
+        assert not user_store.is_store_connected(uid, "blinkit")   # data cleared
+        assert client.get("/api/auth/me").status_code == 200        # account kept
+
 
 class TestMigration:
     """Migrating an existing phone-only DB must make phone nullable so that

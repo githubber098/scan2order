@@ -660,6 +660,15 @@ def update_last_login(user_id: str) -> None:
         _conn.commit()
 
 
+def delete_user_sessions(user_id: str) -> None:
+    """Delete a user's store sessions and link codes but KEEP the account.
+    Backs the self-service "delete my data" action."""
+    with _lock:
+        _conn.execute("DELETE FROM sessions WHERE user_id=?", (user_id,))
+        _conn.execute("DELETE FROM link_codes WHERE user_id=?", (user_id,))
+        _conn.commit()
+
+
 def delete_user(user_id: str) -> None:
     """Permanently delete a user and ALL their data: store sessions, link
     codes, and the account row. Used by the self-service "delete account"."""

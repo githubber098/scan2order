@@ -376,6 +376,17 @@ async def api_logout():
     return resp
 
 
+@app.post("/api/auth/disconnect-all")
+async def api_disconnect_all(request: Request):
+    """Delete the logged-in user's store connections (keep the account)."""
+    user_id = _get_session_user(request)
+    if not user_id:
+        return JSONResponse({"success": False, "error": "Not signed in"}, status_code=401)
+    user_store.delete_user_sessions(user_id)
+    print(f"[auth] data cleared (stores disconnected): {user_id[:8]}…")
+    return JSONResponse({"success": True})
+
+
 @app.post("/api/auth/delete")
 async def api_delete_account(request: Request):
     """Permanently delete the logged-in user's account and all their data."""

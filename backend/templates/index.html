@@ -250,52 +250,50 @@
         .connect-banner-msg.err { color: #e24b4a; }
         .connect-banner-msg.ok { color: #4ecdc4; }
 
-        /* Account modal */
-        .account-modal {
-            display: none; position: fixed; inset: 0; z-index: 1000;
-            background: rgba(0,0,0,0.85); align-items: center; justify-content: center; padding: 16px;
+        /* Profile icon + account dropdown menu */
+        .profile-wrap { position: relative; }
+        .profile-btn {
+            width: 34px; height: 34px; border-radius: 50%; border: none; cursor: pointer;
+            background: linear-gradient(135deg, #4ecdc4, #2db5ad); color: #001;
+            font-size: 16px; display: flex; align-items: center; justify-content: center;
+            padding: 0; transition: opacity 0.15s;
         }
-        .account-modal.open { display: flex; }
-        .account-box {
-            background: #111122; border: 1px solid #333; border-radius: 14px;
-            width: min(420px, 100%); overflow: hidden;
+        .profile-btn:hover { opacity: 0.9; }
+        .account-menu {
+            display: none; position: absolute; right: 0; top: calc(100% + 8px);
+            width: 290px; background: #15152a; border: 1px solid #333;
+            border-radius: 12px; box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+            z-index: 900; overflow: hidden;
         }
-        .account-head {
-            display: flex; justify-content: space-between; align-items: center;
-            padding: 14px 18px; border-bottom: 1px solid #222;
-            font-weight: 600; color: #4ecdc4;
+        .account-menu.open { display: block; }
+        .account-menu-status { padding: 6px 14px 10px; }
+        .account-menu-sep { height: 1px; background: #2a2a3e; }
+        .account-menu-item {
+            display: block; width: 100%; text-align: left; padding: 11px 14px;
+            background: none; border: none; color: #ddd; font-size: 14px;
+            cursor: pointer; font-family: inherit;
         }
-        .account-close {
-            background: none; border: none; color: #888; font-size: 22px;
-            line-height: 1; cursor: pointer; padding: 0;
-        }
-        .account-close:hover { color: #ccc; }
-        .account-body { padding: 8px 18px; }
+        .account-menu-item:hover:not(:disabled) { background: #1e1e38; }
+        .account-menu-item:disabled { opacity: 0.6; cursor: default; }
+        .account-menu-item.danger { color: #e2576b; }
+        .account-menu-item.danger:hover:not(:disabled) { background: #250f15; }
         .account-row {
-            display: flex; align-items: center; gap: 10px;
-            padding: 12px 0; border-bottom: 1px solid #1a1a2e;
+            display: flex; align-items: center; gap: 8px;
+            padding: 10px 0; border-bottom: 1px solid #232340;
         }
-        .acct-label { font-size: 13px; color: #888; width: 78px; flex-shrink: 0; }
-        .acct-val { flex: 1; font-size: 14px; color: #eee; word-break: break-all; }
+        .account-row:last-child { border-bottom: none; }
+        .acct-label { font-size: 13px; color: #888; width: 70px; flex-shrink: 0; }
+        .acct-val { flex: 1; font-size: 13px; color: #eee; word-break: break-all; }
         .acct-ok { color: #4ecdc4; font-size: 15px; }
         .acct-connect-btn {
-            flex-shrink: 0; padding: 6px 14px; border: 1px solid #4ecdc4; background: none;
+            flex-shrink: 0; padding: 5px 12px; border: 1px solid #4ecdc4; background: none;
             color: #4ecdc4; border-radius: 8px; font-size: 12px; font-weight: 600;
             cursor: pointer; font-family: inherit;
         }
         .acct-connect-btn:hover { background: rgba(78,205,196,0.08); }
-        #acct-connect-area { padding: 12px 0 4px; }
-        .acct-connect-title { font-size: 13px; color: #bfe; margin-bottom: 8px; }
+        #acct-connect-area { padding: 10px 0 2px; }
+        .acct-connect-title { font-size: 12px; color: #bfe; margin-bottom: 8px; }
         .account-connect-form { display: flex; gap: 8px; align-items: stretch; }
-        .account-danger { padding: 14px 18px; border-top: 1px solid #222; }
-        .btn-danger {
-            width: 100%; padding: 11px; border: 1px solid #5a2230; background: #1a0c10;
-            color: #e2576b; border-radius: 10px; font-weight: 600; font-size: 14px;
-            cursor: pointer; font-family: inherit; transition: background 0.15s;
-        }
-        .btn-danger:hover:not(:disabled) { background: #250f15; }
-        .btn-danger:disabled { opacity: 0.6; cursor: not-allowed; }
-        .account-danger-hint { font-size: 11px; color: #667; margin-top: 8px; text-align: center; }
     </style>
 </head>
 <body>
@@ -311,31 +309,22 @@
     <div class="connect-banner" id="connect-banner" style="display:none">
         <button class="connect-banner-x" onclick="dismissConnectBanner()" title="Dismiss">&times;</button>
         <div class="connect-banner-head" id="connect-banner-text">Add a backup contact.</div>
-        <button class="connect-send" onclick="openAccountModal()">Add it now</button>
-    </div>
-
-    <!-- Account modal: contact status, connect phone/email, delete account -->
-    <div class="account-modal" id="account-modal">
-        <div class="account-box">
-            <div class="account-head">
-                <span>Your account</span>
-                <button class="account-close" onclick="closeAccountModal()" title="Close">&times;</button>
-            </div>
-            <div class="account-body" id="account-body"></div>
-            <div class="account-danger">
-                <button class="btn-danger" id="delete-acct-btn" onclick="confirmDeleteAccount()">Delete account</button>
-                <div class="account-danger-hint">Removes your account and all store connections. This can't be undone.</div>
-            </div>
-        </div>
+        <button class="connect-send" onclick="openAccountMenu()">Add it now</button>
     </div>
 
     <!-- Auth section: per-store Connect buttons (Playwright login relay) -->
     <div class="auth-section" id="auth-section">
         <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
             <h3 style="margin-bottom:0">Store connections</h3>
-            <div>
-                <button class="btn-tiny" onclick="openAccountModal()" title="Account">Account</button>
-                <button class="btn-tiny" onclick="logout()" title="Sign out">Sign out</button>
+            <div class="profile-wrap">
+                <button class="profile-btn" id="profile-btn" onclick="toggleAccountMenu(event)" title="Account">👤</button>
+                <div class="account-menu" id="account-menu">
+                    <div class="account-menu-status" id="account-body"></div>
+                    <div class="account-menu-sep"></div>
+                    <button class="account-menu-item" onclick="logout()">Sign out</button>
+                    <button class="account-menu-item" id="wipe-data-btn" onclick="confirmDisconnectAll()">Delete my data</button>
+                    <button class="account-menu-item danger" id="delete-acct-btn" onclick="confirmDeleteAccount()">Delete account</button>
+                </div>
             </div>
         </div>
         <div class="store-connect-list">
@@ -717,13 +706,27 @@ function _normaliseContact(channel, raw) {
     return /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(s) ? s : null;
 }
 
-function openAccountModal() {
+function openAccountMenu() {
     dismissConnectBanner();
-    document.getElementById('account-modal').classList.add('open');
+    document.getElementById('account-menu').classList.add('open');
     refreshAccountStatus();
+    // Close when clicking anywhere outside the profile area (added next tick so
+    // this same click doesn't immediately close it).
+    setTimeout(() => document.addEventListener('click', _closeMenuOutside), 0);
 }
-function closeAccountModal() {
-    document.getElementById('account-modal').classList.remove('open');
+function toggleAccountMenu(e) {
+    if (e) e.stopPropagation();
+    const menu = document.getElementById('account-menu');
+    if (menu.classList.contains('open')) closeAccountMenu();
+    else openAccountMenu();
+}
+function closeAccountMenu() {
+    document.getElementById('account-menu').classList.remove('open');
+    document.removeEventListener('click', _closeMenuOutside);
+}
+function _closeMenuOutside(e) {
+    const wrap = document.querySelector('.profile-wrap');
+    if (wrap && !wrap.contains(e.target)) closeAccountMenu();
 }
 
 // Fetch the authoritative status from the server and render the two rows.
@@ -858,6 +861,27 @@ function confirmDeleteAccount() {
             else { btn.disabled = false; btn.textContent = 'Delete account'; }
         })
         .catch(() => { btn.disabled = false; btn.textContent = 'Delete account'; });
+}
+
+// Two-tap "Delete my data" — disconnects all stores but keeps the account.
+let _wipeArmed = false;
+function confirmDisconnectAll() {
+    const btn = document.getElementById('wipe-data-btn');
+    if (!_wipeArmed) {
+        _wipeArmed = true;
+        btn.textContent = 'Tap again to delete your data';
+        setTimeout(() => { _wipeArmed = false; btn.textContent = 'Delete my data'; }, 4000);
+        return;
+    }
+    _wipeArmed = false;
+    btn.disabled = true; btn.textContent = 'Deleting…';
+    fetch('/api/auth/disconnect-all', { method: 'POST' })
+        .then(r => r.json())
+        .then(d => {
+            if (d.success) { window.location.reload(); }   // reflect cleared store connections
+            else { btn.disabled = false; btn.textContent = 'Delete my data'; }
+        })
+        .catch(() => { btn.disabled = false; btn.textContent = 'Delete my data'; });
 }
 
 // ── Connect-other-method nudge (a thin prompt that opens the Account modal) ───

@@ -35,9 +35,12 @@ services:
   ollama:
     image: ollama/ollama:latest
     restart: unless-stopped
-    # gemma4:e2b needs ~7-8GB resident. On a 16GB host this leaves room for the
-    # app + Playwright. Raise toward 12g only if you switch to gemma4:e4b.
-    mem_limit: 9g
+    # No mem_limit on purpose. Under a cgroup memory limit, Linux counts page
+    # cache against the limit, so Ollama computed only ~6.4GiB "available" and
+    # refused to load gemma4:e2b (~7.2GiB) even though the host had 11GiB free.
+    # Letting Ollama see host memory (16GB box) fixes it; e2b is size-bounded so
+    # it won't balloon. If you ever run a bigger model and want a safety cap,
+    # add `mem_limit: 13g` (leaves headroom for the app + OS).
     volumes:
       - ollama_data:/root/.ollama
     # NOTE: the model is NOT auto-pulled. After first `docker compose up`, run:
