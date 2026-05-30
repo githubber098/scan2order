@@ -176,14 +176,15 @@ def _parse_ssr_response(html: str) -> list[dict]:
 
 
 async def _get_auth_key(access_token: str, cookies: dict) -> str:
-    """Exchange gr_1_accessToken for the derived API auth key.
+    """Exchange gr_1_accessToken cookie for the derived SHA256 API auth key.
 
-    Blinkit's web app calls /v2/accounts/auth_key/ on every page load to
-    convert the session cookie into a SHA256-hashed API key used as the
-    auth_key header on all subsequent API calls.
+    The web app calls GET /v2/accounts/auth_key/ using only the session
+    cookie — it does NOT send auth_key as a request header (the key is
+    what you get back, not what you send in).
     Falls back to raw access_token on any error.
     """
-    headers = {**_API_HEADERS_BASE, "auth_key": access_token}
+    # Send base headers WITHOUT auth_key — just let the cookie authenticate
+    headers = {k: v for k, v in _API_HEADERS_BASE.items() if k != "auth_key"}
     try:
         async with httpx.AsyncClient(timeout=6.0) as client:
             resp = await client.get(
@@ -191,6 +192,8 @@ async def _get_auth_key(access_token: str, cookies: dict) -> str:
                 headers=headers,
                 cookies=cookies,
             )
+        print(f"[blinkit] _get_auth_key: HTTP {resp.status_code} "
+              f"body={resp.text[:120]!r}")
         if resp.status_code == 200:
             key = resp.json().get("auth_key", "")
             if key:
