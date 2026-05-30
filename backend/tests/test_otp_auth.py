@@ -91,6 +91,34 @@ class TestPhoneLogin:
         r = client.post("/api/auth/send-otp", json={"channel": "phone", "value": "9876543210"})
         assert r.json()["success"] is False
 
+    def test_send_otp_surfaces_provider_error(self, client, clean_db, monkeypatch):
+        """A non-None return from sms.send_otp is passed through to the user."""
+        import sms
+        monkeypatch.setattr(
+            sms, "send_otp",
+            lambda phone, code: "This number isn't approved for SMS yet.")
+        r = client.post("/api/auth/send-otp", json={"channel": "phone", "value": "9876543210"})
+        data = r.json()
+        assert data["success"] is False
+        assert "approved for SMS" in data["error"]
+
+
+class TestSmsErrorMessages:
+    def test_unverified_trial_number(self):
+        from sms import _friendly_sms_error
+
+        class _E(Exception):
+            code = 21608
+            msg = "The number +91... is unverified. Trial accounts cannot send..."
+        out = _friendly_sms_error(_E())
+        assert "trial" in out.lower() and "email" in out.lower()
+
+    def test_generic_error_is_trimmed(self):
+        from sms import _friendly_sms_error
+        out = _friendly_sms_error(Exception("x" * 500))
+        assert out.startswith("Couldn't send the SMS code")
+        assert len(out) < 220
+
 
 # ── Email login ───────────────────────────────────────────────────────────────
 

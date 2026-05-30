@@ -212,8 +212,11 @@ def _mask(channel: str, value: str) -> str:
     return value[:4] + "****"
 
 
-def _send_otp_via(channel: str, target: str, code: str) -> bool:
-    """Dispatch an OTP to the right transport for *channel*."""
+def _send_otp_via(channel: str, target: str, code: str) -> str | None:
+    """Dispatch an OTP to the right transport for *channel*.
+
+    Returns None on success, or a short human-readable error string on failure.
+    """
     if channel == "email":
         return email_sender.send_otp(target, code)
     return sms.send_otp(target, code)
@@ -259,10 +262,9 @@ async def api_send_otp(request: Request):
     code = auth.generate_otp()
     user_store.save_otp(target, code)
 
-    if not _send_otp_via(channel, target, code):
-        dest = "email" if channel == "email" else "SMS"
-        return JSONResponse({"success": False,
-                             "error": f"Failed to send {dest}. Check server config."})
+    err = _send_otp_via(channel, target, code)
+    if err:
+        return JSONResponse({"success": False, "error": err})
 
     print(f"[auth] OTP sent via {channel} to {_mask(channel, target)}")
     return JSONResponse({"success": True})
@@ -328,9 +330,9 @@ async def api_method_send_otp(request: Request):
 
     code = auth.generate_otp()
     user_store.save_otp(target, code)
-    if not _send_otp_via(channel, target, code):
-        dest = "email" if channel == "email" else "SMS"
-        return JSONResponse({"success": False, "error": f"Failed to send {dest}."})
+    err = _send_otp_via(channel, target, code)
+    if err:
+        return JSONResponse({"success": False, "error": err})
 
     print(f"[auth] link OTP via {channel} to {_mask(channel, target)} for {user_id[:8]}…")
     return JSONResponse({"success": True})

@@ -19,8 +19,23 @@ import ssl
 from email.message import EmailMessage
 
 
-def send_otp(email: str, code: str) -> bool:
-    """Email a 6-digit OTP to *email*. Returns True on success."""
+def _friendly_email_error(e) -> str:
+    """Turn an SMTP exception into a short, user-appropriate message."""
+    msg = str(e).strip()
+    low = msg.lower()
+    if "authentication" in low or "535" in low:
+        return "Email sender isn't configured correctly (auth failed)."
+    if "not verified" in low or "domain" in low and "verif" in low:
+        return "The sending email domain isn't verified yet. Try phone instead."
+    return ("Couldn't send the email code: " + msg[:160]) if msg else "Couldn't send the email code."
+
+
+def send_otp(email: str, code: str) -> str | None:
+    """Email a 6-digit OTP to *email*.
+
+    Returns None on success, or a short human-readable error string on failure
+    (the full provider error is always logged server-side).
+    """
     host = os.environ.get("SMTP_HOST", "")
     user = os.environ.get("SMTP_USER", "")
     password = os.environ.get("SMTP_PASS", "")
@@ -30,7 +45,7 @@ def send_otp(email: str, code: str) -> bool:
     if not all([host, user, password]):
         # Dev fallback: log the code so the flow works without an SMTP server.
         print(f"[email] SMTP not configured — OTP for {email}: {code}")
-        return True
+        return None
 
     msg = EmailMessage()
     msg["Subject"] = "Your scan2order code"
@@ -55,7 +70,7 @@ def send_otp(email: str, code: str) -> bool:
         # Don't log the full address — just enough to correlate.
         local = email.split("@")[0]
         print(f"[email] OTP sent to {local[:2]}***@{email.split('@')[-1]}")
-        return True
+        return None
     except Exception as e:
         print(f"[email] send failed to {email.split('@')[-1]}: {e}")
-        return False
+        return _friendly_email_error(e)
