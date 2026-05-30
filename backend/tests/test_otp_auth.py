@@ -171,14 +171,24 @@ class TestMethodLinking:
         assert me["phone"] == "+919876543210"
         assert me["email"] == "me@x.com"
 
-    def test_link_rejects_contact_owned_by_other(self, client, clean_db):
+    def test_link_merges_contact_owned_by_other(self, client, clean_db):
+        """Linking a contact that belongs to another account merges them once
+        the OTP (proof of control) is verified."""
         from storage import user_store
-        user_store.get_or_create_user("email", "taken@x.com")   # other account
-        self._login_phone(client, clean_db)
+        other = user_store.get_or_create_user("email", "taken@x.com")  # separate account
+        self._login_phone(client, clean_db)                            # we're the phone account
+
         r = client.post("/api/auth/method/send-otp",
                         json={"channel": "email", "value": "taken@x.com"})
-        assert r.json()["success"] is False
-        assert "another account" in r.json()["error"].lower()
+        assert r.json()["success"] is True                             # no longer rejected
+        code = _otp_for(clean_db, "taken@x.com")
+        r2 = client.post("/api/auth/method/verify",
+                         json={"channel": "email", "value": "taken@x.com", "code": code})
+        assert r2.json()["success"] is True
+
+        me = client.get("/api/auth/me").json()
+        assert me["phone"] == "+919876543210" and me["email"] == "taken@x.com"
+        assert user_store.get_user_by_id(other) is None                # absorbed + deleted
 
     def test_link_rejects_method_already_on_account(self, client, clean_db):
         self._login_phone(client, clean_db)
@@ -263,12 +273,24 @@ class TestUserStoreContacts:
         u = user_store.get_user_by_id(uid)
         assert u["phone"] == "+919999999999" and u["email"] == "x@y.com"
 
-    def test_attach_contact_conflict(self, clean_db):
+    def test_attach_contact_merges_other_account(self, clean_db):
         from storage import user_store
         other = user_store.get_or_create_user("email", "x@y.com")
         uid = user_store.get_or_create_user("phone", "+919999999999")
         ok, reason = user_store.attach_contact(uid, "email", "x@y.com")
-        assert ok is False and "another account" in reason
+        assert ok is True and reason is None
+        u = user_store.get_user_by_id(uid)
+        assert u["phone"] == "+919999999999" and u["email"] == "x@y.com"
+        assert user_store.get_user_by_id(other) is None  # duplicate absorbed
+
+    def test_merge_moves_store_sessions(self, clean_db):
+        from storage import user_store
+        other = user_store.get_or_create_user("email", "x@y.com")
+        user_store.connect_store(other, "blinkit", {"gr_1_accessToken": "tok"})
+        uid = user_store.get_or_create_user("phone", "+919999999999")
+        user_store.attach_contact(uid, "email", "x@y.com")
+        # the other account's store login moved to the surviving account
+        assert user_store.is_store_connected(uid, "blinkit")
 
     def test_attach_same_contact_idempotent(self, clean_db):
         from storage import user_store

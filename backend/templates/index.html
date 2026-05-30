@@ -213,32 +213,40 @@
             opacity: 0; transition: opacity 0.4s, transform 0.4s;
         }
 
-        /* Connect-other-method banner (shown when account is missing phone or email) */
+        /* Connect-other-method banner — matches the .auth-section card style,
+           with a teal left accent to draw attention. */
         .connect-banner {
             position: relative;
-            background: linear-gradient(135deg, rgba(78,205,196,0.12), rgba(45,181,173,0.06));
-            border: 1px solid #2a3a3a; border-radius: 12px;
+            background: #111122;
+            border: 1px solid #222; border-left: 3px solid #4ecdc4;
+            border-radius: 12px;
             padding: 14px 16px; margin-bottom: 16px;
         }
         .connect-banner-x {
-            position: absolute; top: 6px; right: 10px; background: none; border: none;
-            color: #667; font-size: 20px; cursor: pointer; line-height: 1;
+            position: absolute; top: 8px; right: 12px; background: none; border: none;
+            color: #667; font-size: 18px; line-height: 1; padding: 0; cursor: pointer;
         }
         .connect-banner-x:hover { color: #aaa; }
-        .connect-banner-head { font-size: 13px; color: #bfe; margin-bottom: 10px; padding-right: 18px; }
-        .connect-banner-body { display: flex; gap: 8px; }
+        .connect-banner-head {
+            font-size: 13px; color: #cfe; margin-bottom: 12px; padding-right: 22px;
+        }
+        /* stretch so the input and button are exactly the same height */
+        .connect-banner-body { display: flex; gap: 8px; align-items: stretch; }
         .connect-input {
-            flex: 1; padding: 9px 11px; background: #0a0a1a; border: 1px solid #333;
-            border-radius: 8px; color: #eee; font-size: 14px; font-family: inherit;
+            flex: 1; min-width: 0; padding: 10px 12px;
+            background: #111; border: 1px solid #333; border-radius: 10px;
+            color: #eee; font-size: 14px; font-family: inherit;
         }
         .connect-input:focus { outline: none; border-color: #4ecdc4; }
         .connect-send {
-            padding: 9px 16px; border: none; border-radius: 8px; cursor: pointer;
+            flex-shrink: 0; padding: 0 18px; border: none; border-radius: 10px;
             background: linear-gradient(135deg, #4ecdc4, #2db5ad); color: #001;
-            font-weight: 600; font-size: 13px; font-family: inherit; white-space: nowrap;
+            font-weight: 600; font-size: 13px; font-family: inherit;
+            white-space: nowrap; cursor: pointer; transition: opacity 0.15s;
         }
+        .connect-send:hover:not(:disabled) { opacity: 0.9; }
         .connect-send:disabled { opacity: 0.5; cursor: not-allowed; }
-        .connect-banner-msg { font-size: 12px; margin-top: 8px; }
+        .connect-banner-msg { font-size: 12px; margin-top: 10px; }
         .connect-banner-msg.err { color: #e24b4a; }
         .connect-banner-msg.ok { color: #4ecdc4; }
     </style>

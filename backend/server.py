@@ -316,10 +316,11 @@ async def api_method_send_otp(request: Request):
         label = "email address" if channel == "email" else "phone number"
         return JSONResponse({"success": False, "error": f"Invalid {label}"})
 
+    # If the contact already belongs to ANOTHER account we still send the OTP:
+    # receiving it proves the user controls the contact, which authorises
+    # merging that account in at the verify step. Only block re-adding a
+    # contact already on THIS account.
     owner = user_store.get_user_by_contact(channel, target)
-    if owner and owner != user_id:
-        return JSONResponse({"success": False,
-                             "error": f"That {channel} is already linked to another account"})
     if owner == user_id:
         return JSONResponse({"success": False,
                              "error": f"That {channel} is already on your account"})

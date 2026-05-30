@@ -584,21 +584,57 @@ def get_or_create_user(channel: str, value: str) -> str:
         return uid
 
 
-def attach_contact(user_id: str, channel: str, value: str) -> tuple[bool, str | None]:
-    """Attach a verified phone/email to an existing account.
+def _merge_user(src: str, dst: str, free_col: str) -> None:
+    """Absorb account *src* into *dst*. MUST be called while holding _lock.
 
-    Returns (True, None) on success, or (False, reason) if the contact is
-    already in use by a different account.
+    Moves src's store sessions (only stores dst doesn't already have) and link
+    codes to dst, clears the just-claimed contact column from src so the UNIQUE
+    index is free, then deletes src if it has no remaining contact.
+    Done in plain Python (no same-table UPDATE subquery) so it works on SQLite
+    and MySQL alike.
+    """
+    dst_stores = {r["store"] for r in _conn.execute(
+        "SELECT store FROM sessions WHERE user_id=?", (dst,)).fetchall()}
+    for r in _conn.execute(
+            "SELECT store FROM sessions WHERE user_id=?", (src,)).fetchall():
+        if r["store"] not in dst_stores:
+            _conn.execute(
+                "UPDATE sessions SET user_id=? WHERE user_id=? AND store=?",
+                (dst, src, r["store"]))
+    _conn.execute("DELETE FROM sessions WHERE user_id=?", (src,))
+    _conn.execute("UPDATE link_codes SET user_id=? WHERE user_id=?", (dst, src))
+    _conn.execute(f"UPDATE users SET {free_col}=NULL WHERE user_id=?", (src,))
+    row = _conn.execute(
+        "SELECT phone, email FROM users WHERE user_id=?", (src,)).fetchone()
+    if row and not row["phone"] and not row["email"]:
+        _conn.execute("DELETE FROM users WHERE user_id=?", (src,))
+
+
+def attach_contact(user_id: str, channel: str, value: str) -> tuple[bool, str | None]:
+    """Attach an OTP-verified phone/email to *user_id*.
+
+    The caller has already verified the OTP for *value*, i.e. proven the user
+    controls it. So:
+      • free contact          → set it on this account
+      • already on this acct   → no-op success (idempotent)
+      • owned by ANOTHER acct  → merge that account into this one (store sessions
+                                and link codes move over; the emptied duplicate
+                                is deleted), then set the contact here.
+
+    Returns (True, None) on success. (False, reason) is reserved for future
+    hard failures.
     """
     col = _col(channel)
     with _lock:
         owner = _conn.execute(
             f"SELECT user_id FROM users WHERE {col}=?", (value,)
         ).fetchone()
-        if owner and owner["user_id"] != user_id:
-            return False, "already linked to another account"
         if owner and owner["user_id"] == user_id:
             return True, None  # already attached to this user — idempotent
+        if owner and owner["user_id"] != user_id:
+            # Contact belongs to another account; the verified OTP authorises
+            # absorbing it into the current account.
+            _merge_user(owner["user_id"], user_id, free_col=col)
         _conn.execute(
             f"UPDATE users SET {col}=? WHERE user_id=?", (value, user_id)
         )
