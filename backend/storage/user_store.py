@@ -291,17 +291,63 @@ def _col_exists(conn, table: str, col: str) -> bool:
         return False
 
 
+def _sqlite_phone_is_not_null(conn) -> bool:
+    """True if SQLite users.phone still carries a NOT NULL constraint.
+
+    That constraint (from the original phone-only DDL `phone TEXT UNIQUE NOT
+    NULL`) blocks email-only accounts and CANNOT be dropped with ALTER — the
+    table must be rebuilt.
+    """
+    try:
+        for r in conn.execute("PRAGMA table_info(users)").fetchall():
+            if r["name"] == "phone":
+                return bool(r["notnull"])
+    except Exception:
+        pass
+    return False
+
+
+def _rebuild_users_sqlite(conn) -> None:
+    """Rebuild SQLite users so phone & email are both nullable + unique.
+
+    SQLite can't drop a column's NOT NULL/UNIQUE in place, so create a fresh
+    table, copy every row, and swap. Existing accounts are preserved; the
+    unique indexes are (re)created by the DDL that runs right after _migrate.
+    """
+    old_cols = [r["name"] for r in conn.execute("PRAGMA table_info(users)").fetchall()]
+    has_email = "email" in old_cols
+    conn.execute("ALTER TABLE users RENAME TO _users_old")
+    conn.execute(
+        "CREATE TABLE users ("
+        " user_id TEXT PRIMARY KEY, phone TEXT, email TEXT,"
+        " created_at REAL NOT NULL, last_login REAL)"
+    )
+    if has_email:
+        conn.execute(
+            "INSERT INTO users (user_id, phone, email, created_at, last_login)"
+            " SELECT user_id, phone, email, created_at, last_login FROM _users_old"
+        )
+    else:
+        conn.execute(
+            "INSERT INTO users (user_id, phone, created_at, last_login)"
+            " SELECT user_id, phone, created_at, last_login FROM _users_old"
+        )
+    conn.execute("DROP TABLE _users_old")
+    conn.commit()
+    print("[user_store] migrated: rebuilt users table (phone now nullable)")
+
+
 def _migrate(conn, is_mysql: bool) -> None:
-    """Bring an existing DB up to the current (phone + email) schema.
+    """Bring an existing DB up to the current (phone + email, both nullable) schema.
 
     Handles every prior shape this project has shipped:
-      • email+password users table  → drop (DDL recreates it; old accounts wiped)
-      • phone-only users table       → ALTER ADD COLUMN email
-      • phone+email users table      → no-op
-      • otp_codes keyed by 'phone'   → drop (ephemeral; DDL recreates keyed by 'target')
+      • email+password users table        → drop (DDL recreates; old accounts wiped)
+      • phone-only users (phone NOT NULL)  → rebuild so phone is nullable + add email
+      • phone+email but phone NOT NULL     → rebuild (the buggy partial-migration state)
+      • phone+email, phone nullable        → no-op
+      • otp_codes keyed by 'phone'         → drop (ephemeral; DDL recreates keyed 'target')
     Each step is best-effort; a fresh DB (no tables) falls straight through to DDL.
     """
-    # users table
     if _table_exists(conn, "users"):
         if not _col_exists(conn, "users", "phone"):
             # Oldest schema (email + password). Safe to wipe — predates real accounts.
@@ -309,19 +355,37 @@ def _migrate(conn, is_mysql: bool) -> None:
                 conn.execute("DROP TABLE IF EXISTS users")
                 conn.commit()
                 print("[user_store] migrated: dropped legacy email+password users table")
-            except Exception:
-                pass
-        elif not _col_exists(conn, "users", "email"):
-            try:
-                coltype = "VARCHAR(255)" if is_mysql else "TEXT"
-                conn.execute(f"ALTER TABLE users ADD COLUMN email {coltype}")
-                if is_mysql:
-                    # SQLite gets its unique index from the DDL below; MySQL needs it here.
-                    conn.execute("CREATE UNIQUE INDEX idx_users_email ON users(email)")
-                conn.commit()
-                print("[user_store] migrated: added email column to users")
             except Exception as e:
-                print(f"[user_store] email-column migration skipped: {e}")
+                print(f"[user_store] legacy-drop skipped: {e}")
+        elif is_mysql:
+            # Add email if missing, and ensure phone is nullable (drops NOT NULL,
+            # keeps the UNIQUE index — MODIFY does not touch indexes).
+            if not _col_exists(conn, "users", "email"):
+                try:
+                    conn.execute("ALTER TABLE users ADD COLUMN email VARCHAR(255) UNIQUE")
+                except Exception as e:
+                    print(f"[user_store] email-add skipped: {e}")
+            try:
+                conn.execute("ALTER TABLE users MODIFY phone VARCHAR(20) NULL")
+            except Exception as e:
+                print(f"[user_store] phone-nullable skipped: {e}")
+            conn.commit()
+        else:
+            # SQLite: rebuild if phone is NOT NULL (covers both the phone-only
+            # schema and the partial-migration state where email was added but
+            # phone stayed NOT NULL). Otherwise just add email if it's missing.
+            if _sqlite_phone_is_not_null(conn):
+                try:
+                    _rebuild_users_sqlite(conn)
+                except Exception as e:
+                    print(f"[user_store] users rebuild skipped: {e}")
+            elif not _col_exists(conn, "users", "email"):
+                try:
+                    conn.execute("ALTER TABLE users ADD COLUMN email TEXT")
+                    conn.commit()
+                    print("[user_store] migrated: added email column to users")
+                except Exception as e:
+                    print(f"[user_store] email-add skipped: {e}")
 
     # otp_codes table — renamed key column phone → target; ephemeral, safe to drop
     if _table_exists(conn, "otp_codes") and not _col_exists(conn, "otp_codes", "target"):

@@ -166,6 +166,60 @@ class TestMethodLinking:
 
 # ── Store-layer functions ──────────────────────────────────────────────────────
 
+class TestMigration:
+    """Migrating an existing phone-only DB must make phone nullable so that
+    email-only accounts can be created (regression for the NOT NULL crash)."""
+
+    def _conn(self, ddl: str):
+        import sqlite3
+        c = sqlite3.connect(":memory:")
+        c.row_factory = sqlite3.Row
+        c.executescript(ddl)
+        c.commit()
+        return c
+
+    def test_rebuild_phone_only_not_null(self):
+        from storage import user_store
+        c = self._conn(
+            "CREATE TABLE users (user_id TEXT PRIMARY KEY, phone TEXT UNIQUE NOT NULL,"
+            " created_at REAL NOT NULL, last_login REAL);"
+        )
+        c.execute("INSERT INTO users (user_id, phone, created_at) VALUES ('u1','+919999999999',1.0)")
+        c.commit()
+        user_store._migrate(c, is_mysql=False)
+        # email-only insert (phone NULL) must now succeed
+        c.execute("INSERT INTO users (user_id, email, created_at) VALUES ('u2','x@y.com',2.0)")
+        c.commit()
+        assert c.execute("SELECT phone FROM users WHERE user_id='u1'").fetchone()["phone"] == "+919999999999"
+        row = c.execute("SELECT phone, email FROM users WHERE user_id='u2'").fetchone()
+        assert row["phone"] is None and row["email"] == "x@y.com"
+
+    def test_rebuild_partial_migration_state(self):
+        # The exact production state: email column was added but phone stayed NOT NULL.
+        from storage import user_store
+        c = self._conn(
+            "CREATE TABLE users (user_id TEXT PRIMARY KEY, phone TEXT UNIQUE NOT NULL,"
+            " email TEXT, created_at REAL NOT NULL, last_login REAL);"
+        )
+        c.execute("INSERT INTO users (user_id, phone, created_at) VALUES ('u1','+918888888888',1.0)")
+        c.commit()
+        user_store._migrate(c, is_mysql=False)
+        c.execute("INSERT INTO users (user_id, email, created_at) VALUES ('u2','a@b.com',2.0)")
+        c.commit()
+        assert c.execute("SELECT COUNT(*) n FROM users").fetchone()["n"] == 2
+
+    def test_noop_on_current_schema(self):
+        from storage import user_store
+        c = self._conn(
+            "CREATE TABLE users (user_id TEXT PRIMARY KEY, phone TEXT, email TEXT,"
+            " created_at REAL NOT NULL, last_login REAL);"
+        )
+        c.execute("INSERT INTO users (user_id, phone, created_at) VALUES ('u1','+917777777777',1.0)")
+        c.commit()
+        user_store._migrate(c, is_mysql=False)   # must not raise or lose data
+        assert c.execute("SELECT COUNT(*) n FROM users").fetchone()["n"] == 1
+
+
 class TestUserStoreContacts:
     def test_get_or_create_idempotent(self, clean_db):
         from storage import user_store
