@@ -282,11 +282,10 @@ async def search_item_api(user_id: str, query: str) -> list[dict]:
     Returns [] on complete failure.
     """
     cookies = get_store_cookies(user_id, APP_NAME)
-    # Playwright stores cookie values URL-encoded (e.g. v2%3A%3A... → v2::...).
-    # Decode all values so httpx sends what the server originally set.
-    decoded_cookies = {k: unquote(v) if isinstance(v, str) else v
-                       for k, v in cookies.items()}
-    access_token = decoded_cookies.get("gr_1_accessToken", "")
+    # Cookie values are stored URL-encoded (as the browser stored them).
+    # Do NOT decode them for the cookie jar — send them as-is.
+    # Only decode gr_1_accessToken when using it as the auth_key HEADER value.
+    access_token = unquote(cookies.get("gr_1_accessToken", ""))
     if not access_token:
         print(f"[blinkit] search_item_api: no gr_1_accessToken for user {user_id[:8]}")
         return []
@@ -295,26 +294,29 @@ async def search_item_api(user_id: str, query: str) -> list[dict]:
     t_start = time.time()
 
     # Location context — web relay saves gr_1_lat/gr_1_lon; mobile saves lat/lng.
-    lat = (decoded_cookies.get("gr_1_lat") or decoded_cookies.get("lat")
-           or decoded_cookies.get("dlat") or "")
-    lng = (decoded_cookies.get("gr_1_lon") or decoded_cookies.get("lng")
-           or decoded_cookies.get("dlng") or "")
-    merchant_id = (decoded_cookies.get("merchant_id")
-                   or decoded_cookies.get("gr_1_merchantId") or "")
+    lat = (cookies.get("gr_1_lat") or cookies.get("lat") or cookies.get("dlat") or "")
+    lng = (cookies.get("gr_1_lon") or cookies.get("lng") or cookies.get("dlng") or "")
+    merchant_id = cookies.get("merchant_id") or cookies.get("gr_1_merchantId") or ""
 
     print(f"[blinkit] location: lat={lat!r} lng={lng!r} merchant_id={merchant_id!r}")
+
+    # Cloudflare cookies (__cf_bm, _cfuvid) are session-specific and become
+    # stale immediately after the auth session ends. Sending stale CF cookies
+    # causes Blinkit to reject the request; omit them so CF issues a fresh one.
+    _CF_COOKIES = {"__cf_bm", "_cfuvid"}
+    httpx_cookies = {k: v for k, v in cookies.items() if k not in _CF_COOKIES}
 
     # ── Strategy 1: POST /v1/layout/search ───────────────────────────────────
     products: list[dict] = []
     try:
         # Use a cached derived key if Playwright captured one on a previous run.
         # Otherwise derive it fresh from /v2/accounts/auth_key/.
-        cached_key = decoded_cookies.get("api_auth_key", "")
+        cached_key = cookies.get("api_auth_key", "")
         if cached_key:
             api_auth_key = cached_key
             print(f"[blinkit] Using cached derived auth key prefix={api_auth_key[:12]!r}")
         else:
-            api_auth_key = await _get_auth_key(access_token, decoded_cookies)
+            api_auth_key = await _get_auth_key(access_token, httpx_cookies)
         is_derived = (api_auth_key != access_token)
         print(f"[blinkit] auth_key derived={is_derived} "
               f"key_prefix={api_auth_key[:12]!r}")
@@ -346,7 +348,7 @@ async def search_item_api(user_id: str, query: str) -> list[dict]:
                 f"{BASE_URL}/v1/layout/search",
                 json=layout_body,
                 headers=layout_headers,
-                cookies=decoded_cookies,
+                cookies=httpx_cookies,
             )
         elapsed_ms = int((time.time() - t_start) * 1000)
         if resp.status_code == 200:
@@ -574,25 +576,24 @@ async def add_to_cart_api(user_id: str, product_id: str, count: int = 1) -> dict
     Returns {"success": True, "count_added": N} or {"success": False, "reason": str}.
     """
     cookies = get_store_cookies(user_id, APP_NAME)
-    decoded_cookies = {k: unquote(v) if isinstance(v, str) else v
-                       for k, v in cookies.items()}
-    access_token = decoded_cookies.get("gr_1_accessToken", "")
+    access_token = unquote(cookies.get("gr_1_accessToken", ""))
     if not access_token:
         return {"success": False, "reason": "not logged in (no gr_1_accessToken)"}
 
     # Location context — web relay saves gr_1_lat/gr_1_lon; mobile saves lat/lng.
-    lat = (decoded_cookies.get("gr_1_lat") or decoded_cookies.get("lat")
-           or decoded_cookies.get("dlat") or decoded_cookies.get("delivery_lat") or "")
-    lng = (decoded_cookies.get("gr_1_lon") or decoded_cookies.get("lng")
-           or decoded_cookies.get("dlng") or decoded_cookies.get("delivery_lng") or "")
-    merchant_id = (decoded_cookies.get("merchant_id")
-                   or decoded_cookies.get("gr_1_merchantId") or "")
+    lat = (cookies.get("gr_1_lat") or cookies.get("lat")
+           or cookies.get("dlat") or cookies.get("delivery_lat") or "")
+    lng = (cookies.get("gr_1_lon") or cookies.get("lng")
+           or cookies.get("dlng") or cookies.get("delivery_lng") or "")
+    merchant_id = cookies.get("merchant_id") or cookies.get("gr_1_merchantId") or ""
 
     print(f"\n[blinkit] === API ADD: pid={product_id} qty={count} ===")
     t_start = time.time()
 
+    _CF_COOKIES = {"__cf_bm", "_cfuvid"}
+    httpx_cookies = {k: v for k, v in cookies.items() if k not in _CF_COOKIES}
     # Prefer cached derived auth key; fall back to raw token.
-    api_auth_key = decoded_cookies.get("api_auth_key") or access_token
+    api_auth_key = cookies.get("api_auth_key") or access_token
     headers = {**_API_HEADERS_BASE, "auth_key": api_auth_key}
     if lat:
         headers["lat"] = str(lat)
