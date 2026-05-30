@@ -508,6 +508,20 @@ async def _search_playwright(
                         body_str = f" BODY={req.post_data[:500]!r}"
                     except Exception:
                         pass
+                    if "/v1/layout/search" in u and "/layout/search" not in str(_api_calls):
+                        # Log headers of the FIRST layout/search POST for debugging
+                        try:
+                            hdrs = dict(req.headers)
+                            interesting = {k: v for k, v in hdrs.items()
+                                           if k.lower() in (
+                                               "auth_key", "lat", "lng",
+                                               "merchant_id", "cookie",
+                                               "origin", "referer",
+                                           )}
+                            print(f"[blinkit] Playwright first layout/search "
+                                  f"HEADERS: {interesting}")
+                        except Exception:
+                            pass
                 if short not in _api_calls or req.method == "POST":
                     _api_calls.append(short)
                     print(f"[blinkit] Playwright REQ: {req.method} {short}{body_str}")
