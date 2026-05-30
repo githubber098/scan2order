@@ -62,7 +62,10 @@ def _serve_index(user_id: str) -> HTMLResponse:
             f"window._SERVER_USER_ID = {json.dumps(user_id)};</script>"
         )
         html = html.replace("<!-- USER_ID_PLACEHOLDER -->", inject)
-        return HTMLResponse(content=html)
+        # Per-user dynamic HTML (it embeds this user's phone/email) — never let
+        # a browser/proxy cache it, or a stale copy can hide the connect banner
+        # or leak one user's injected data to another.
+        return HTMLResponse(content=html, headers={"Cache-Control": "no-store"})
     return HTMLResponse(f"""<!DOCTYPE html><html><body>
 <h1>scan2order</h1><p>Backend running. <a href="/login">Login</a></p>
 </body></html>""")
