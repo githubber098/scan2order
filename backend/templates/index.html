@@ -212,6 +212,35 @@
             white-space: nowrap; pointer-events: none;
             opacity: 0; transition: opacity 0.4s, transform 0.4s;
         }
+
+        /* Connect-other-method banner (shown when account is missing phone or email) */
+        .connect-banner {
+            position: relative;
+            background: linear-gradient(135deg, rgba(78,205,196,0.12), rgba(45,181,173,0.06));
+            border: 1px solid #2a3a3a; border-radius: 12px;
+            padding: 14px 16px; margin-bottom: 16px;
+        }
+        .connect-banner-x {
+            position: absolute; top: 6px; right: 10px; background: none; border: none;
+            color: #667; font-size: 20px; cursor: pointer; line-height: 1;
+        }
+        .connect-banner-x:hover { color: #aaa; }
+        .connect-banner-head { font-size: 13px; color: #bfe; margin-bottom: 10px; padding-right: 18px; }
+        .connect-banner-body { display: flex; gap: 8px; }
+        .connect-input {
+            flex: 1; padding: 9px 11px; background: #0a0a1a; border: 1px solid #333;
+            border-radius: 8px; color: #eee; font-size: 14px; font-family: inherit;
+        }
+        .connect-input:focus { outline: none; border-color: #4ecdc4; }
+        .connect-send {
+            padding: 9px 16px; border: none; border-radius: 8px; cursor: pointer;
+            background: linear-gradient(135deg, #4ecdc4, #2db5ad); color: #001;
+            font-weight: 600; font-size: 13px; font-family: inherit; white-space: nowrap;
+        }
+        .connect-send:disabled { opacity: 0.5; cursor: not-allowed; }
+        .connect-banner-msg { font-size: 12px; margin-top: 8px; }
+        .connect-banner-msg.err { color: #e24b4a; }
+        .connect-banner-msg.ok { color: #4ecdc4; }
     </style>
 </head>
 <body>
@@ -219,6 +248,22 @@
     <div class="logo">
         <h1>scan2order</h1>
         <p>grocery price comparison across BigBasket, Blinkit &amp; Zepto</p>
+    </div>
+
+    <!-- Connect-other-method banner: shown when the account has only phone OR only email -->
+    <div class="connect-banner" id="connect-banner" style="display:none">
+        <button class="connect-banner-x" onclick="dismissConnectBanner()" title="Dismiss">&times;</button>
+        <div class="connect-banner-head" id="connect-banner-text">Add a backup contact.</div>
+        <div class="connect-banner-body" id="connect-banner-step1">
+            <input id="connect-input" class="connect-input" autocomplete="off">
+            <button class="connect-send" id="connect-send-btn" onclick="connectSendOtp()">Send code</button>
+        </div>
+        <div class="connect-banner-body hidden" id="connect-banner-step2">
+            <input id="connect-code" class="connect-input" maxlength="6" inputmode="numeric"
+                   placeholder="6-digit code" autocomplete="one-time-code">
+            <button class="connect-send" id="connect-verify-btn" onclick="connectVerifyOtp()">Verify</button>
+        </div>
+        <div class="connect-banner-msg" id="connect-banner-msg"></div>
     </div>
 
     <!-- Auth section: per-store Connect buttons (Playwright login relay) -->
@@ -324,6 +369,7 @@ Atta 5kg
 // before serving this page, so no async fetch is needed here.
 let userId = window._SERVER_USER_ID || null;
 if (!userId) { window.location.href = '/login'; }
+else { initConnectBanner(); }
 
 let comparisonData = null;
 let pollTimer = null;
@@ -579,6 +625,105 @@ async function _sendBrowserEvent(payload) {
 async function logout() {
     await fetch('/api/auth/logout', { method: 'POST' });
     window.location.href = '/login';
+}
+
+// ── Connect-other-method banner ───────────────────────────────────────────────
+// Prompts a phone-only user to add an email (and vice versa), verified by OTP.
+
+let _connectChannel = null;   // the MISSING method we're asking the user to add
+let _connectTarget = '';
+
+function initConnectBanner() {
+    const u = window._SERVER_USER || {};
+    if (u.phone && !u.email)      _connectChannel = 'email';
+    else if (u.email && !u.phone) _connectChannel = 'phone';
+    else return;  // both present (or neither) → nothing to prompt
+
+    if (sessionStorage.getItem('connectBannerDismissed') === _connectChannel) return;
+
+    const input = document.getElementById('connect-input');
+    if (_connectChannel === 'email') {
+        document.getElementById('connect-banner-text').textContent =
+            '✉️ Add your email as a backup way to sign in.';
+        input.type = 'email'; input.placeholder = 'you@example.com';
+    } else {
+        document.getElementById('connect-banner-text').textContent =
+            '📱 Add your phone as a backup way to sign in.';
+        input.type = 'tel'; input.placeholder = '+91 98765 43210';
+    }
+    document.getElementById('connect-banner').style.display = 'block';
+}
+
+function dismissConnectBanner() {
+    if (_connectChannel) sessionStorage.setItem('connectBannerDismissed', _connectChannel);
+    document.getElementById('connect-banner').style.display = 'none';
+}
+
+function _connectNormalise(raw) {
+    if (_connectChannel === 'phone') {
+        const d = (raw || '').replace(/\D/g, '');
+        if (d.length === 10 && /^[6-9]/.test(d)) return '+91' + d;
+        if (d.length === 12 && d.startsWith('91')) return '+' + d;
+        if ((raw || '').trim().startsWith('+')) return raw.replace(/[\s\-()]/g, '');
+        return null;
+    }
+    const s = (raw || '').trim().toLowerCase();
+    return /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(s) ? s : null;
+}
+
+function _connectMsg(text, kind) {
+    const msg = document.getElementById('connect-banner-msg');
+    msg.className = 'connect-banner-msg' + (kind ? ' ' + kind : '');
+    msg.textContent = text;
+}
+
+async function connectSendOtp() {
+    _connectMsg('');
+    const target = _connectNormalise(document.getElementById('connect-input').value);
+    if (!target) { _connectMsg('Enter a valid ' + _connectChannel + '.', 'err'); return; }
+    _connectTarget = target;
+
+    const btn = document.getElementById('connect-send-btn');
+    btn.disabled = true; btn.textContent = 'Sending…';
+    try {
+        const resp = await fetch('/api/auth/method/send-otp', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ channel: _connectChannel, value: target }),
+        });
+        const data = await resp.json();
+        if (!data.success) { _connectMsg(data.error || 'Failed to send code.', 'err'); return; }
+        document.getElementById('connect-banner-step1').classList.add('hidden');
+        document.getElementById('connect-banner-step2').classList.remove('hidden');
+        _connectMsg('Code sent — enter it below.', 'ok');
+        document.getElementById('connect-code').focus();
+    } catch {
+        _connectMsg('Network error.', 'err');
+    } finally {
+        btn.disabled = false; btn.textContent = 'Send code';
+    }
+}
+
+async function connectVerifyOtp() {
+    _connectMsg('');
+    const code = document.getElementById('connect-code').value.trim();
+    if (code.length !== 6) { _connectMsg('Enter the 6-digit code.', 'err'); return; }
+
+    const btn = document.getElementById('connect-verify-btn');
+    btn.disabled = true; btn.textContent = 'Verifying…';
+    try {
+        const resp = await fetch('/api/auth/method/verify', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ channel: _connectChannel, value: _connectTarget, code }),
+        });
+        const data = await resp.json();
+        if (!data.success) { _connectMsg(data.error || 'Invalid code.', 'err'); return; }
+        _connectMsg('✓ ' + _connectChannel + ' connected!', 'ok');
+        setTimeout(() => { document.getElementById('connect-banner').style.display = 'none'; }, 1600);
+    } catch {
+        _connectMsg('Network error.', 'err');
+    } finally {
+        btn.disabled = false; btn.textContent = 'Verify';
+    }
 }
 
 // ── OCR ──────────────────────────────────────────────────────────────────────

@@ -162,12 +162,15 @@ _SQLITE_DDL = """
     );
     CREATE TABLE IF NOT EXISTS users (
         user_id    TEXT PRIMARY KEY,
-        phone      TEXT UNIQUE NOT NULL,
+        phone      TEXT,
+        email      TEXT,
         created_at REAL NOT NULL,
         last_login REAL
     );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_users_phone ON users(phone);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email ON users(email);
     CREATE TABLE IF NOT EXISTS otp_codes (
-        phone      TEXT PRIMARY KEY,
+        target     TEXT PRIMARY KEY,
         code       TEXT NOT NULL,
         expires_at REAL NOT NULL,
         used       INTEGER NOT NULL DEFAULT 0,
@@ -193,18 +196,19 @@ _MYSQL_DDL = """
     );
     CREATE TABLE IF NOT EXISTS users (
         user_id    VARCHAR(255) NOT NULL,
-        phone      VARCHAR(20)  UNIQUE NOT NULL,
+        phone      VARCHAR(20)  UNIQUE,
+        email      VARCHAR(255) UNIQUE,
         created_at DOUBLE       NOT NULL,
         last_login DOUBLE,
         PRIMARY KEY (user_id)
     );
     CREATE TABLE IF NOT EXISTS otp_codes (
-        phone      VARCHAR(20) NOT NULL,
-        code       CHAR(6)     NOT NULL,
-        expires_at DOUBLE      NOT NULL,
-        used       TINYINT     NOT NULL DEFAULT 0,
-        created_at DOUBLE      NOT NULL,
-        PRIMARY KEY (phone)
+        target     VARCHAR(255) NOT NULL,
+        code       CHAR(6)      NOT NULL,
+        expires_at DOUBLE       NOT NULL,
+        used       TINYINT      NOT NULL DEFAULT 0,
+        created_at DOUBLE       NOT NULL,
+        PRIMARY KEY (target)
     )
 """
 
@@ -232,7 +236,7 @@ if _MYSQL_URL:
         "REPLACE INTO link_codes (code, user_id, created_at) VALUES (%s, %s, %s)"
     )
     _SQL_UPSERT_OTP = """
-        INSERT INTO otp_codes (phone, code, expires_at, used, created_at)
+        INSERT INTO otp_codes (target, code, expires_at, used, created_at)
         VALUES (%s, %s, %s, 0, %s)
         ON DUPLICATE KEY UPDATE
             code       = VALUES(code),
@@ -260,9 +264,9 @@ else:
         "INSERT OR REPLACE INTO link_codes (code, user_id, created_at) VALUES (?, ?, ?)"
     )
     _SQL_UPSERT_OTP = """
-        INSERT INTO otp_codes (phone, code, expires_at, used, created_at)
+        INSERT INTO otp_codes (target, code, expires_at, used, created_at)
         VALUES (?, ?, ?, 0, ?)
-        ON CONFLICT(phone) DO UPDATE SET
+        ON CONFLICT(target) DO UPDATE SET
             code       = excluded.code,
             expires_at = excluded.expires_at,
             used       = 0,
@@ -271,16 +275,59 @@ else:
 
 # ── Schema migration helper ────────────────────────────────────────────────────
 
-def _migrate(conn) -> None:
-    """Drop and recreate the users table if it still has the old email+password schema."""
+def _table_exists(conn, table: str) -> bool:
     try:
-        conn.execute("SELECT phone FROM users LIMIT 1")
+        conn.execute(f"SELECT 1 FROM {table} LIMIT 1")
+        return True
     except Exception:
-        # Old schema (email+password) or table missing — drop and let DDL recreate it.
+        return False
+
+
+def _col_exists(conn, table: str, col: str) -> bool:
+    try:
+        conn.execute(f"SELECT {col} FROM {table} LIMIT 1")
+        return True
+    except Exception:
+        return False
+
+
+def _migrate(conn, is_mysql: bool) -> None:
+    """Bring an existing DB up to the current (phone + email) schema.
+
+    Handles every prior shape this project has shipped:
+      • email+password users table  → drop (DDL recreates it; old accounts wiped)
+      • phone-only users table       → ALTER ADD COLUMN email
+      • phone+email users table      → no-op
+      • otp_codes keyed by 'phone'   → drop (ephemeral; DDL recreates keyed by 'target')
+    Each step is best-effort; a fresh DB (no tables) falls straight through to DDL.
+    """
+    # users table
+    if _table_exists(conn, "users"):
+        if not _col_exists(conn, "users", "phone"):
+            # Oldest schema (email + password). Safe to wipe — predates real accounts.
+            try:
+                conn.execute("DROP TABLE IF EXISTS users")
+                conn.commit()
+                print("[user_store] migrated: dropped legacy email+password users table")
+            except Exception:
+                pass
+        elif not _col_exists(conn, "users", "email"):
+            try:
+                coltype = "VARCHAR(255)" if is_mysql else "TEXT"
+                conn.execute(f"ALTER TABLE users ADD COLUMN email {coltype}")
+                if is_mysql:
+                    # SQLite gets its unique index from the DDL below; MySQL needs it here.
+                    conn.execute("CREATE UNIQUE INDEX idx_users_email ON users(email)")
+                conn.commit()
+                print("[user_store] migrated: added email column to users")
+            except Exception as e:
+                print(f"[user_store] email-column migration skipped: {e}")
+
+    # otp_codes table — renamed key column phone → target; ephemeral, safe to drop
+    if _table_exists(conn, "otp_codes") and not _col_exists(conn, "otp_codes", "target"):
         try:
-            conn.execute("DROP TABLE IF EXISTS users")
+            conn.execute("DROP TABLE IF EXISTS otp_codes")
             conn.commit()
-            print("[user_store] migrated users table to phone-based schema")
         except Exception:
             pass
 
@@ -289,7 +336,7 @@ def _migrate(conn) -> None:
 
 if _MYSQL_URL:
     _conn: _MySQLDB | sqlite3.Connection = _MySQLDB(_MYSQL_URL)
-    _migrate(_conn)
+    _migrate(_conn, is_mysql=True)
     _conn.executescript(_MYSQL_DDL)
     print(f"[user_store] using MySQL backend: {_MYSQL_URL.split('@')[-1]}")
 else:
@@ -298,7 +345,7 @@ else:
     _conn = sqlite3.connect(str(_DB_DIR / "sessions.db"), check_same_thread=False)
     _conn.row_factory = sqlite3.Row
     _conn.execute("PRAGMA journal_mode=WAL")
-    _migrate(_conn)
+    _migrate(_conn, is_mysql=False)
     _conn.executescript(_SQLITE_DDL)
     _conn.commit()
     print("[user_store] using SQLite backend")
@@ -436,30 +483,72 @@ def consume_link_code(code: str) -> str | None:
 
 # ── User account CRUD ─────────────────────────────────────────────────────────
 
-def get_or_create_user(phone: str) -> str:
-    """Return the user_id for *phone*, creating a new account if none exists."""
+_CONTACT_COL = {"phone": "phone", "email": "email"}
+
+
+def _col(channel: str) -> str:
+    col = _CONTACT_COL.get(channel)
+    if not col:
+        raise ValueError(f"Unknown contact channel: {channel!r}")
+    return col
+
+
+def get_user_by_contact(channel: str, value: str) -> str | None:
+    """Return the user_id whose *channel* (phone|email) equals *value*, or None."""
+    col = _col(channel)
+    row = _conn.execute(
+        f"SELECT user_id FROM users WHERE {col}=?", (value,)
+    ).fetchone()
+    return row["user_id"] if row else None
+
+
+def get_or_create_user(channel: str, value: str) -> str:
+    """Return the user_id for (channel, value), creating an account if none exists."""
+    col = _col(channel)
     with _lock:
         row = _conn.execute(
-            "SELECT user_id FROM users WHERE phone=?", (phone,)
+            f"SELECT user_id FROM users WHERE {col}=?", (value,)
         ).fetchone()
         if row:
             return row["user_id"]
         uid = str(uuid.uuid4())
         _conn.execute(
-            "INSERT INTO users (user_id, phone, created_at) VALUES (?, ?, ?)",
-            (uid, phone, time.time()),
+            f"INSERT INTO users (user_id, {col}, created_at) VALUES (?, ?, ?)",
+            (uid, value, time.time()),
         )
         _conn.commit()
         return uid
 
 
+def attach_contact(user_id: str, channel: str, value: str) -> tuple[bool, str | None]:
+    """Attach a verified phone/email to an existing account.
+
+    Returns (True, None) on success, or (False, reason) if the contact is
+    already in use by a different account.
+    """
+    col = _col(channel)
+    with _lock:
+        owner = _conn.execute(
+            f"SELECT user_id FROM users WHERE {col}=?", (value,)
+        ).fetchone()
+        if owner and owner["user_id"] != user_id:
+            return False, "already linked to another account"
+        if owner and owner["user_id"] == user_id:
+            return True, None  # already attached to this user — idempotent
+        _conn.execute(
+            f"UPDATE users SET {col}=? WHERE user_id=?", (value, user_id)
+        )
+        _conn.commit()
+        return True, None
+
+
 def get_user_by_id(user_id: str) -> dict | None:
     row = _conn.execute(
-        "SELECT user_id, phone FROM users WHERE user_id=?", (user_id,)
+        "SELECT user_id, phone, email FROM users WHERE user_id=?", (user_id,)
     ).fetchone()
     if not row:
         return None
-    return {"user_id": row["user_id"], "phone": row["phone"]}
+    return {"user_id": row["user_id"], "phone": row["phone"], "email": row["email"]}
 
 
 def update_last_login(user_id: str) -> None:
@@ -472,33 +561,34 @@ def update_last_login(user_id: str) -> None:
 
 
 # ── OTP management ────────────────────────────────────────────────────────────
+# Keyed by "target" — a phone (+91…) or an email; the two never collide.
 
-def is_otp_rate_limited(phone: str) -> bool:
-    """True if an OTP was issued for *phone* within the last OTP_RATE seconds."""
+def is_otp_rate_limited(target: str) -> bool:
+    """True if an OTP was issued for *target* within the last OTP_RATE seconds."""
     row = _conn.execute(
-        "SELECT created_at FROM otp_codes WHERE phone=?", (phone,)
+        "SELECT created_at FROM otp_codes WHERE target=?", (target,)
     ).fetchone()
     if not row:
         return False
     return (time.time() - row["created_at"]) < _OTP_RATE
 
 
-def save_otp(phone: str, code: str) -> None:
-    """Upsert a fresh OTP for *phone*, replacing any existing entry."""
+def save_otp(target: str, code: str) -> None:
+    """Upsert a fresh OTP for *target*, replacing any existing entry."""
     with _lock:
         _conn.execute(
             _SQL_UPSERT_OTP,
-            (phone, code, time.time() + _OTP_TTL, time.time()),
+            (target, code, time.time() + _OTP_TTL, time.time()),
         )
         _conn.commit()
 
 
-def verify_and_consume_otp(phone: str, code: str) -> bool:
+def verify_and_consume_otp(target: str, code: str) -> bool:
     """Return True and mark the OTP used if *code* is valid and unexpired."""
     now = time.time()
     with _lock:
         row = _conn.execute(
-            "SELECT code, expires_at, used FROM otp_codes WHERE phone=?", (phone,)
+            "SELECT code, expires_at, used FROM otp_codes WHERE target=?", (target,)
         ).fetchone()
         if not row:
             return False
@@ -506,6 +596,6 @@ def verify_and_consume_otp(phone: str, code: str) -> bool:
             return False
         if row["code"] != code:
             return False
-        _conn.execute("UPDATE otp_codes SET used=1 WHERE phone=?", (phone,))
+        _conn.execute("UPDATE otp_codes SET used=1 WHERE target=?", (target,))
         _conn.commit()
         return True

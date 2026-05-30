@@ -20,6 +20,7 @@ Mobile auth is unchanged: user_id is sent in the request body.
 """
 
 import asyncio
+import json
 import os
 import uuid
 from contextlib import asynccontextmanager
@@ -31,6 +32,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Resp
 
 import auth
 import auth_browser
+import email_sender
 import ocr as ocr_module
 import ranker
 import sms
@@ -46,15 +48,20 @@ _SESSION_MAX_AGE = auth.SESSION_TTL   # 6 days
 
 
 def _serve_index(user_id: str) -> HTMLResponse:
-    """Serve index.html with the authenticated user_id injected as a script tag."""
+    """Serve index.html with the authenticated user injected as a script tag."""
     if _INDEX_HTML.exists():
         html = _INDEX_HTML.read_text(encoding="utf-8")
-        # The placeholder comment is replaced server-side so the JS never needs
-        # to make an extra /api/auth/me round-trip on page load.
-        html = html.replace(
-            "<!-- USER_ID_PLACEHOLDER -->",
-            f'<script>window._SERVER_USER_ID = {repr(user_id)};</script>',
+        # The placeholder is replaced server-side so the JS never needs an extra
+        # /api/auth/me round-trip on page load. We inject the full user object
+        # (phone/email) so the page can show the "connect your other method" banner.
+        user = user_store.get_user_by_id(user_id) or {
+            "user_id": user_id, "phone": None, "email": None,
+        }
+        inject = (
+            f"<script>window._SERVER_USER = {json.dumps(user)};"
+            f"window._SERVER_USER_ID = {json.dumps(user_id)};</script>"
         )
+        html = html.replace("<!-- USER_ID_PLACEHOLDER -->", inject)
         return HTMLResponse(content=html)
     return HTMLResponse(f"""<!DOCTYPE html><html><body>
 <h1>scan2order</h1><p>Backend running. <a href="/login">Login</a></p>
@@ -193,59 +200,166 @@ async def login_page(request: Request):
 
 
 # ── User account endpoints ────────────────────────────────────────────────────
+# Passwordless: log in with either a phone (SMS OTP) or an email (email OTP).
+# A masked label for logs that never leaks the full contact.
+
+def _mask(channel: str, value: str) -> str:
+    if channel == "email":
+        return value.split("@")[0][:2] + "***@" + value.split("@")[-1]
+    return value[:4] + "****"
+
+
+def _send_otp_via(channel: str, target: str, code: str) -> bool:
+    """Dispatch an OTP to the right transport for *channel*."""
+    if channel == "email":
+        return email_sender.send_otp(target, code)
+    return sms.send_otp(target, code)
+
+
+def _channel_value(body: dict) -> tuple[str | None, str | None]:
+    """Pull (channel, normalised_value) from a request body.
+
+    Accepts an explicit {channel, value}, or legacy {phone} / {email} keys.
+    Returns (None, None) if neither a valid channel nor value is present.
+    """
+    channel = (body.get("channel") or "").strip().lower()
+    raw = body.get("value")
+    if not channel:
+        if body.get("email") is not None:
+            channel, raw = "email", body.get("email")
+        elif body.get("phone") is not None:
+            channel, raw = "phone", body.get("phone")
+    if channel not in ("phone", "email"):
+        return None, None
+    return channel, auth.normalize_contact(channel, raw or "")
+
 
 @app.post("/api/auth/send-otp")
 async def api_send_otp(request: Request):
-    """Send a 6-digit SMS OTP to the given phone number.
+    """Send a 6-digit OTP to a phone (SMS) or email.
 
-    Body: {phone}
-    Rate-limited to one request per 60 seconds per phone.
+    Body: {channel: "phone"|"email", value} — or legacy {phone} / {email}.
+    Rate-limited to one request per 60 seconds per target.
     """
     body = await request.json()
-    phone = auth.normalize_phone(body.get("phone", ""))
-    if not phone:
-        return JSONResponse({"success": False, "error": "Invalid phone number"})
+    channel, target = _channel_value(body)
+    if not channel:
+        return JSONResponse({"success": False, "error": "Specify a phone or email"})
+    if not target:
+        label = "email address" if channel == "email" else "phone number"
+        return JSONResponse({"success": False, "error": f"Invalid {label}"})
 
-    if user_store.is_otp_rate_limited(phone):
+    if user_store.is_otp_rate_limited(target):
         return JSONResponse({"success": False,
                              "error": "Please wait 60 seconds before requesting a new code"})
 
     code = auth.generate_otp()
-    user_store.save_otp(phone, code)
+    user_store.save_otp(target, code)
 
-    ok = sms.send_otp(phone, code)
-    if not ok:
+    if not _send_otp_via(channel, target, code):
+        dest = "email" if channel == "email" else "SMS"
         return JSONResponse({"success": False,
-                             "error": "Failed to send SMS. Check server Twilio config."})
+                             "error": f"Failed to send {dest}. Check server config."})
 
-    print(f"[auth] OTP sent to {phone[:4]}****")
+    print(f"[auth] OTP sent via {channel} to {_mask(channel, target)}")
     return JSONResponse({"success": True})
 
 
 @app.post("/api/auth/verify-otp")
 async def api_verify_otp(request: Request):
-    """Verify the SMS OTP. Creates the account if new, sets session cookie.
+    """Verify a login OTP. Creates the account if new, sets the session cookie.
 
-    Body: {phone, code}
-    On success: sets session cookie, returns {success, user_id}.
+    Body: {channel, value, code} — or legacy {phone, code} / {email, code}.
     """
     body = await request.json()
-    phone = auth.normalize_phone(body.get("phone", ""))
-    code  = str(body.get("code", "")).strip()
+    channel, target = _channel_value(body)
+    code = str(body.get("code", "")).strip()
 
-    if not phone or not code:
-        return JSONResponse({"success": False, "error": "Phone and code required"})
+    if not channel or not target:
+        return JSONResponse({"success": False, "error": "Phone/email and code required"})
+    if not code:
+        return JSONResponse({"success": False, "error": "Code required"})
 
-    if not user_store.verify_and_consume_otp(phone, code):
+    if not user_store.verify_and_consume_otp(target, code):
         return JSONResponse({"success": False, "error": "Invalid or expired code"})
 
-    user_id = user_store.get_or_create_user(phone)
+    user_id = user_store.get_or_create_user(channel, target)
     user_store.update_last_login(user_id)
 
     resp = JSONResponse({"success": True, "user_id": user_id})
     _set_session_cookie(resp, user_id)
-    print(f"[auth] verified: {phone[:4]}**** → {user_id[:8]}…")
+    print(f"[auth] login via {channel} ({_mask(channel, target)}) → {user_id[:8]}…")
     return resp
+
+
+@app.post("/api/auth/method/send-otp")
+async def api_method_send_otp(request: Request):
+    """Send an OTP to verify a SECOND contact method for the logged-in user.
+
+    Body: {channel, value}. Requires an authenticated session.
+    Rejects contacts already attached to a different account up-front.
+    """
+    user_id = _get_session_user(request)
+    if not user_id:
+        return JSONResponse({"success": False, "error": "Not signed in"}, status_code=401)
+
+    body = await request.json()
+    channel, target = _channel_value(body)
+    if not channel:
+        return JSONResponse({"success": False, "error": "Specify a phone or email"})
+    if not target:
+        label = "email address" if channel == "email" else "phone number"
+        return JSONResponse({"success": False, "error": f"Invalid {label}"})
+
+    owner = user_store.get_user_by_contact(channel, target)
+    if owner and owner != user_id:
+        return JSONResponse({"success": False,
+                             "error": f"That {channel} is already linked to another account"})
+    if owner == user_id:
+        return JSONResponse({"success": False,
+                             "error": f"That {channel} is already on your account"})
+
+    if user_store.is_otp_rate_limited(target):
+        return JSONResponse({"success": False,
+                             "error": "Please wait 60 seconds before requesting a new code"})
+
+    code = auth.generate_otp()
+    user_store.save_otp(target, code)
+    if not _send_otp_via(channel, target, code):
+        dest = "email" if channel == "email" else "SMS"
+        return JSONResponse({"success": False, "error": f"Failed to send {dest}."})
+
+    print(f"[auth] link OTP via {channel} to {_mask(channel, target)} for {user_id[:8]}…")
+    return JSONResponse({"success": True})
+
+
+@app.post("/api/auth/method/verify")
+async def api_method_verify(request: Request):
+    """Verify the OTP and attach the new contact method to the logged-in user.
+
+    Body: {channel, value, code}. Requires an authenticated session.
+    """
+    user_id = _get_session_user(request)
+    if not user_id:
+        return JSONResponse({"success": False, "error": "Not signed in"}, status_code=401)
+
+    body = await request.json()
+    channel, target = _channel_value(body)
+    code = str(body.get("code", "")).strip()
+    if not channel or not target:
+        return JSONResponse({"success": False, "error": "Phone/email and code required"})
+    if not code:
+        return JSONResponse({"success": False, "error": "Code required"})
+
+    if not user_store.verify_and_consume_otp(target, code):
+        return JSONResponse({"success": False, "error": "Invalid or expired code"})
+
+    ok, reason = user_store.attach_contact(user_id, channel, target)
+    if not ok:
+        return JSONResponse({"success": False, "error": reason or "Could not link"})
+
+    print(f"[auth] linked {channel} ({_mask(channel, target)}) to {user_id[:8]}…")
+    return JSONResponse({"success": True})
 
 
 @app.post("/api/auth/logout")
@@ -267,7 +381,7 @@ async def api_me(request: Request):
         resp = JSONResponse({"error": "user not found"}, status_code=401)
         resp.delete_cookie(auth.COOKIE_NAME)
         return resp
-    return {"user_id": user["user_id"], "phone": user["phone"]}
+    return {"user_id": user["user_id"], "phone": user["phone"], "email": user["email"]}
 
 
 # ── Store-session auth endpoints ──────────────────────────────────────────────
@@ -499,7 +613,7 @@ async def mobile_scan(image: UploadFile = File(...)):
     """Mobile compat: POST /scan - OCR image → {success, items: [str]}."""
     try:
         raw = await image.read()
-        result = ocr_module.extract_grocery_list(raw)
+        result = await ocr_module.extract_grocery_list(raw)
         if "error" in result:
             return {"success": False, "error": result["error"], "items": []}
         return {"success": True, "items": result["items"]}
@@ -652,10 +766,10 @@ async def mobile_order(request: Request):
 
 @app.post("/api/ocr")
 async def api_ocr(image: UploadFile = File(...)):
-    """Extract grocery list items from an uploaded image via Tesseract."""
+    """Extract grocery list items from an uploaded image (vision LLM, Tesseract fallback)."""
     try:
         raw = await image.read()
-        result = ocr_module.extract_grocery_list(raw)
+        result = await ocr_module.extract_grocery_list(raw)
         if "error" in result:
             return {"error": result["error"], "items": []}
         return {"raw_text": result.get("raw_text", ""), "items": result["items"]}

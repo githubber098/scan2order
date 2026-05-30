@@ -42,12 +42,15 @@ CREATE TABLE IF NOT EXISTS link_codes (
 );
 CREATE TABLE IF NOT EXISTS users (
     user_id    TEXT PRIMARY KEY,
-    phone      TEXT UNIQUE NOT NULL,
+    phone      TEXT,
+    email      TEXT,
     created_at REAL NOT NULL,
     last_login REAL
 );
+CREATE UNIQUE INDEX IF NOT EXISTS idx_users_phone ON users(phone);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email ON users(email);
 CREATE TABLE IF NOT EXISTS otp_codes (
-    phone      TEXT PRIMARY KEY,
+    target     TEXT PRIMARY KEY,
     code       TEXT NOT NULL,
     expires_at REAL NOT NULL,
     used       INTEGER NOT NULL DEFAULT 0,

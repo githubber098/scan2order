@@ -73,6 +73,29 @@ def normalize_phone(raw: str) -> str | None:
     return None
 
 
+_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
+
+def normalize_email(raw: str) -> str | None:
+    """Validate and normalise an email address (lowercased, trimmed).
+
+    Returns None if it does not look like a valid address.
+    """
+    s = (raw or "").strip().lower()
+    if not s or len(s) > 254:
+        return None
+    return s if _EMAIL_RE.match(s) else None
+
+
+def normalize_contact(channel: str, value: str) -> str | None:
+    """Normalise *value* according to *channel* ('phone' or 'email')."""
+    if channel == "phone":
+        return normalize_phone(value)
+    if channel == "email":
+        return normalize_email(value)
+    return None
+
+
 # ── Session tokens ────────────────────────────────────────────────────────────
 
 def create_session_token(user_id: str) -> str:

@@ -10,8 +10,8 @@ Scan a handwritten list → find the cheapest basket across all three stores →
 ```
 Mobile app (React Native)              Web UI (browser)
   │                                      │
-  ├─ Email + password login              ├─ Email + password login
-  │  (or via shared 8-char link code)    │  (HMAC-signed session cookie)
+  ├─ Store login via WebView             ├─ Phone or email OTP login
+  │  (or share an 8-char link code)      │  (HMAC-signed session cookie)
   │                                      │
   ├─ Connect a store:                    ├─ Connect Blinkit / Zepto:
   │  opens BigBasket/Blinkit/Zepto in    │  Playwright headless Chromium
@@ -37,12 +37,12 @@ Backend is FastAPI + httpx for store API calls + Playwright only for the login r
 | Concern | Implementation |
 |---|---|
 | Web framework | FastAPI + uvicorn |
-| User auth | Email + PBKDF2-SHA256 password; HMAC-SHA256 signed session cookie (6-day TTL) |
+| User auth | Passwordless — phone (Twilio SMS) or email (SMTP) 6-digit OTP; HMAC-SHA256 signed session cookie (6-day TTL). One account can hold both a phone and an email. |
 | Session storage | SQLite at `data/sessions.db` (default), or MySQL/MariaDB if `MYSQL_URL` is set |
 | Store API calls | httpx — no Playwright in the request path |
 | Browser login relay | Playwright headless Chromium for Blinkit and Zepto only |
-| OCR | Tesseract |
-| LLM ranking fallback | Local Ollama (default `llama3.2:3b`); only fires when the algorithmic ranker finds no winner |
+| OCR | Vision LLM (Gemma 4 via Ollama) reads handwriting; Tesseract fallback. `OCR_BACKEND`=auto/ollama/tesseract |
+| LLM ranking fallback | Local Ollama (default `gemma4:e2b` — the **same** model as OCR); only fires when the algorithmic ranker finds no winner |
 | Deployment | Docker + docker-compose on a homeserver, optionally fronted by Cloudflare Tunnel |
 | CI / auto-deploy | systemd timer that `git pull`s every 30 s and rebuilds on change |
 
@@ -127,8 +127,12 @@ If you want the LLM fallback, run Ollama separately and set `OLLAMA_HOST=http://
 | Variable | Required | Description |
 |---|---|---|
 | `SECRET_KEY` | **Production** | Hex string used to sign session cookies. Without this, all users are logged out on every restart. Generate with `python -c "import secrets; print(secrets.token_hex(32))"`. |
-| `OLLAMA_HOST` | No | Defaults to `http://ollama:11434` in docker-compose. Set to `http://localhost:11434` for local-without-Docker. |
-| `OLLAMA_MODEL` | No | Defaults to `llama3.2:3b`. |
+| `TWILIO_ACCOUNT_SID` / `TWILIO_AUTH_TOKEN` / `TWILIO_FROM_NUMBER` | For phone login | Twilio creds for sending SMS OTP. If unset, OTP codes are printed to the server log (dev fallback). |
+| `SMTP_HOST` / `SMTP_PORT` / `SMTP_USER` / `SMTP_PASS` / `SMTP_FROM` | For email login | SMTP creds for sending email OTP (any provider). If unset, OTP codes are printed to the server log (dev fallback). |
+| `OLLAMA_HOST` | No | Defaults to `http://ollama:11434` in docker-compose. Set to `http://localhost:11434` for local-without-Docker. Required for the vision-LLM OCR path. |
+| `OLLAMA_MODEL` | No | Defaults to `gemma4:e2b` — serves both OCR and ranking. Bump to `gemma4:e4b` for accuracy if RAM allows. Not auto-pulled (`ollama pull` it). |
+| `OCR_BACKEND` | No | `auto` (default — vision LLM, Tesseract fallback), `ollama`, or `tesseract`. |
+| `OCR_VISION_MODEL` | No | Override the OCR model only (defaults to `OLLAMA_MODEL`). |
 | `MYSQL_URL` | No | If set, uses MySQL/MariaDB instead of SQLite. Format: `mysql://user:pass@host:3306/db`. |
 | `LOG_API_KEY` | No | Enables `GET /api/logs?key=...&n=300` for remote log access. |
 | `PORT` | No | Defaults to 8000. |
@@ -142,7 +146,7 @@ pip install -r backend/requirements-test.txt
 pytest
 ```
 
-The suite has 238 tests covering auth, the compare pipeline, the cart pipeline, OCR, ranker, the user-store layer, browser-relay wiring, the `/api/logs` endpoint, and 18 multi-user concurrency tests. No real network calls — Playwright and store APIs are mocked.
+The suite has 265 tests covering phone/email OTP auth + second-method linking, the OCR backend dispatcher, the compare pipeline, the cart pipeline, ranker, the user-store layer, browser-relay wiring, the `/api/logs` endpoint, and 18 multi-user concurrency tests. No real network calls — Playwright, store APIs, SMS, and email are mocked or fall back to logging.
 
 ---
 
@@ -151,13 +155,15 @@ The suite has 238 tests covering auth, the compare pipeline, the cart pipeline, 
 | Method | Path | Description |
 |---|---|---|
 | `GET` | `/` | Web UI (redirects to `/login` if no session) |
-| `GET` | `/login` | Sign-in / sign-up page |
+| `GET` | `/login` | Phone/email OTP sign-in page |
 | `GET` | `/health` | Liveness check |
 | `GET` | `/api/version` | Version string |
-| `POST` | `/api/auth/signup` | Create account |
-| `POST` | `/api/auth/login` | Sign in |
+| `POST` | `/api/auth/send-otp` | Send a login OTP to a phone or email (`{channel, value}`) |
+| `POST` | `/api/auth/verify-otp` | Verify OTP, create-or-login the user, set session cookie |
+| `POST` | `/api/auth/method/send-otp` | (auth'd) Send OTP to link a 2nd method to the account |
+| `POST` | `/api/auth/method/verify` | (auth'd) Verify & attach the 2nd method |
 | `POST` | `/api/auth/logout` | Sign out |
-| `GET` | `/api/auth/me` | Current user info |
+| `GET` | `/api/auth/me` | Current user info (user_id + phone + email) |
 | `POST` | `/api/auth/connect` | Persist cookies for a (user, store) pair |
 | `GET` | `/api/auth/status/{user_id}` | Which stores are connected |
 | `POST` | `/api/auth/link` | Generate 8-char link code (mobile → web) |

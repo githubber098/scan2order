@@ -19,7 +19,7 @@
 
         .container { width: 100%; max-width: 380px; }
 
-        .logo { text-align: center; margin-bottom: 36px; }
+        .logo { text-align: center; margin-bottom: 32px; }
         .logo h1 {
             font-size: 26px;
             background: linear-gradient(135deg, #4ecdc4, #2db5ad);
@@ -33,142 +33,104 @@
             background: #111122;
             border: 1px solid #222;
             border-radius: 14px;
-            padding: 28px 24px;
+            padding: 26px 24px;
         }
 
-        .step-label {
-            font-size: 13px;
-            color: #4ecdc4;
-            font-weight: 600;
-            letter-spacing: 0.3px;
-            margin-bottom: 6px;
-        }
-        .step-title {
-            font-size: 18px;
-            font-weight: 700;
-            color: #eee;
-            margin-bottom: 6px;
-        }
-        .step-sub {
-            font-size: 13px;
-            color: #667;
+        /* Channel toggle (Phone / Email) */
+        .toggle {
+            display: flex;
+            background: #0a0a1a;
+            border: 1px solid #222;
+            border-radius: 11px;
+            padding: 4px;
             margin-bottom: 22px;
-            line-height: 1.5;
         }
+        .toggle button {
+            flex: 1;
+            padding: 9px;
+            border: none;
+            border-radius: 8px;
+            background: none;
+            color: #667;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background 0.15s, color 0.15s;
+            font-family: inherit;
+        }
+        .toggle button.active {
+            background: linear-gradient(135deg, #4ecdc4, #2db5ad);
+            color: #001;
+        }
+
+        .step-label { font-size: 13px; color: #4ecdc4; font-weight: 600; margin-bottom: 6px; }
+        .step-title { font-size: 18px; font-weight: 700; color: #eee; margin-bottom: 6px; }
+        .step-sub { font-size: 13px; color: #667; margin-bottom: 20px; line-height: 1.5; }
         .step-sub span { color: #4ecdc4; }
 
         .field { margin-bottom: 14px; }
         .field label {
-            display: block;
-            font-size: 11px;
-            color: #888;
-            margin-bottom: 6px;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
+            display: block; font-size: 11px; color: #888; margin-bottom: 6px;
+            text-transform: uppercase; letter-spacing: 0.5px;
         }
+        .field input {
+            width: 100%; padding: 12px 14px; background: #0a0a1a;
+            border: 1px solid #333; border-radius: 10px; color: #eee;
+            font-size: 16px; font-family: inherit; transition: border-color 0.15s;
+        }
+        .field input:focus { outline: none; border-color: #4ecdc4; }
+        .field input::placeholder { color: #444; }
 
         /* Phone input with +91 prefix */
         .phone-wrap {
-            display: flex;
-            background: #0a0a1a;
-            border: 1px solid #333;
-            border-radius: 10px;
-            overflow: hidden;
-            transition: border-color 0.15s;
+            display: flex; background: #0a0a1a; border: 1px solid #333;
+            border-radius: 10px; overflow: hidden; transition: border-color 0.15s;
         }
         .phone-wrap:focus-within { border-color: #4ecdc4; }
         .phone-prefix {
-            padding: 12px 12px 12px 14px;
-            color: #4ecdc4;
-            font-size: 15px;
-            font-weight: 600;
-            background: transparent;
-            border-right: 1px solid #222;
-            white-space: nowrap;
-            user-select: none;
+            padding: 12px 12px 12px 14px; color: #4ecdc4; font-size: 15px;
+            font-weight: 600; border-right: 1px solid #222; white-space: nowrap; user-select: none;
         }
         .phone-wrap input {
-            flex: 1;
-            padding: 12px 14px;
-            background: transparent;
-            border: none;
-            color: #eee;
-            font-size: 16px;
-            font-family: inherit;
-            letter-spacing: 1px;
+            flex: 1; padding: 12px 14px; background: transparent; border: none;
+            color: #eee; font-size: 16px; font-family: inherit; letter-spacing: 1px;
         }
         .phone-wrap input:focus { outline: none; }
         .phone-wrap input::placeholder { color: #444; letter-spacing: 0; }
 
-        /* OTP code input */
         .otp-input {
-            width: 100%;
-            padding: 14px;
-            background: #0a0a1a;
-            border: 1px solid #333;
-            border-radius: 10px;
-            color: #eee;
-            font-size: 28px;
-            font-weight: 700;
-            font-family: 'SF Mono', 'Fira Code', monospace;
-            letter-spacing: 10px;
-            text-align: center;
-            transition: border-color 0.15s;
+            width: 100%; padding: 14px; background: #0a0a1a; border: 1px solid #333;
+            border-radius: 10px; color: #eee; font-size: 28px; font-weight: 700;
+            font-family: 'SF Mono', 'Fira Code', monospace; letter-spacing: 10px;
+            text-align: center; transition: border-color 0.15s;
         }
         .otp-input:focus { outline: none; border-color: #4ecdc4; }
         .otp-input::placeholder { font-size: 18px; letter-spacing: 4px; color: #333; }
 
         .btn-primary {
-            width: 100%;
-            padding: 14px;
-            margin-top: 4px;
-            border: none;
-            border-radius: 12px;
-            font-size: 15px;
-            font-weight: 600;
-            cursor: pointer;
-            background: linear-gradient(135deg, #4ecdc4, #2db5ad);
-            color: #001;
-            transition: opacity 0.15s;
-            font-family: inherit;
+            width: 100%; padding: 14px; margin-top: 4px; border: none;
+            border-radius: 12px; font-size: 15px; font-weight: 600; cursor: pointer;
+            background: linear-gradient(135deg, #4ecdc4, #2db5ad); color: #001;
+            transition: opacity 0.15s; font-family: inherit;
         }
         .btn-primary:disabled { opacity: 0.45; cursor: not-allowed; }
 
         .btn-ghost {
-            width: 100%;
-            padding: 11px;
-            margin-top: 8px;
-            border: 1px solid #333;
-            border-radius: 12px;
-            font-size: 13px;
-            font-weight: 500;
-            cursor: pointer;
-            background: transparent;
-            color: #778;
-            transition: color 0.15s, border-color 0.15s;
+            width: 100%; padding: 11px; margin-top: 8px; border: 1px solid #333;
+            border-radius: 12px; font-size: 13px; font-weight: 500; cursor: pointer;
+            background: transparent; color: #778; transition: color 0.15s, border-color 0.15s;
             font-family: inherit;
         }
         .btn-ghost:hover:not(:disabled) { color: #aaa; border-color: #444; }
         .btn-ghost:disabled { opacity: 0.4; cursor: not-allowed; }
 
         .error-msg {
-            display: none;
-            margin-top: 12px;
-            padding: 10px 14px;
-            background: #1a0808;
-            border-left: 3px solid #e24b4a;
-            border-radius: 6px;
-            font-size: 13px;
-            color: #e24b4a;
+            display: none; margin-top: 12px; padding: 10px 14px; background: #1a0808;
+            border-left: 3px solid #e24b4a; border-radius: 6px; font-size: 13px; color: #e24b4a;
         }
         .error-msg.visible { display: block; }
 
-        .countdown {
-            text-align: center;
-            font-size: 12px;
-            color: #556;
-            margin-top: 14px;
-        }
+        .countdown { text-align: center; font-size: 12px; color: #556; margin-top: 14px; }
         .countdown span { color: #4ecdc4; font-weight: 600; }
 
         .hidden { display: none; }
@@ -183,56 +145,54 @@
 
     <div class="card">
 
-        <!-- Step 1: phone number -->
-        <div id="step-phone">
-            <div class="step-label">Step 1 of 2</div>
-            <div class="step-title">Enter your phone</div>
-            <div class="step-sub">We'll send a one-time code via SMS.</div>
+        <!-- Step 1: choose channel + enter contact -->
+        <div id="step-contact">
+            <div class="toggle">
+                <button id="ch-phone" class="active" onclick="switchChannel('phone')">📱 Phone</button>
+                <button id="ch-email" onclick="switchChannel('email')">✉️ Email</button>
+            </div>
 
-            <div class="field">
+            <div class="step-title">Sign in or sign up</div>
+            <div class="step-sub" id="contact-sub">We'll text you a one-time code.</div>
+
+            <!-- Phone field -->
+            <div class="field" id="field-phone">
                 <label for="phone-input">Phone number</label>
                 <div class="phone-wrap">
                     <span class="phone-prefix">+91</span>
-                    <input type="tel" id="phone-input"
-                           placeholder="98765 43210"
-                           maxlength="10"
-                           inputmode="numeric"
-                           autocomplete="tel-national">
+                    <input type="tel" id="phone-input" placeholder="98765 43210"
+                           maxlength="10" inputmode="numeric" autocomplete="tel-national">
                 </div>
             </div>
 
-            <button class="btn-primary" id="send-btn" onclick="handleSendOtp()">
-                Send code
-            </button>
-            <div class="error-msg" id="phone-error"></div>
+            <!-- Email field -->
+            <div class="field hidden" id="field-email">
+                <label for="email-input">Email address</label>
+                <input type="email" id="email-input" placeholder="you@example.com"
+                       autocomplete="email">
+            </div>
+
+            <button class="btn-primary" id="send-btn" onclick="handleSendOtp()">Send code</button>
+            <div class="error-msg" id="contact-error"></div>
         </div>
 
-        <!-- Step 2: OTP code -->
+        <!-- Step 2: enter OTP -->
         <div id="step-otp" class="hidden">
-            <div class="step-label">Step 2 of 2</div>
             <div class="step-title">Enter the code</div>
-            <div class="step-sub" id="otp-sub">
-                Sent to <span id="otp-phone-display"></span>
-            </div>
+            <div class="step-sub">Sent to <span id="otp-target-display"></span></div>
 
             <div class="field">
                 <label for="otp-input">6-digit code</label>
-                <input type="text" id="otp-input" class="otp-input"
-                       placeholder="——————"
-                       maxlength="6"
-                       inputmode="numeric"
-                       autocomplete="one-time-code">
+                <input type="text" id="otp-input" class="otp-input" placeholder="——————"
+                       maxlength="6" inputmode="numeric" autocomplete="one-time-code">
             </div>
 
-            <button class="btn-primary" id="verify-btn" onclick="handleVerifyOtp()">
-                Verify
-            </button>
-            <button class="btn-ghost" id="resend-btn" disabled onclick="handleResend()">
-                Resend code
-            </button>
+            <button class="btn-primary" id="verify-btn" onclick="handleVerifyOtp()">Verify</button>
+            <button class="btn-ghost" id="back-btn" onclick="resetToStep1()">← Use a different phone/email</button>
             <div class="error-msg" id="otp-error"></div>
             <div class="countdown" id="countdown-wrap">
-                Resend available in <span id="countdown-sec">60</span>s
+                <span id="countdown-text"></span>
+                <button class="btn-ghost hidden" id="resend-btn" onclick="handleResend()">Resend code</button>
             </div>
         </div>
 
@@ -240,7 +200,8 @@
 </div>
 
 <script>
-let _phone = '';        // normalised E.164 phone
+let _channel = 'phone';   // 'phone' | 'email'
+let _target  = '';        // normalised value sent to the server
 let _resendTimer = null;
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -250,109 +211,116 @@ function showError(id, msg) {
     el.textContent = msg;
     el.classList.add('visible');
 }
-
-function hideError(id) {
-    document.getElementById(id).classList.remove('visible');
-}
+function hideError(id) { document.getElementById(id).classList.remove('visible'); }
 
 function normalisePhone(raw) {
-    // Accept 10-digit Indian numbers (with or without leading 0)
-    const digits = raw.replace(/\D/g, '');
-    if (digits.length === 10 && /^[6-9]/.test(digits)) return '+91' + digits;
-    if (digits.length === 11 && digits.startsWith('0')) {
-        const d = digits.slice(1);
-        if (/^[6-9]/.test(d)) return '+91' + d;
-    }
-    if (digits.length === 12 && digits.startsWith('91')) return '+' + digits;
+    const d = raw.replace(/\D/g, '');
+    if (d.length === 10 && /^[6-9]/.test(d)) return '+91' + d;
+    if (d.length === 11 && d.startsWith('0') && /^[6-9]/.test(d.slice(1))) return '+91' + d.slice(1);
+    if (d.length === 12 && d.startsWith('91')) return '+' + d;
     return null;
+}
+function normaliseEmail(raw) {
+    const s = raw.trim().toLowerCase();
+    return /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(s) ? s : null;
+}
+
+// ── Channel toggle ──────────────────────────────────────────────────────────
+
+function switchChannel(ch) {
+    _channel = ch;
+    const isPhone = ch === 'phone';
+    document.getElementById('ch-phone').classList.toggle('active', isPhone);
+    document.getElementById('ch-email').classList.toggle('active', !isPhone);
+    document.getElementById('field-phone').classList.toggle('hidden', !isPhone);
+    document.getElementById('field-email').classList.toggle('hidden', isPhone);
+    document.getElementById('contact-sub').textContent =
+        isPhone ? "We'll text you a one-time code." : "We'll email you a one-time code.";
+    hideError('contact-error');
+    (isPhone ? document.getElementById('phone-input')
+             : document.getElementById('email-input')).focus();
 }
 
 // ── Step 1: send OTP ──────────────────────────────────────────────────────────
 
 async function handleSendOtp() {
-    hideError('phone-error');
-    const raw = document.getElementById('phone-input').value.trim();
-    const phone = normalisePhone(raw);
-    if (!phone) {
-        showError('phone-error', 'Enter a valid 10-digit Indian mobile number.');
-        return;
+    hideError('contact-error');
+    let target;
+    if (_channel === 'phone') {
+        target = normalisePhone(document.getElementById('phone-input').value);
+        if (!target) return showError('contact-error', 'Enter a valid 10-digit Indian mobile number.');
+    } else {
+        target = normaliseEmail(document.getElementById('email-input').value);
+        if (!target) return showError('contact-error', 'Enter a valid email address.');
     }
-    _phone = phone;
+    _target = target;
 
     const btn = document.getElementById('send-btn');
-    btn.disabled = true;
-    btn.textContent = 'Sending…';
-
+    btn.disabled = true; btn.textContent = 'Sending…';
     try {
         const resp = await fetch('/api/auth/send-otp', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ phone }),
+            body: JSON.stringify({ channel: _channel, value: target }),
         });
         const data = await resp.json();
-        if (!data.success) {
-            showError('phone-error', data.error || 'Failed to send code.');
-            return;
-        }
-        showStep2(phone);
+        if (!data.success) return showError('contact-error', data.error || 'Failed to send code.');
+        showStep2();
     } catch {
-        showError('phone-error', 'Network error. Please try again.');
+        showError('contact-error', 'Network error. Please try again.');
     } finally {
-        btn.disabled = false;
-        btn.textContent = 'Send code';
+        btn.disabled = false; btn.textContent = 'Send code';
     }
 }
 
-function showStep2(phone) {
-    document.getElementById('step-phone').classList.add('hidden');
+function showStep2() {
+    document.getElementById('step-contact').classList.add('hidden');
     document.getElementById('step-otp').classList.remove('hidden');
-
-    // Display the phone number in the subtitle
-    const display = phone.replace('+91', '+91 ').replace(/(\d{5})(\d{5})$/, '$1 $2');
-    document.getElementById('otp-phone-display').textContent = display;
-
+    let display = _target;
+    if (_channel === 'phone') display = _target.replace(/^\+91/, '+91 ').replace(/(\d{5})(\d{5})$/, '$1 $2');
+    document.getElementById('otp-target-display').textContent = display;
+    document.getElementById('otp-input').value = '';
     document.getElementById('otp-input').focus();
     startResendTimer();
+}
+
+function resetToStep1() {
+    document.getElementById('step-otp').classList.add('hidden');
+    document.getElementById('step-contact').classList.remove('hidden');
+    hideError('otp-error');
+    if (_resendTimer) clearInterval(_resendTimer);
 }
 
 // ── Step 2: verify OTP ────────────────────────────────────────────────────────
 
 document.addEventListener('DOMContentLoaded', () => {
-    // Auto-submit when 6 digits are entered
     document.getElementById('otp-input').addEventListener('input', (e) => {
         e.target.value = e.target.value.replace(/\D/g, '').slice(0, 6);
         if (e.target.value.length === 6) handleVerifyOtp();
     });
-    document.getElementById('phone-input').addEventListener('keydown', (e) => {
-        if (e.key === 'Enter') handleSendOtp();
-    });
     document.getElementById('phone-input').addEventListener('input', (e) => {
-        // Only allow digits
         e.target.value = e.target.value.replace(/\D/g, '').slice(0, 10);
     });
+    document.getElementById('phone-input').addEventListener('keydown', (e) => { if (e.key === 'Enter') handleSendOtp(); });
+    document.getElementById('email-input').addEventListener('keydown', (e) => { if (e.key === 'Enter') handleSendOtp(); });
 });
 
 async function handleVerifyOtp() {
     hideError('otp-error');
     const code = document.getElementById('otp-input').value.trim();
-    if (code.length !== 6) {
-        showError('otp-error', 'Enter the 6-digit code from your SMS.');
-        return;
-    }
+    if (code.length !== 6) return showError('otp-error', 'Enter the 6-digit code.');
 
     const btn = document.getElementById('verify-btn');
-    btn.disabled = true;
-    btn.textContent = 'Verifying…';
-
+    btn.disabled = true; btn.textContent = 'Verifying…';
     try {
         const resp = await fetch('/api/auth/verify-otp', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ phone: _phone, code }),
+            body: JSON.stringify({ channel: _channel, value: _target, code }),
         });
         const data = await resp.json();
         if (!data.success) {
-            showError('otp-error', data.error || 'Invalid code. Please try again.');
+            showError('otp-error', data.error || 'Invalid code.');
             document.getElementById('otp-input').value = '';
             document.getElementById('otp-input').focus();
             return;
@@ -361,8 +329,7 @@ async function handleVerifyOtp() {
     } catch {
         showError('otp-error', 'Network error. Please try again.');
     } finally {
-        btn.disabled = false;
-        btn.textContent = 'Verify';
+        btn.disabled = false; btn.textContent = 'Verify';
     }
 }
 
@@ -370,52 +337,40 @@ async function handleVerifyOtp() {
 
 function startResendTimer() {
     const resendBtn = document.getElementById('resend-btn');
-    const countdownSec = document.getElementById('countdown-sec');
-    const countdownWrap = document.getElementById('countdown-wrap');
-
-    resendBtn.disabled = true;
-    countdownWrap.style.display = '';
-    let secs = 60;
-    countdownSec.textContent = secs;
-
+    const txt = document.getElementById('countdown-text');
+    resendBtn.classList.add('hidden');
+    let s = 60;
+    txt.textContent = `Resend available in ${s}s`;
     if (_resendTimer) clearInterval(_resendTimer);
     _resendTimer = setInterval(() => {
-        secs--;
-        countdownSec.textContent = secs;
-        if (secs <= 0) {
+        s--;
+        if (s <= 0) {
             clearInterval(_resendTimer);
-            resendBtn.disabled = false;
-            countdownWrap.style.display = 'none';
+            txt.textContent = '';
+            resendBtn.classList.remove('hidden');
+        } else {
+            txt.textContent = `Resend available in ${s}s`;
         }
     }, 1000);
 }
 
 async function handleResend() {
     hideError('otp-error');
-    document.getElementById('otp-input').value = '';
-
     const btn = document.getElementById('resend-btn');
-    btn.disabled = true;
-    btn.textContent = 'Sending…';
-
+    btn.disabled = true; btn.textContent = 'Sending…';
     try {
         const resp = await fetch('/api/auth/send-otp', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ phone: _phone }),
+            body: JSON.stringify({ channel: _channel, value: _target }),
         });
         const data = await resp.json();
-        if (!data.success) {
-            showError('otp-error', data.error || 'Failed to resend code.');
-            btn.disabled = false;
-        } else {
-            startResendTimer();
-        }
+        if (!data.success) { showError('otp-error', data.error || 'Failed to resend.'); }
+        else { startResendTimer(); }
     } catch {
         showError('otp-error', 'Network error. Please try again.');
-        btn.disabled = false;
     } finally {
-        btn.textContent = 'Resend code';
+        btn.disabled = false; btn.textContent = 'Resend code';
     }
 }
 </script>

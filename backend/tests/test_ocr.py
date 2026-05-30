@@ -78,6 +78,75 @@ class TestIsHeaderLine:
         assert _is_header_line("SHOPPING LIST") is True
 
 
+# ── Backend dispatcher (auto | ollama | tesseract) ───────────────────────────
+
+class TestOcrBackendSelection:
+    pytestmark = pytest.mark.asyncio
+
+    async def test_auto_uses_tesseract_when_no_ollama(self, monkeypatch):
+        import ocr
+        monkeypatch.delenv("OLLAMA_HOST", raising=False)
+        monkeypatch.setenv("OCR_BACKEND", "auto")
+        seen = {}
+
+        async def _vlm(raw, host):
+            seen["vlm"] = True
+            return {"items": []}
+        monkeypatch.setattr(ocr, "_extract_vlm", _vlm)
+        monkeypatch.setattr(ocr, "_extract_tesseract", lambda raw: {"items": ["milk"]})
+
+        out = await ocr.extract_grocery_list(b"img")
+        assert out["items"] == ["milk"]
+        assert "vlm" not in seen          # no OLLAMA_HOST → VLM skipped entirely
+
+    async def test_vlm_used_when_configured(self, monkeypatch):
+        import ocr
+        monkeypatch.setenv("OLLAMA_HOST", "http://fake:11434")
+        monkeypatch.setenv("OCR_BACKEND", "auto")
+
+        async def _vlm(raw, host):
+            return {"raw_text": "x", "items": ["eggs"]}
+        monkeypatch.setattr(ocr, "_extract_vlm", _vlm)
+        monkeypatch.setattr(ocr, "_extract_tesseract",
+                            lambda raw: {"items": ["SHOULD NOT BE USED"]})
+
+        out = await ocr.extract_grocery_list(b"img")
+        assert out["items"] == ["eggs"]
+
+    async def test_vlm_empty_falls_back_to_tesseract(self, monkeypatch):
+        import ocr
+        monkeypatch.setenv("OLLAMA_HOST", "http://fake:11434")
+        monkeypatch.setenv("OCR_BACKEND", "auto")
+
+        async def _vlm(raw, host):
+            return {"items": []}        # VLM found nothing
+        monkeypatch.setattr(ocr, "_extract_vlm", _vlm)
+        monkeypatch.setattr(ocr, "_extract_tesseract", lambda raw: {"items": ["onions"]})
+
+        out = await ocr.extract_grocery_list(b"img")
+        assert out["items"] == ["onions"]
+
+    async def test_tesseract_only_never_calls_vlm(self, monkeypatch):
+        import ocr
+        monkeypatch.setenv("OLLAMA_HOST", "http://fake:11434")
+        monkeypatch.setenv("OCR_BACKEND", "tesseract")
+
+        async def _vlm(raw, host):
+            raise AssertionError("VLM must not be called in tesseract-only mode")
+        monkeypatch.setattr(ocr, "_extract_vlm", _vlm)
+        monkeypatch.setattr(ocr, "_extract_tesseract", lambda raw: {"items": ["atta"]})
+
+        out = await ocr.extract_grocery_list(b"img")
+        assert out["items"] == ["atta"]
+
+    async def test_ollama_only_errors_without_host(self, monkeypatch):
+        import ocr
+        monkeypatch.delenv("OLLAMA_HOST", raising=False)
+        monkeypatch.setenv("OCR_BACKEND", "ollama")
+        out = await ocr.extract_grocery_list(b"img")
+        assert out["items"] == [] and "error" in out
+
+
 # ── /api/ocr endpoint ─────────────────────────────────────────────────────────
 
 class TestApiOcrEndpoint:
@@ -131,7 +200,7 @@ class TestApiOcrEndpoint:
 
         fake_text = "milk\neggs\namul butter\nonions\n"
 
-        def _fake_extract(raw_bytes: bytes) -> dict:
+        async def _fake_extract(raw_bytes: bytes) -> dict:
             return {
                 "raw_text": fake_text,
                 "items": ["milk", "eggs", "amul butter", "onions"],
@@ -151,8 +220,10 @@ class TestApiOcrEndpoint:
     def test_ocr_response_includes_raw_text_when_available(self, client, monkeypatch):
         import ocr as ocr_module
         monkeypatch.setattr(ocr_module, "OCR_AVAILABLE", True)
-        monkeypatch.setattr(ocr_module, "extract_grocery_list",
-                            lambda _: {"raw_text": "milk\n", "items": ["milk"]})
+
+        async def _fake(_):
+            return {"raw_text": "milk\n", "items": ["milk"]}
+        monkeypatch.setattr(ocr_module, "extract_grocery_list", _fake)
         img_bytes = self._fake_image()
         r = client.post(
             "/api/ocr",
@@ -183,8 +254,10 @@ class TestMobileScanEndpoint:
     def test_scan_returns_items_with_mocked_ocr(self, client, monkeypatch):
         import ocr as ocr_module
         monkeypatch.setattr(ocr_module, "OCR_AVAILABLE", True)
-        monkeypatch.setattr(ocr_module, "extract_grocery_list",
-                            lambda _: {"items": ["Tomatoes", "Onions 1kg"]})
+
+        async def _fake(_):
+            return {"items": ["Tomatoes", "Onions 1kg"]}
+        monkeypatch.setattr(ocr_module, "extract_grocery_list", _fake)
         r = client.post(
             "/scan",
             files={"image": ("list.jpg", io.BytesIO(self._fake_image()), "image/jpeg")},

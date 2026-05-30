@@ -7,7 +7,12 @@ services:
     env_file: .env
     environment:
       - OLLAMA_HOST=http://ollama:11434
-      - OLLAMA_MODEL=llama3.2:3b
+      # One multimodal model serves BOTH OCR (handwriting) and the ranking
+      # fallback. gemma4:e2b (~7GB resident) suits a 16GB CPU-only box; bump to
+      # gemma4:e4b for better accuracy if you have the RAM/GPU headroom.
+      - OLLAMA_MODEL=gemma4:e2b
+      # OCR backend: auto (VLM first, Tesseract fallback) | ollama | tesseract
+      - OCR_BACKEND=auto
       # ── Auth ───────────────────────────────────────────────────────────────
       # REQUIRED: sign session cookies.  Generate with:
       #   python3 -c "import secrets; print(secrets.token_hex(32))"
@@ -30,9 +35,13 @@ services:
   ollama:
     image: ollama/ollama:latest
     restart: unless-stopped
-    mem_limit: 6g
+    # gemma4:e2b needs ~7-8GB resident. On a 16GB host this leaves room for the
+    # app + Playwright. Raise toward 12g only if you switch to gemma4:e4b.
+    mem_limit: 9g
     volumes:
       - ollama_data:/root/.ollama
+    # NOTE: the model is NOT auto-pulled. After first `docker compose up`, run:
+    #   docker compose exec ollama ollama pull gemma4:e2b
 
   # ── MySQL (opt-in) ──────────────────────────────────────────────────────────
   # Uncomment this entire block AND the MYSQL_URL line above to use MySQL

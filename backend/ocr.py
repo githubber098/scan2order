@@ -1,15 +1,31 @@
-"""ocr.py - Tesseract OCR for grocery list extraction.
+"""ocr.py - Grocery list extraction from images.
 
-Ported verbatim from scan2order2/server.py OCR section.
-Windows path auto-detection preserved.
+Two backends, selected by the OCR_BACKEND env var:
+
+  "auto" (default)  Try the local vision LLM (Gemma 4 via Ollama) first; if it
+                    errors or returns nothing, fall back to Tesseract.
+  "ollama" / "vlm"  Vision LLM only.
+  "tesseract"       Tesseract only (the legacy path).
+
+The vision LLM reads handwriting far better than Tesseract. It reuses the same
+Ollama instance and OLLAMA_MODEL used by the ranker, so one model
+(default gemma4:e2b) serves both OCR and ranking — nothing extra to run.
+
+Env vars:
+  OCR_BACKEND        auto | ollama | tesseract   (default: auto)
+  OLLAMA_HOST        e.g. http://ollama:11434     (required for the VLM path)
+  OCR_VISION_MODEL   overrides the OCR model only (default: OLLAMA_MODEL or gemma4:e2b)
+  OLLAMA_MODEL       shared model name            (default: gemma4:e2b)
 """
 
+import asyncio
+import base64
 import io
 import os
 import platform
 import re
 
-OCR_AVAILABLE = False
+OCR_AVAILABLE = False   # Tesseract availability (the fallback path)
 OCR_ERROR = ""
 
 try:
@@ -37,13 +53,13 @@ try:
 
 except ImportError as e:
     OCR_ERROR = f"Python packages missing: {e}. Run: pip install pytesseract Pillow"
-    print(f"[ocr] OCR disabled - {OCR_ERROR}")
+    print(f"[ocr] Tesseract disabled - {OCR_ERROR}")
 except Exception as e:
     OCR_ERROR = (
         f"Tesseract binary not callable ({e}). "
         f"Install from https://github.com/UB-Mannheim/tesseract/wiki"
     )
-    print(f"[ocr] OCR disabled - {OCR_ERROR}")
+    print(f"[ocr] Tesseract disabled - {OCR_ERROR}")
 
 
 _OCR_SECTION_HEADERS = {
@@ -76,6 +92,23 @@ def _is_header_line(line: str) -> bool:
     return low in _OCR_SECTION_HEADERS
 
 
+def _lines_to_items(text: str) -> list[str]:
+    """Clean a block of text (one item per line) into a list of grocery items."""
+    items = []
+    for line in text.split("\n"):
+        if not line.strip() or len(line.strip()) < 2:
+            continue
+        cleaned = _clean_ocr_line(line)
+        if not cleaned or len(cleaned) < 2:
+            continue
+        if _is_header_line(cleaned):
+            continue
+        items.append(cleaned)
+    return items
+
+
+# ── Tesseract backend (fallback) ───────────────────────────────────────────────
+
 def _preprocess_image(raw_bytes: bytes):
     img = Image.open(io.BytesIO(raw_bytes))
     transposed = ImageOps.exif_transpose(img)
@@ -93,32 +126,105 @@ def _preprocess_image(raw_bytes: bytes):
     return img
 
 
-def extract_grocery_list(raw_bytes: bytes) -> dict:
-    """Extract grocery list items from image bytes via Tesseract.
-
-    Returns {"raw_text": str, "items": [str]} on success,
-    or {"error": str, "items": []} on failure.
-    """
+def _extract_tesseract(raw_bytes: bytes) -> dict:
+    """Synchronous Tesseract OCR. Run via asyncio.to_thread from the dispatcher."""
     if not OCR_AVAILABLE:
-        return {"error": OCR_ERROR or "OCR not available", "items": []}
-
+        return {"error": OCR_ERROR or "Tesseract not available", "items": []}
     try:
         img = _preprocess_image(raw_bytes)
         text = pytesseract.image_to_string(img, lang="eng", config="--psm 6")
-
-        items = []
-        for line in text.split("\n"):
-            if not line.strip() or len(line.strip()) < 2:
-                continue
-            cleaned = _clean_ocr_line(line)
-            if not cleaned or len(cleaned) < 2:
-                continue
-            if _is_header_line(cleaned):
-                continue
-            items.append(cleaned)
-
-        print(f"[ocr] {len(items)} items from {len(text.split(chr(10)))} lines")
+        items = _lines_to_items(text)
+        print(f"[ocr] tesseract: {len(items)} items from {len(text.splitlines())} lines")
         return {"raw_text": text, "items": items}
     except Exception as e:
-        print(f"[ocr] error: {e}")
+        print(f"[ocr] tesseract error: {e}")
         return {"error": str(e), "items": []}
+
+
+# ── Vision-LLM backend (Gemma 4 via Ollama) ─────────────────────────────────────
+
+_VLM_PROMPT = (
+    "This image is a grocery shopping list, possibly handwritten. "
+    "Transcribe every item, one per line, exactly as written. "
+    "Keep quantities and units if present (e.g. '2 kg onions', 'Amul butter 100g'). "
+    "Output ONLY the list items — no numbering, no bullet points, no headings, "
+    "no commentary, no blank lines. If there is no list, output nothing."
+)
+
+
+def _ocr_model() -> str:
+    return (os.getenv("OCR_VISION_MODEL")
+            or os.getenv("OLLAMA_MODEL")
+            or "gemma4:e2b")
+
+
+async def _extract_vlm(raw_bytes: bytes, host: str) -> dict:
+    """OCR via a local vision LLM on Ollama (OpenAI-compatible endpoint).
+
+    Returns {"raw_text", "items"} on success or {"error", "items": []} on failure.
+    The image is sent as a base64 data URL; Ollama decodes by content so the
+    declared MIME type does not need to match the real format.
+    """
+    model = _ocr_model()
+    b64 = base64.b64encode(raw_bytes).decode()
+    data_url = f"data:image/jpeg;base64,{b64}"
+
+    try:
+        import httpx
+        async with httpx.AsyncClient(timeout=180.0) as client:
+            resp = await client.post(
+                f"{host}/v1/chat/completions",
+                json={
+                    "model": model,
+                    "messages": [{
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": _VLM_PROMPT},
+                            {"type": "image_url", "image_url": {"url": data_url}},
+                        ],
+                    }],
+                    "temperature": 0,
+                    "max_tokens": 512,
+                },
+            )
+        if resp.status_code != 200:
+            print(f"[ocr] vlm HTTP {resp.status_code}: {resp.text[:200]}")
+            return {"error": f"VLM HTTP {resp.status_code}", "items": []}
+
+        text = resp.json()["choices"][0]["message"]["content"].strip()
+        items = _lines_to_items(text)
+        print(f"[ocr] vlm ({model}): {len(items)} items")
+        return {"raw_text": text, "items": items}
+    except Exception as e:
+        print(f"[ocr] vlm error: {e}")
+        return {"error": f"VLM error: {e}", "items": []}
+
+
+# ── Dispatcher ───────────────────────────────────────────────────────────────
+
+async def extract_grocery_list(raw_bytes: bytes) -> dict:
+    """Extract grocery list items from image bytes.
+
+    Backend chosen by OCR_BACKEND (auto | ollama | tesseract). In "auto" mode
+    the vision LLM is tried first and Tesseract is the fallback. Returns
+    {"raw_text": str, "items": [str]} or {"error": str, "items": []}.
+    """
+    backend = os.getenv("OCR_BACKEND", "auto").strip().lower()
+    host = os.getenv("OLLAMA_HOST")
+
+    want_vlm = backend in ("auto", "ollama", "vlm")
+    if want_vlm and host:
+        result = await _extract_vlm(raw_bytes, host)
+        if result.get("items"):
+            return result
+        if backend in ("ollama", "vlm"):
+            # VLM-only mode: return its result (possibly an error/empty) as-is.
+            return result
+        print("[ocr] vlm returned nothing → falling back to Tesseract")
+    elif want_vlm and not host:
+        if backend in ("ollama", "vlm"):
+            return {"error": "OCR_BACKEND=ollama but OLLAMA_HOST is not set", "items": []}
+        # auto mode with no Ollama configured → silently use Tesseract.
+
+    # Tesseract path (sync, CPU-bound → offload so we don't block the event loop).
+    return await asyncio.to_thread(_extract_tesseract, raw_bytes)
