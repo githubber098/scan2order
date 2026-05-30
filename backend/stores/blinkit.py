@@ -319,12 +319,13 @@ async def search_item_api(user_id: str, query: str) -> list[dict]:
         print(f"[blinkit] auth_key derived={is_derived} "
               f"key_prefix={api_auth_key[:12]!r}")
 
-        # Match exactly what the browser sends: lat in header, lon/merchant_id
-        # come from cookies — Playwright does NOT send lng or merchant_id headers.
-        # Referer must be the search page URL, not the root.
+        # Match exactly what the browser sends: auth_key + lat + Origin + Referer.
+        # lon and merchant_id come from cookies; do NOT send them as headers.
+        # Referer must be the search page URL, not the site root.
         layout_headers = {
             **_API_HEADERS_BASE,
             "auth_key": api_auth_key,
+            "Origin": BASE_URL,
             "Referer": f"{BASE_URL}/s/?q={quote(query)}",
         }
         if lat:
@@ -516,9 +517,9 @@ async def _search_playwright(
                                                "merchant_id", "cookie",
                                                "origin", "referer",
                                            )}
-                            # Truncate cookie to avoid flooding logs
+                            # Truncate cookie but keep enough to see all keys
                             if "cookie" in interesting:
-                                interesting["cookie"] = interesting["cookie"][:300]
+                                interesting["cookie"] = interesting["cookie"][:2000]
                             print(f"[blinkit] Playwright first layout/search "
                                   f"HEADERS: {interesting}")
                         except Exception as he:
