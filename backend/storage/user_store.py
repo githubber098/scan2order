@@ -660,6 +660,16 @@ def update_last_login(user_id: str) -> None:
         _conn.commit()
 
 
+def delete_user(user_id: str) -> None:
+    """Permanently delete a user and ALL their data: store sessions, link
+    codes, and the account row. Used by the self-service "delete account"."""
+    with _lock:
+        _conn.execute("DELETE FROM sessions WHERE user_id=?", (user_id,))
+        _conn.execute("DELETE FROM link_codes WHERE user_id=?", (user_id,))
+        _conn.execute("DELETE FROM users WHERE user_id=?", (user_id,))
+        _conn.commit()
+
+
 # ── OTP management ────────────────────────────────────────────────────────────
 # Keyed by "target" — a phone (+91…) or an email; the two never collide.
 

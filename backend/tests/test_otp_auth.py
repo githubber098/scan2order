@@ -204,6 +204,34 @@ class TestMethodLinking:
 
 # ── Store-layer functions ──────────────────────────────────────────────────────
 
+class TestDeleteAccount:
+    def _login_email(self, client, clean_db, email="del@x.com"):
+        client.post("/api/auth/send-otp", json={"channel": "email", "value": email})
+        code = _otp_for(clean_db, email)
+        client.post("/api/auth/verify-otp",
+                    json={"channel": "email", "value": email, "code": code})
+
+    def test_delete_requires_auth(self, client, clean_db):
+        r = client.post("/api/auth/delete")
+        assert r.status_code == 401
+
+    def test_delete_removes_account_and_logs_out(self, client, clean_db):
+        self._login_email(client, clean_db)
+        assert client.get("/api/auth/me").status_code == 200
+        r = client.post("/api/auth/delete")
+        assert r.json()["success"] is True
+        # cookie cleared → no longer authenticated
+        assert client.get("/api/auth/me").status_code == 401
+
+    def test_delete_user_removes_sessions(self, clean_db):
+        from storage import user_store
+        uid = user_store.get_or_create_user("email", "z@x.com")
+        user_store.connect_store(uid, "blinkit", {"gr_1_accessToken": "t"})
+        user_store.delete_user(uid)
+        assert user_store.get_user_by_id(uid) is None
+        assert not user_store.is_store_connected(uid, "blinkit")
+
+
 class TestMigration:
     """Migrating an existing phone-only DB must make phone nullable so that
     email-only accounts can be created (regression for the NOT NULL crash)."""

@@ -376,6 +376,19 @@ async def api_logout():
     return resp
 
 
+@app.post("/api/auth/delete")
+async def api_delete_account(request: Request):
+    """Permanently delete the logged-in user's account and all their data."""
+    user_id = _get_session_user(request)
+    if not user_id:
+        return JSONResponse({"success": False, "error": "Not signed in"}, status_code=401)
+    user_store.delete_user(user_id)
+    resp = JSONResponse({"success": True})
+    resp.delete_cookie(auth.COOKIE_NAME)
+    print(f"[auth] account deleted: {user_id[:8]}…")
+    return resp
+
+
 @app.get("/api/auth/me")
 async def api_me(request: Request):
     """Return the currently logged-in user, or 401 if not authenticated."""

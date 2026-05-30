@@ -249,6 +249,53 @@
         .connect-banner-msg { font-size: 12px; margin-top: 10px; }
         .connect-banner-msg.err { color: #e24b4a; }
         .connect-banner-msg.ok { color: #4ecdc4; }
+
+        /* Account modal */
+        .account-modal {
+            display: none; position: fixed; inset: 0; z-index: 1000;
+            background: rgba(0,0,0,0.85); align-items: center; justify-content: center; padding: 16px;
+        }
+        .account-modal.open { display: flex; }
+        .account-box {
+            background: #111122; border: 1px solid #333; border-radius: 14px;
+            width: min(420px, 100%); overflow: hidden;
+        }
+        .account-head {
+            display: flex; justify-content: space-between; align-items: center;
+            padding: 14px 18px; border-bottom: 1px solid #222;
+            font-weight: 600; color: #4ecdc4;
+        }
+        .account-close {
+            background: none; border: none; color: #888; font-size: 22px;
+            line-height: 1; cursor: pointer; padding: 0;
+        }
+        .account-close:hover { color: #ccc; }
+        .account-body { padding: 8px 18px; }
+        .account-row {
+            display: flex; align-items: center; gap: 10px;
+            padding: 12px 0; border-bottom: 1px solid #1a1a2e;
+        }
+        .acct-label { font-size: 13px; color: #888; width: 78px; flex-shrink: 0; }
+        .acct-val { flex: 1; font-size: 14px; color: #eee; word-break: break-all; }
+        .acct-ok { color: #4ecdc4; font-size: 15px; }
+        .acct-connect-btn {
+            flex-shrink: 0; padding: 6px 14px; border: 1px solid #4ecdc4; background: none;
+            color: #4ecdc4; border-radius: 8px; font-size: 12px; font-weight: 600;
+            cursor: pointer; font-family: inherit;
+        }
+        .acct-connect-btn:hover { background: rgba(78,205,196,0.08); }
+        #acct-connect-area { padding: 12px 0 4px; }
+        .acct-connect-title { font-size: 13px; color: #bfe; margin-bottom: 8px; }
+        .account-connect-form { display: flex; gap: 8px; align-items: stretch; }
+        .account-danger { padding: 14px 18px; border-top: 1px solid #222; }
+        .btn-danger {
+            width: 100%; padding: 11px; border: 1px solid #5a2230; background: #1a0c10;
+            color: #e2576b; border-radius: 10px; font-weight: 600; font-size: 14px;
+            cursor: pointer; font-family: inherit; transition: background 0.15s;
+        }
+        .btn-danger:hover:not(:disabled) { background: #250f15; }
+        .btn-danger:disabled { opacity: 0.6; cursor: not-allowed; }
+        .account-danger-hint { font-size: 11px; color: #667; margin-top: 8px; text-align: center; }
     </style>
 </head>
 <body>
@@ -258,27 +305,38 @@
         <p>grocery price comparison across BigBasket, Blinkit &amp; Zepto</p>
     </div>
 
-    <!-- Connect-other-method banner: shown when the account has only phone OR only email -->
+    <!-- Connect-other-method nudge: shown when the account has only phone OR only email.
+         It just opens the Account modal (which is also reachable any time via the
+         Account button), so dismissing it never loses access. -->
     <div class="connect-banner" id="connect-banner" style="display:none">
         <button class="connect-banner-x" onclick="dismissConnectBanner()" title="Dismiss">&times;</button>
         <div class="connect-banner-head" id="connect-banner-text">Add a backup contact.</div>
-        <div class="connect-banner-body" id="connect-banner-step1">
-            <input id="connect-input" class="connect-input" autocomplete="off">
-            <button class="connect-send" id="connect-send-btn" onclick="connectSendOtp()">Send code</button>
+        <button class="connect-send" onclick="openAccountModal()">Add it now</button>
+    </div>
+
+    <!-- Account modal: contact status, connect phone/email, delete account -->
+    <div class="account-modal" id="account-modal">
+        <div class="account-box">
+            <div class="account-head">
+                <span>Your account</span>
+                <button class="account-close" onclick="closeAccountModal()" title="Close">&times;</button>
+            </div>
+            <div class="account-body" id="account-body"></div>
+            <div class="account-danger">
+                <button class="btn-danger" id="delete-acct-btn" onclick="confirmDeleteAccount()">Delete account</button>
+                <div class="account-danger-hint">Removes your account and all store connections. This can't be undone.</div>
+            </div>
         </div>
-        <div class="connect-banner-body hidden" id="connect-banner-step2">
-            <input id="connect-code" class="connect-input" maxlength="6" inputmode="numeric"
-                   placeholder="6-digit code" autocomplete="one-time-code">
-            <button class="connect-send" id="connect-verify-btn" onclick="connectVerifyOtp()">Verify</button>
-        </div>
-        <div class="connect-banner-msg" id="connect-banner-msg"></div>
     </div>
 
     <!-- Auth section: per-store Connect buttons (Playwright login relay) -->
     <div class="auth-section" id="auth-section">
         <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
             <h3 style="margin-bottom:0">Store connections</h3>
-            <button class="btn-tiny" onclick="logout()" title="Sign out">Sign out</button>
+            <div>
+                <button class="btn-tiny" onclick="openAccountModal()" title="Account">Account</button>
+                <button class="btn-tiny" onclick="logout()" title="Sign out">Sign out</button>
+            </div>
         </div>
         <div class="store-connect-list">
             <div class="store-connect-row">
@@ -642,40 +700,13 @@ async function logout() {
     window.location.href = '/login';
 }
 
-// ── Connect-other-method banner ───────────────────────────────────────────────
-// Prompts a phone-only user to add an email (and vice versa), verified by OTP.
+// ── Account modal: status, connect phone/email, delete account ────────────────
 
-let _connectChannel = null;   // the MISSING method we're asking the user to add
-let _connectTarget = '';
+let _acctChannel = null;   // channel currently being connected ('phone' | 'email')
+let _acctTarget = '';
 
-function initConnectBanner() {
-    const u = window._SERVER_USER || {};
-    if (u.phone && !u.email)      _connectChannel = 'email';
-    else if (u.email && !u.phone) _connectChannel = 'phone';
-    else return;  // both present (or neither) → nothing to prompt
-
-    if (sessionStorage.getItem('connectBannerDismissed') === _connectChannel) return;
-
-    const input = document.getElementById('connect-input');
-    if (_connectChannel === 'email') {
-        document.getElementById('connect-banner-text').textContent =
-            '✉️ Add your email as a backup way to sign in.';
-        input.type = 'email'; input.placeholder = 'you@example.com';
-    } else {
-        document.getElementById('connect-banner-text').textContent =
-            '📱 Add your phone as a backup way to sign in.';
-        input.type = 'tel'; input.placeholder = '+91 98765 43210';
-    }
-    document.getElementById('connect-banner').style.display = 'block';
-}
-
-function dismissConnectBanner() {
-    if (_connectChannel) sessionStorage.setItem('connectBannerDismissed', _connectChannel);
-    document.getElementById('connect-banner').style.display = 'none';
-}
-
-function _connectNormalise(raw) {
-    if (_connectChannel === 'phone') {
+function _normaliseContact(channel, raw) {
+    if (channel === 'phone') {
         const d = (raw || '').replace(/\D/g, '');
         if (d.length === 10 && /^[6-9]/.test(d)) return '+91' + d;
         if (d.length === 12 && d.startsWith('91')) return '+' + d;
@@ -686,59 +717,167 @@ function _connectNormalise(raw) {
     return /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(s) ? s : null;
 }
 
-function _connectMsg(text, kind) {
-    const msg = document.getElementById('connect-banner-msg');
-    msg.className = 'connect-banner-msg' + (kind ? ' ' + kind : '');
-    msg.textContent = text;
+function openAccountModal() {
+    dismissConnectBanner();
+    document.getElementById('account-modal').classList.add('open');
+    refreshAccountStatus();
+}
+function closeAccountModal() {
+    document.getElementById('account-modal').classList.remove('open');
 }
 
-async function connectSendOtp() {
-    _connectMsg('');
-    const target = _connectNormalise(document.getElementById('connect-input').value);
-    if (!target) { _connectMsg('Enter a valid ' + _connectChannel + '.', 'err'); return; }
-    _connectTarget = target;
+// Fetch the authoritative status from the server and render the two rows.
+// Called on open and after a successful connect, so the user can SEE the ✓.
+async function refreshAccountStatus() {
+    _acctChannel = null;
+    const body = document.getElementById('account-body');
+    body.textContent = 'Loading…';
+    let u;
+    try { u = await (await fetch('/api/auth/me')).json(); }
+    catch { body.textContent = 'Could not load your account.'; return; }
 
-    const btn = document.getElementById('connect-send-btn');
+    body.innerHTML = '';
+    body.appendChild(_acctRow('phone', '📱 Phone', u.phone));
+    body.appendChild(_acctRow('email', '✉️ Email', u.email));
+    const area = document.createElement('div');
+    area.id = 'acct-connect-area';
+    area.style.display = 'none';
+    body.appendChild(area);
+}
+
+function _acctRow(channel, label, value) {
+    const row = document.createElement('div');
+    row.className = 'account-row';
+    const lab = document.createElement('span');
+    lab.className = 'acct-label'; lab.textContent = label;
+    const val = document.createElement('span');
+    val.className = 'acct-val';
+    row.appendChild(lab); row.appendChild(val);
+    if (value) {
+        val.textContent = value;
+        const ok = document.createElement('span');
+        ok.className = 'acct-ok'; ok.textContent = '✓';
+        row.appendChild(ok);
+    } else {
+        val.textContent = 'Not connected';
+        val.style.color = '#667';
+        const btn = document.createElement('button');
+        btn.className = 'acct-connect-btn'; btn.textContent = 'Connect';
+        btn.onclick = () => acctStartConnect(channel);
+        row.appendChild(btn);
+    }
+    return row;
+}
+
+function _acctMsg(text, kind) {
+    const m = document.getElementById('acct-msg');
+    if (m) { m.className = 'connect-banner-msg' + (kind ? ' ' + kind : ''); m.textContent = text; }
+}
+
+function acctStartConnect(channel) {
+    _acctChannel = channel; _acctTarget = '';
+    const area = document.getElementById('acct-connect-area');
+    area.style.display = 'block';
+    area.innerHTML =
+        '<div class="acct-connect-title">Connect your ' + channel + '</div>' +
+        '<div class="account-connect-form">' +
+        (channel === 'phone'
+            ? '<input id="acct-input" class="connect-input" type="tel" placeholder="+91 98765 43210">'
+            : '<input id="acct-input" class="connect-input" type="email" placeholder="you@example.com">') +
+        '<button class="connect-send" id="acct-send-btn" onclick="acctSendOtp()">Send code</button>' +
+        '</div><div class="connect-banner-msg" id="acct-msg"></div>';
+    document.getElementById('acct-input').focus();
+}
+
+async function acctSendOtp() {
+    _acctMsg('');
+    const target = _normaliseContact(_acctChannel, document.getElementById('acct-input').value);
+    if (!target) { _acctMsg('Enter a valid ' + _acctChannel + '.', 'err'); return; }
+    _acctTarget = target;
+    const btn = document.getElementById('acct-send-btn');
     btn.disabled = true; btn.textContent = 'Sending…';
     try {
         const resp = await fetch('/api/auth/method/send-otp', {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ channel: _connectChannel, value: target }),
+            body: JSON.stringify({ channel: _acctChannel, value: target }),
         });
         const data = await resp.json();
-        if (!data.success) { _connectMsg(data.error || 'Failed to send code.', 'err'); return; }
-        document.getElementById('connect-banner-step1').classList.add('hidden');
-        document.getElementById('connect-banner-step2').classList.remove('hidden');
-        _connectMsg('Code sent — enter it below.', 'ok');
-        document.getElementById('connect-code').focus();
+        if (!data.success) { _acctMsg(data.error || 'Failed to send code.', 'err'); return; }
+        const form = document.querySelector('#acct-connect-area .account-connect-form');
+        form.innerHTML =
+            '<input id="acct-code" class="connect-input" maxlength="6" inputmode="numeric" ' +
+            'placeholder="6-digit code" autocomplete="one-time-code">' +
+            '<button class="connect-send" id="acct-verify-btn" onclick="acctVerifyOtp()">Verify</button>';
+        _acctMsg('Code sent to ' + target + ' — enter it below.', 'ok');
+        document.getElementById('acct-code').focus();
     } catch {
-        _connectMsg('Network error.', 'err');
+        _acctMsg('Network error.', 'err');
     } finally {
         btn.disabled = false; btn.textContent = 'Send code';
     }
 }
 
-async function connectVerifyOtp() {
-    _connectMsg('');
-    const code = document.getElementById('connect-code').value.trim();
-    if (code.length !== 6) { _connectMsg('Enter the 6-digit code.', 'err'); return; }
-
-    const btn = document.getElementById('connect-verify-btn');
+async function acctVerifyOtp() {
+    _acctMsg('');
+    const code = (document.getElementById('acct-code').value || '').trim();
+    if (code.length !== 6) { _acctMsg('Enter the 6-digit code.', 'err'); return; }
+    const btn = document.getElementById('acct-verify-btn');
     btn.disabled = true; btn.textContent = 'Verifying…';
     try {
         const resp = await fetch('/api/auth/method/verify', {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ channel: _connectChannel, value: _connectTarget, code }),
+            body: JSON.stringify({ channel: _acctChannel, value: _acctTarget, code }),
         });
         const data = await resp.json();
-        if (!data.success) { _connectMsg(data.error || 'Invalid code.', 'err'); return; }
-        _connectMsg('✓ ' + _connectChannel + ' connected!', 'ok');
-        setTimeout(() => { document.getElementById('connect-banner').style.display = 'none'; }, 1600);
+        if (!data.success) { _acctMsg(data.error || 'Invalid code.', 'err'); return; }
+        // Re-render so the just-connected method shows its ✓ — the user can confirm it worked.
+        refreshAccountStatus();
     } catch {
-        _connectMsg('Network error.', 'err');
+        _acctMsg('Network error.', 'err');
     } finally {
-        btn.disabled = false; btn.textContent = 'Verify';
+        if (btn) { btn.disabled = false; btn.textContent = 'Verify'; }
     }
+}
+
+// Two-tap delete: first tap arms, second tap (within 4s) deletes.
+let _deleteArmed = false;
+function confirmDeleteAccount() {
+    const btn = document.getElementById('delete-acct-btn');
+    if (!_deleteArmed) {
+        _deleteArmed = true;
+        btn.textContent = 'Tap again to permanently delete';
+        setTimeout(() => { _deleteArmed = false; btn.textContent = 'Delete account'; }, 4000);
+        return;
+    }
+    _deleteArmed = false;
+    btn.disabled = true; btn.textContent = 'Deleting…';
+    fetch('/api/auth/delete', { method: 'POST' })
+        .then(r => r.json())
+        .then(d => {
+            if (d.success) { window.location.href = '/login'; }
+            else { btn.disabled = false; btn.textContent = 'Delete account'; }
+        })
+        .catch(() => { btn.disabled = false; btn.textContent = 'Delete account'; });
+}
+
+// ── Connect-other-method nudge (a thin prompt that opens the Account modal) ───
+
+let _connectChannel = null;
+function initConnectBanner() {
+    const u = window._SERVER_USER || {};
+    if (u.phone && !u.email)      _connectChannel = 'email';
+    else if (u.email && !u.phone) _connectChannel = 'phone';
+    else return;  // both present (or neither) → nothing to prompt
+    if (sessionStorage.getItem('connectBannerDismissed') === _connectChannel) return;
+    document.getElementById('connect-banner-text').textContent =
+        (_connectChannel === 'email'
+            ? '✉️ Add your email as a backup way to sign in.'
+            : '📱 Add your phone as a backup way to sign in.');
+    document.getElementById('connect-banner').style.display = 'block';
+}
+function dismissConnectBanner() {
+    if (_connectChannel) sessionStorage.setItem('connectBannerDismissed', _connectChannel);
+    document.getElementById('connect-banner').style.display = 'none';
 }
 
 // ── OCR ──────────────────────────────────────────────────────────────────────
