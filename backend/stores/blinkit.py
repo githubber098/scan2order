@@ -555,14 +555,63 @@ async def _search_playwright(
 
         await page.goto(f"{BASE_URL}/s/?q={quote(query)}",
                         wait_until="domcontentloaded", timeout=25000)
-        # Wait for React to hydrate and render product cards
+
+        # Wait for auth_key to be captured from /v2/accounts/auth_key/ response.
+        # This arrives quickly after DOMContentLoaded, before React renders.
+        for _ in range(20):
+            if captured["auth_key"]:
+                break
+            await page.wait_for_timeout(200)
+
+        # Use page.evaluate() to fetch search results from inside the page
+        # context. This automatically uses the fresh Cloudflare cookies that
+        # were set during page load — the root cause of why direct httpx fails.
+        fetch_products: list[dict] = []
+        if captured["auth_key"]:
+            try:
+                fetch_result = await page.evaluate(
+                    """async ({auth_key, lat, q}) => {
+                        const r = await fetch('/v1/layout/search', {
+                            method: 'POST',
+                            credentials: 'include',
+                            headers: {
+                                'auth_key': auth_key,
+                                'lat': lat,
+                                'Content-Type': 'application/json',
+                                'app_client': 'web',
+                                'web_app_version': '3000',
+                            },
+                            body: JSON.stringify({
+                                q, applied_filters: null,
+                                postback_meta: {}, processed_rails: {},
+                                monet_assets: []
+                            })
+                        });
+                        return await r.json();
+                    }""",
+                    {"auth_key": captured["auth_key"],
+                     "lat": str(lat) if lat else "",
+                     "q": query},
+                )
+                if fetch_result.get("is_success"):
+                    fetch_products = _parse_layout_search_response(fetch_result)
+                    print(f"[blinkit] Playwright fetch: {len(fetch_products)} products")
+                else:
+                    print(f"[blinkit] Playwright fetch: not success: "
+                          f"{str(fetch_result)[:200]}")
+            except Exception as fe:
+                print(f"[blinkit] Playwright fetch failed: {fe}")
+
+        if fetch_products:
+            return fetch_products, captured["auth_key"]
+
+        # Fall back to DOM scraping if the in-page fetch failed.
         try:
             await page.wait_for_selector(
-                'div[role="button"][tabindex="0"][id]', timeout=10000)
+                'div[role="button"][tabindex="0"][id]', timeout=8000)
         except Exception:
             pass
         await page.wait_for_timeout(1500)
-
         products = await page.evaluate(_PW_SEARCH_SCRIPT)
         return [p for p in products if p.get("product_id")], captured["auth_key"]
     finally:
