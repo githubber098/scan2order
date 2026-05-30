@@ -290,12 +290,13 @@ async def search_item_api(user_id: str, query: str) -> list[dict]:
     print(f"[blinkit] location: lat={lat!r} lng={lng!r} merchant_id={merchant_id!r}")
 
     # ── Strategy 1: POST /v1/layout/search ───────────────────────────────────
-    # Blinkit's current search API. The web app first calls /v2/accounts/auth_key/
-    # to exchange the gr_1_accessToken cookie for a derived API key (SHA256 hash),
-    # then POSTs to /v1/layout/search with that key in the auth_key header.
     products: list[dict] = []
     try:
         api_auth_key = await _get_auth_key(access_token, cookies)
+        is_derived = (api_auth_key != access_token)
+        print(f"[blinkit] auth_key derived={is_derived} "
+              f"key_prefix={api_auth_key[:12]!r}")
+
         layout_headers = {**_API_HEADERS_BASE, "auth_key": api_auth_key}
         if lat:
             layout_headers["lat"] = str(lat)
@@ -311,6 +312,9 @@ async def search_item_api(user_id: str, query: str) -> list[dict]:
             "processed_rails": {},
             "monet_assets": [],
         }
+        print(f"[blinkit] Strategy 1 POST headers keys: "
+              f"{[k for k in layout_headers if k not in _API_HEADERS_BASE]}")
+        print(f"[blinkit] Strategy 1 cookies sent: {sorted(cookies.keys())}")
 
         async with httpx.AsyncClient(timeout=12.0) as client:
             resp = await client.post(
@@ -329,7 +333,7 @@ async def search_item_api(user_id: str, query: str) -> list[dict]:
                 print(f"[blinkit] Strategy 1: parse error: {e} ({elapsed_ms}ms)")
         else:
             print(f"[blinkit] Strategy 1: HTTP {resp.status_code} ({elapsed_ms}ms) "
-                  f"body={resp.text[:200]!r}")
+                  f"body={resp.text[:300]!r}")
     except Exception as e:
         elapsed_ms = int((time.time() - t_start) * 1000)
         print(f"[blinkit] Strategy 1: request failed: {e} ({elapsed_ms}ms)")
