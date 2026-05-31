@@ -1,13 +1,14 @@
-"""stores/blinkit.py - Blinkit httpx store module.
+"""stores/blinkit.py - Blinkit search + cart module.
 
 Search strategy (in order):
-  1. POST /v1/layout/search — Blinkit's current search API (layout-based).
-     Returns product snippets with cart_item data embedded.
-     Requires derived auth_key (from /v2/accounts/auth_key/) + merchant_id.
-  2. __NEXT_DATA__ SSR — dead since Blinkit moved to full client-side React;
-     kept as a no-op safety net.
-  3. Playwright DOM scraping — fallback if Strategy 1 fails; slow (~4s) but
-     reliable; also discovers new API changes via network interceptor.
+  1. POST /v1/layout/search via httpx — fast (~200ms) but requires the
+     exact Cloudflare session cookies from a fresh page load; returns
+     "location not serviceable" without them. Succeeds when api_auth_key is
+     cached AND a fresh Cloudflare session is available.
+  2. __NEXT_DATA__ SSR — dead; kept as a stub.
+  3. Playwright response interception — reliable (~2.5s). Navigates to the
+     search page, intercepts the React app's own successful /v1/layout/search
+     response, and caches the derived auth_key for future Strategy 1 attempts.
 
 Cart add via Blinkit's /v2/client/user_cart/ API.
 Auth cookie: gr_1_accessToken (stored via user_store.connect_store).
@@ -501,39 +502,8 @@ async def _search_playwright(
 
         page = await ctx.new_page()
 
-        # Log every API request and response to find the correct search endpoint.
-        _api_calls: list[str] = []
-
-        async def on_request(req):
-            u = req.url
-            if any(x in u for x in ("/v1/", "/v2/", "/v3/", "/api/", "/search")):
-                short = u.split("?")[0]
-                body_str = ""
-                if req.method == "POST":
-                    try:
-                        body_str = f" BODY={req.post_data[:500]!r}"
-                    except Exception:
-                        pass
-                    if "/v1/layout/search" in u and "/layout/search" not in str(_api_calls):
-                        # Use all_headers() to capture Cookie header (not in req.headers)
-                        try:
-                            hdrs = await req.all_headers()
-                            interesting = {k: v for k, v in hdrs.items()
-                                           if k.lower() in (
-                                               "auth_key", "lat", "lng",
-                                               "merchant_id", "cookie",
-                                               "origin", "referer",
-                                           )}
-                            # Truncate cookie but keep enough to see all keys
-                            if "cookie" in interesting:
-                                interesting["cookie"] = interesting["cookie"][:2000]
-                            print(f"[blinkit] Playwright first layout/search "
-                                  f"HEADERS: {interesting}")
-                        except Exception as he:
-                            print(f"[blinkit] header capture error: {he}")
-                if short not in _api_calls or req.method == "POST":
-                    _api_calls.append(short)
-                    print(f"[blinkit] Playwright REQ: {req.method} {short}{body_str}")
+        def on_request(req):
+            pass  # No request logging needed now that the strategy is stable
 
         async def on_response(resp):
             try:
@@ -559,11 +529,6 @@ async def _search_playwright(
                               f"{len(captured['products'])} products from response")
                     except Exception as pe:
                         print(f"[blinkit] Playwright product parse error: {pe}")
-                # Log full response for the search endpoint; truncate others
-                limit = 200 if "layout/search" in u else 200
-                snippet = str(body)[:limit]
-                print(f"[blinkit] Playwright RESP {resp.status}: "
-                      f"{u.split('?')[0]} → {snippet}")
             except Exception:
                 pass
 
