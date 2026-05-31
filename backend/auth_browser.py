@@ -11,8 +11,10 @@ Session expires after 10 min of inactivity.
 """
 
 import asyncio
+import json
 import time
 from typing import Optional
+from urllib.parse import unquote
 
 _VIEWPORT_W = 430
 _VIEWPORT_H = 700
@@ -35,9 +37,15 @@ _STORE_CONFIG = {
     "blinkit": {
         "url": "https://blinkit.com/",
         "auth_cookie": "gr_1_accessToken",
-        # merchant_id is set by Blinkit when the user selects a delivery address.
-        # Without it the search API returns no results.
-        "wait_for": ["merchant_id"],
+        # Ground truth from live DevTools (2026-05-29): after setting a delivery
+        # address Blinkit sets gr_1_lat, gr_1_lon, gr_1_locality, gr_1_landmark.
+        # The plain 'lat' cookie is NOT set; neither is merchant_id.
+        # Keep 'lat' and 'merchant_id' as fallbacks in case the API changes.
+        "wait_for": ["gr_1_lat", "lat", "gr_1_merchantId", "merchant_id"],
+        "wait_for_ls": [
+            "merchant_id", "lat", "gr_1_merchantId",
+            "delivery_address", "current_location", "userAddress",
+        ],
         "wait_hint": (
             "✅ Login detected!  Now tap the location pin at the top of the page "
             "and save a delivery address.  The window will close automatically."
@@ -46,9 +54,21 @@ _STORE_CONFIG = {
     "zepto": {
         "url": "https://www.zeptonow.com/",
         "auth_cookie": "accessToken",
-        # serviceability is set by Zepto when a delivery address is confirmed.
-        # It contains the store_id the BFF search API needs to return results.
+        # Zepto sets serviceability immediately on page load with only a
+        # timestamp: {"timeSaved":1779990039045}  (27 chars, no storeId).
+        # After the user confirms an address it becomes a full object:
+        # {"primaryStore":{"serviceable":true,"storeId":"..."},...}
+        # Requiring the substring "storeId" in the URL-decoded value cleanly
+        # distinguishes the two forms regardless of value length.
         "wait_for": ["serviceability"],
+        "wait_for_cookie_contains": {"serviceability": "storeId"},
+        # Fallback: Zepto writes user-position to localStorage when an address
+        # is confirmed.  The value transitions from {userPosition: null} to
+        # {userPosition: {latitude: ..., longitude: ...}}.  Checking for the
+        # key '"latitude"' (with quotes, as it appears in the JSON string) is
+        # sufficient to distinguish real coordinates from the null placeholder.
+        "wait_for_ls": ["user-position"],
+        "wait_for_ls_contains": {"user-position": '"latitude"'},
         "wait_hint": (
             "✅ Login detected!  Now tap the location pin at the top of the page "
             "and confirm your delivery address.  The window will close automatically."
@@ -202,16 +222,93 @@ class _Session:
         await self._page.mouse.wheel(0, delta_y)
         self.touch()
 
+    async def _location_ready(self, kv: dict) -> bool:
+        """Return True when phase-2 (delivery address) requirements are met.
+
+        Checks in order:
+          1. Cookie OR logic: any wait_for cookie whose URL-decoded value
+             passes the optional minimum-length (wait_for_val_len) and
+             optional substring check (wait_for_cookie_contains).
+          2. localStorage OR logic: any wait_for_ls key whose stored string
+             passes the optional substring check (wait_for_ls_contains).
+             Blinkit keeps delivery context in localStorage, not cookies.
+             Zepto writes user-position with lat/lng to localStorage when an
+             address is confirmed.
+
+        Logs all present cookies (excluding auth) when still waiting so the
+        server log reveals the correct key name if our candidates are wrong.
+        """
+        cfg = _STORE_CONFIG[self.store]
+        wait_for = cfg.get("wait_for", [])
+        val_len = cfg.get("wait_for_val_len", {})
+        cookie_contains = cfg.get("wait_for_cookie_contains", {})
+        wait_for_ls = cfg.get("wait_for_ls", [])
+        ls_contains = cfg.get("wait_for_ls_contains", {})
+
+        if not wait_for and not wait_for_ls:
+            return True
+
+        def _cookie_ok(k: str) -> bool:
+            raw = kv.get(k, "")
+            if not raw:
+                return False
+            # Playwright returns cookie values as the browser stores them —
+            # typically URL-encoded for JSON-value cookies set via
+            # document.cookie.  Decode before length / substring checks.
+            try:
+                decoded = unquote(raw)
+            except Exception:
+                decoded = raw
+            if len(decoded) < val_len.get(k, 1):
+                return False
+            required = cookie_contains.get(k)
+            if required and required not in decoded:
+                return False
+            return True
+
+        if wait_for and any(_cookie_ok(k) for k in wait_for):
+            return True
+
+        if wait_for_ls:
+            try:
+                ls_raw = await self._page.evaluate(
+                    "() => JSON.stringify(Object.fromEntries("
+                    "  Array.from({length: localStorage.length}, (_, i) => "
+                    "    [localStorage.key(i), localStorage.getItem(localStorage.key(i))]"
+                    ")))"
+                )
+                ls: dict = json.loads(ls_raw or "{}")
+                for k in wait_for_ls:
+                    val = ls.get(k)
+                    if not val:
+                        continue
+                    required_substr = ls_contains.get(k)
+                    if required_substr:
+                        if required_substr in val:
+                            return True
+                    else:
+                        return True  # presence alone is sufficient
+            except Exception as exc:
+                print(f"[browser] {self.store}: localStorage check failed: {exc}")
+
+        present = [k for k in kv if k != cfg["auth_cookie"]]
+        print(
+            f"[browser] {self.store}: phase-2 waiting. "
+            f"wait_for={wait_for} cookie_contains={cookie_contains} "
+            f"wait_for_ls={wait_for_ls}. "
+            f"Cookies present ({len(present)}): {present[:30]}"
+        )
+        return False
+
     async def get_auth_cookies(self) -> Optional[dict]:
         """Return all cookies only when the session is fully ready, else None.
 
         Phase 1 — wait for auth_cookie (login complete).
-        Phase 2 — wait for every cookie in wait_for (delivery address saved).
+        Phase 2 — wait for delivery address via _location_ready().
         Only when both phases are done do we save cookies and close the session.
         """
         cfg = _STORE_CONFIG[self.store]
         auth_key = cfg["auth_cookie"]
-        wait_for = cfg.get("wait_for", [])
 
         cookies = await self._context.cookies()
         kv = {c["name"]: c["value"] for c in cookies}
@@ -219,9 +316,17 @@ class _Session:
         if not kv.get(auth_key):
             return None                     # phase 1: not logged in yet
 
-        for key in wait_for:
-            if not kv.get(key):
-                return None                 # phase 2: delivery address not set
+        if not await self._location_ready(kv):
+            return None                     # phase 2: no delivery address yet
+
+        # For Blinkit: if the response interceptor captured a merchant_id that
+        # Blinkit never wrote as a cookie, inject it so search_item_api can use
+        # it as a header (required for /v2/search to route correctly).
+        captured = getattr(self._page, "_blinkit_captured", {})
+        if captured.get("merchant_id") and not kv.get("merchant_id"):
+            kv["merchant_id"] = captured["merchant_id"]
+            print(f"[browser] blinkit: injecting captured "
+                  f"merchant_id={kv['merchant_id']!r} into saved cookies")
 
         return kv                           # all done — close session
 
@@ -233,7 +338,6 @@ class _Session:
         """
         cfg = _STORE_CONFIG[self.store]
         auth_key = cfg["auth_cookie"]
-        wait_for = cfg.get("wait_for", [])
         wait_hint = cfg.get("wait_hint", "")
 
         cookies = await self._context.cookies()
@@ -242,9 +346,8 @@ class _Session:
         if not kv.get(auth_key):
             return "Waiting for login…"
 
-        for key in wait_for:
-            if not kv.get(key):
-                return wait_hint            # phase 2 in progress
+        if not await self._location_ready(kv):
+            return wait_hint                # phase 2: no delivery address yet
 
         return ""                           # done (caller checks get_auth_cookies)
 
@@ -339,6 +442,44 @@ async def start(user_id: str, store: str,
     context = await browser.new_context(**ctx_kwargs)
 
     page = await context.new_page()
+
+    # For Blinkit: intercept all JSON API responses to capture merchant_id.
+    # Blinkit's web app automatically calls a store-discovery endpoint after
+    # seeing lat/lng cookies; the response contains the merchant_id needed for
+    # search API calls.  We log every URL + merchant-related field so we can
+    # see exactly which endpoint returns it.
+    if store == "blinkit":
+        _captured: dict = {}
+
+        async def _capture_blinkit_response(response):
+            try:
+                ct = response.headers.get("content-type", "")
+                if "json" not in ct:
+                    return
+                url = response.url
+                # Skip analytics, fonts, images — only log actual API calls
+                if not any(x in url for x in ("/v1/", "/v2/", "/v3/",
+                                               "/api/", "/location/",
+                                               "/listing/", "/search")):
+                    return
+                body = await response.json()
+                snippet = str(body)[:400]
+                print(f"[browser] blinkit API {response.status}: "
+                      f"{url.split('?')[0]} → {snippet}")
+                # Search for merchant_id anywhere in the response
+                body_str = str(body)
+                import re as _re
+                m = _re.search(r'["\']merchant_id["\']\s*[:=]\s*["\']?(\w+)', body_str)
+                if m:
+                    mid = m.group(1)
+                    print(f"[browser] blinkit: captured merchant_id={mid!r}")
+                    _captured["merchant_id"] = mid
+            except Exception:
+                pass
+
+        page.on("response", _capture_blinkit_response)
+        # Store reference so _location_ready can access captured data
+        page._blinkit_captured = _captured  # type: ignore[attr-defined]
 
     # Block analytics/tracking to reduce background CPU and improve framerate
     for pattern in _BLOCKED_PATTERNS:

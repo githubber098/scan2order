@@ -151,6 +151,74 @@ def filter_by_query_relevance(products: list, query: str) -> list:
 
 
 # ---------------------------------------------------------------------------
+# Shortlist builder — alternative products for the swap UI
+# ---------------------------------------------------------------------------
+
+def build_shortlist(
+    app_results: dict,
+    search_query: str,
+    qty_str: str,
+    winner_pid: str | None,
+    winner_app: str | None,
+    n: int = 15,
+) -> list[dict]:
+    """Return up to n ranked alternative products for the user to swap to.
+
+    Surfaces "candidates removed at the nearest stage to the final pick":
+
+    Tier 1 (best alternatives): passed both relevance and reasonable-size
+        filters, not a gen-* placeholder, sorted by the same
+        (qty_distance, price_per_unit, price) key used to select the winner.
+
+    Tier 2 (fallback): passed relevance but failed the size filter (e.g. a
+        5 kg bag when the user asked for 500 g). Included only when tier 1
+        has fewer than n items.
+
+    The winner (winner_pid on winner_app) is always excluded so the shortlist
+    contains only swappable alternatives. Each item keeps all fields the store
+    search function originally attached (including app / app_name).
+    """
+    tier1: list[dict] = []
+    tier2: list[dict] = []
+    seen: set[tuple] = set()
+    if winner_pid:
+        seen.add((str(winner_pid), winner_app or ""))
+
+    for app_name, products in app_results.items():
+        if not products:
+            continue
+        relevant = filter_by_query_relevance(products, search_query)
+        sized = [
+            p for p in relevant
+            if _is_reasonable_size(p, qty_str)
+            and not str(p.get("product_id") or "").startswith("gen-")
+        ]
+
+        for p in sized:
+            pid = str(p.get("product_id") or "")
+            key = (pid, app_name)
+            if pid and key not in seen:
+                seen.add(key)
+                tier1.append(p)
+
+        for p in relevant:
+            if _is_reasonable_size(p, qty_str):
+                continue  # already counted in tier1 (or excluded as winner)
+            pid = str(p.get("product_id") or "")
+            key = (pid, app_name)
+            if pid and key not in seen:
+                seen.add(key)
+                tier2.append(p)
+
+    def _sort_key(p: dict) -> tuple:
+        return (_qty_distance(qty_str, p), _price_per_unit(p), _product_price(p))
+
+    tier1.sort(key=_sort_key)
+    tier2.sort(key=_sort_key)
+    return (tier1 + tier2)[:n]
+
+
+# ---------------------------------------------------------------------------
 # Ollama fallback (optional — only runs when algorithmic ranker finds no winner)
 # ---------------------------------------------------------------------------
 
@@ -351,6 +419,16 @@ async def compare_one_item(item: dict, user_id: str,
         "cheapest_app": cheapest_app,
         "cheapest_price": cheapest_price if cheapest_app else None,
         "selected_pid": selected_pid,
+        # Up to 15 ranked alternatives for the swap UI.
+        # Tier 1: passed relevance + size filter (best alternatives).
+        # Tier 2: passed relevance only.  Winner excluded.
+        # Clients display winner + shortlist[0:2] = 3 choices; "see more"
+        # reveals the rest.  Client swaps by updating selected_pid/cheapest_app
+        # locally before submitting the cart.
+        "shortlist": build_shortlist(
+            app_results, search_query, qty_str,
+            winner_pid=selected_pid, winner_app=cheapest_app,
+        ),
     }
 
 
