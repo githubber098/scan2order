@@ -479,6 +479,7 @@ async def _search_playwright(
         args=["--no-sandbox", "--disable-dev-shm-usage",
               "--disable-blink-features=AutomationControlled"],
     )
+    lat = cookies.get("gr_1_lat") or cookies.get("lat") or cookies.get("dlat") or ""
     captured: dict = {"auth_key": ""}
     try:
         ctx = await browser.new_context(
