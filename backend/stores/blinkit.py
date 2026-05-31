@@ -484,7 +484,7 @@ async def _search_playwright(
               "--disable-blink-features=AutomationControlled"],
     )
     lat = cookies.get("gr_1_lat") or cookies.get("lat") or cookies.get("dlat") or ""
-    captured: dict = {"auth_key": ""}
+    captured: dict = {"auth_key": "", "products": []}
     try:
         ctx = await browser.new_context(
             user_agent=_MOBILE_UA,
@@ -547,8 +547,20 @@ async def _search_playwright(
                 # Capture derived auth key for caching
                 if "/v2/accounts/auth_key/" in u and body.get("auth_key"):
                     captured["auth_key"] = body["auth_key"]
+                # Capture the first successful layout/search response directly.
+                # The React app's own request succeeds where our standalone
+                # httpx/fetch calls do not; intercepting the response avoids
+                # replicating the exact session state the React app has.
+                if ("/v1/layout/search" in u and resp.status == 200
+                        and body.get("is_success") and not captured["products"]):
+                    try:
+                        captured["products"] = _parse_layout_search_response(body)
+                        print(f"[blinkit] Playwright captured "
+                              f"{len(captured['products'])} products from response")
+                    except Exception as pe:
+                        print(f"[blinkit] Playwright product parse error: {pe}")
                 # Log full response for the search endpoint; truncate others
-                limit = 2000 if "layout/search" in u else 300
+                limit = 200 if "layout/search" in u else 200
                 snippet = str(body)[:limit]
                 print(f"[blinkit] Playwright RESP {resp.status}: "
                       f"{u.split('?')[0]} → {snippet}")
@@ -561,58 +573,17 @@ async def _search_playwright(
         await page.goto(f"{BASE_URL}/s/?q={quote(query)}",
                         wait_until="domcontentloaded", timeout=25000)
 
-        # Wait for auth_key to be captured from /v2/accounts/auth_key/ response.
-        # This arrives quickly after DOMContentLoaded, before React renders.
-        for _ in range(20):
-            if captured["auth_key"]:
+        # Wait for the React app's layout/search response to be intercepted.
+        # It arrives within ~2s of DOMContentLoaded; no DOM scraping needed.
+        for _ in range(30):
+            if captured["products"]:
                 break
             await page.wait_for_timeout(200)
 
-        # Use page.evaluate() to fetch search results from inside the page
-        # context. This automatically uses the fresh Cloudflare cookies that
-        # were set during page load — the root cause of why direct httpx fails.
-        fetch_products: list[dict] = []
-        if captured["auth_key"]:
-            try:
-                fetch_result = await page.evaluate(
-                    """async ({auth_key, lat, q}) => {
-                        const r = await fetch('/v1/layout/search', {
-                            method: 'POST',
-                            credentials: 'include',
-                            headers: {
-                                'auth_key': auth_key,
-                                'lat': lat,
-                                'Content-Type': 'application/json',
-                                'app_client': 'web',
-                                'web_app_version': '3000',
-                            },
-                            body: JSON.stringify({
-                                previous_search_query: q,
-                                applied_filters: null,
-                                postback_meta: {}, processed_rails: {},
-                                monet_assets: [{name:'ads_vertical_banner',processed:0,total:0}],
-                                similar_entities: null, sort: ''
-                            })
-                        });
-                        return await r.json();
-                    }""",
-                    {"auth_key": captured["auth_key"],
-                     "lat": str(lat) if lat else "",
-                     "q": query},
-                )
-                if fetch_result.get("is_success"):
-                    fetch_products = _parse_layout_search_response(fetch_result)
-                    print(f"[blinkit] Playwright fetch: {len(fetch_products)} products")
-                else:
-                    print(f"[blinkit] Playwright fetch: not success: "
-                          f"{str(fetch_result)[:200]}")
-            except Exception as fe:
-                print(f"[blinkit] Playwright fetch failed: {fe}")
+        if captured["products"]:
+            return captured["products"], captured["auth_key"]
 
-        if fetch_products:
-            return fetch_products, captured["auth_key"]
-
-        # Fall back to DOM scraping if the in-page fetch failed.
+        # Fall back to DOM scraping if the response wasn't intercepted.
         try:
             await page.wait_for_selector(
                 'div[role="button"][tabindex="0"][id]', timeout=8000)
