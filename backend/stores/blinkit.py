@@ -333,12 +333,16 @@ async def search_item_api(user_id: str, query: str) -> list[dict]:
         if lat:
             layout_headers["lat"] = str(lat)
 
+        # Match the format used by Blinkit's React app (uses previous_search_query,
+        # not q, and includes sort / similar_entities / monet_assets).
         layout_body = {
-            "q": query,
+            "previous_search_query": query,
             "applied_filters": None,
             "postback_meta": {},
             "processed_rails": {},
-            "monet_assets": [],
+            "monet_assets": [{"name": "ads_vertical_banner", "processed": 0, "total": 0}],
+            "similar_entities": None,
+            "sort": "",
         }
         print(f"[blinkit] Strategy 1 POST headers keys: "
               f"{[k for k in layout_headers if k not in _API_HEADERS_BASE]}")
@@ -583,9 +587,11 @@ async def _search_playwright(
                                 'web_app_version': '3000',
                             },
                             body: JSON.stringify({
-                                q, applied_filters: null,
+                                previous_search_query: q,
+                                applied_filters: null,
                                 postback_meta: {}, processed_rails: {},
-                                monet_assets: []
+                                monet_assets: [{name:'ads_vertical_banner',processed:0,total:0}],
+                                similar_entities: null, sort: ''
                             })
                         });
                         return await r.json();
