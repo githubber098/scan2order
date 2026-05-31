@@ -200,12 +200,14 @@ async def _extract_vlm(raw_bytes: bytes, host: str) -> dict:
     declared MIME type does not need to match the real format.
     """
     model = _ocr_model()
-    # Smaller image = far less image-token prefill = much faster on CPU. 900px
-    # keeps a grocery list legible. max_tokens kept tight (a list is short).
-    # Both tunable; drop OCR_MAX_DIM toward 768 for more speed at some accuracy.
-    max_dim = int(os.getenv("OCR_MAX_DIM", "900") or "900")
-    max_tokens = int(os.getenv("OCR_MAX_TOKENS", "256") or "256")
-    timeout_s = float(os.getenv("OCR_TIMEOUT", "60") or "60")
+    # Resolution vs speed trade-off. Live testing showed gemma4:e2b reads this
+    # handwriting correctly at 1100px (5/5 items) but returns NOTHING at 900px —
+    # the downscale made the strokes unreadable. So 1200px is the floor for
+    # accuracy; going lower for speed silently breaks reads. max_tokens 384 is
+    # enough for a ~30-item list without truncating.
+    max_dim = int(os.getenv("OCR_MAX_DIM", "1200") or "1200")
+    max_tokens = int(os.getenv("OCR_MAX_TOKENS", "384") or "384")
+    timeout_s = float(os.getenv("OCR_TIMEOUT", "90") or "90")
     img_bytes = _downscale_for_vlm(raw_bytes, max_dim)
     b64 = base64.b64encode(img_bytes).decode()
     data_url = f"data:image/jpeg;base64,{b64}"
