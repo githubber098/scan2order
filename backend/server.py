@@ -29,6 +29,8 @@ from pathlib import Path
 from fastapi import FastAPI, Request, UploadFile, File, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
+from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
 
 import auth
 import auth_browser
@@ -41,40 +43,47 @@ from stores import bigbasket, blinkit, zepto
 
 BASE_DIR = Path(__file__).parent
 APP_VERSION = "1.0.0"
-_INDEX_HTML  = BASE_DIR / "templates" / "index.html"
-_LOGIN_HTML  = BASE_DIR / "templates" / "login.html"
+_TEMPLATES_DIR = BASE_DIR / "templates"
+_STATIC_DIR    = BASE_DIR / "static"
+templates = Jinja2Templates(directory=str(_TEMPLATES_DIR))
 
 _SESSION_MAX_AGE = auth.SESSION_TTL   # 6 days
 
 
-def _serve_index(user_id: str) -> HTMLResponse:
-    """Serve index.html with the authenticated user injected as a script tag."""
-    if _INDEX_HTML.exists():
-        html = _INDEX_HTML.read_text(encoding="utf-8")
-        # The placeholder is replaced server-side so the JS never needs an extra
-        # /api/auth/me round-trip on page load. We inject the full user object
-        # (phone/email) so the page can show the "connect your other method" banner.
-        user = user_store.get_user_by_id(user_id) or {
-            "user_id": user_id, "phone": None, "email": None,
-        }
-        inject = (
-            f"<script>window._SERVER_USER = {json.dumps(user)};"
-            f"window._SERVER_USER_ID = {json.dumps(user_id)};</script>"
-        )
-        html = html.replace("<!-- USER_ID_PLACEHOLDER -->", inject)
-        # Per-user dynamic HTML (it embeds this user's phone/email) — never let
-        # a browser/proxy cache it, or a stale copy can hide the connect banner
-        # or leak one user's injected data to another.
-        return HTMLResponse(content=html, headers={"Cache-Control": "no-store"})
-    return HTMLResponse(f"""<!DOCTYPE html><html><body>
-<h1>scan2order</h1><p>Backend running. <a href="/login">Login</a></p>
-</body></html>""")
+_VALID_THEMES = {"fresh", "night", "aurora", "mono", "light", "brutal"}
 
 
-def _serve_login() -> HTMLResponse:
-    if _LOGIN_HTML.exists():
-        return HTMLResponse(content=_LOGIN_HTML.read_text(encoding="utf-8"))
-    return HTMLResponse("<h1>Login page missing</h1>", status_code=500)
+def _user_ctx(user_id: str) -> dict:
+    """Build the Jinja2 template context for an authenticated user."""
+    user = user_store.get_user_by_id(user_id) or {
+        "user_id": user_id, "phone": None, "email": None, "name": None, "theme": "fresh",
+    }
+    # Normalise: theme must be a valid value
+    if user.get("theme") not in _VALID_THEMES:
+        user["theme"] = "fresh"
+    stores_connected = {
+        "bigbasket": bigbasket.is_session_valid(user_id),
+        "blinkit":   blinkit.is_session_valid(user_id),
+        "zepto":     zepto.is_session_valid(user_id),
+    }
+    return {"user": user, "user_id": user_id, "stores": stores_connected}
+
+
+def _template_response(request: Request, tpl: str, extra: dict | None = None,
+                       headers: dict | None = None):
+    """Render a Jinja2 template with common user context."""
+    user_id = _get_session_user(request)
+    if not user_id:
+        return RedirectResponse("/login", status_code=302)
+    ctx = _user_ctx(user_id)
+    if extra:
+        ctx.update(extra)
+    resp = templates.TemplateResponse(request, tpl, ctx)
+    if headers:
+        for k, v in headers.items():
+            resp.headers[k] = v
+    resp.headers.setdefault("Cache-Control", "no-store")
+    return resp
 
 
 def _set_session_cookie(response: Response, user_id: str) -> None:
@@ -137,6 +146,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Static files (theme.css, app.js)
+if _STATIC_DIR.exists():
+    app.mount("/static", StaticFiles(directory=str(_STATIC_DIR)), name="static")
+
 
 # ── Multi-user progress tracking ────────────────────────────────────────────
 # Keyed by user_id so 100s of concurrent compares don't stomp each other.
@@ -191,15 +204,38 @@ async def home(request: Request):
     user_id = _get_session_user(request)
     if not user_id:
         return RedirectResponse("/login", status_code=302)
-    return _serve_index(user_id)
+    # After login, if the user has no name, redirect to onboarding first.
+    user = user_store.get_user_by_id(user_id)
+    if user and not user.get("name"):
+        return RedirectResponse("/onboarding", status_code=302)
+    return _template_response(request, "index.html")
+
+
+@app.get("/history", response_class=HTMLResponse)
+async def history_page(request: Request):
+    return _template_response(request, "history.html")
+
+
+@app.get("/profile", response_class=HTMLResponse)
+async def profile_page(request: Request):
+    return _template_response(request, "profile.html")
+
+
+@app.get("/onboarding", response_class=HTMLResponse)
+async def onboarding_page(request: Request):
+    user_id = _get_session_user(request)
+    if not user_id:
+        return RedirectResponse("/login", status_code=302)
+    ctx = {"user_id": user_id, "user": user_store.get_user_by_id(user_id) or {}}
+    return templates.TemplateResponse(request, "onboarding.html", ctx,
+                                      headers={"Cache-Control": "no-store"})
 
 
 @app.get("/login", response_class=HTMLResponse)
 async def login_page(request: Request):
-    # If already logged in, skip the login page
     if _get_session_user(request):
         return RedirectResponse("/", status_code=302)
-    return _serve_login()
+    return templates.TemplateResponse(request, "login.html", {})
 
 
 # ── User account endpoints ────────────────────────────────────────────────────
@@ -291,7 +327,11 @@ async def api_verify_otp(request: Request):
     user_id = user_store.get_or_create_user(channel, target)
     user_store.update_last_login(user_id)
 
-    resp = JSONResponse({"success": True, "user_id": user_id})
+    # Determine redirect: new users (no name) go to onboarding first.
+    user = user_store.get_user_by_id(user_id)
+    redirect = "/onboarding" if (user and not user.get("name")) else "/"
+
+    resp = JSONResponse({"success": True, "user_id": user_id, "redirect": redirect})
     _set_session_cookie(resp, user_id)
     print(f"[auth] login via {channel} ({_mask(channel, target)}) → {user_id[:8]}…")
     return resp
@@ -411,7 +451,45 @@ async def api_me(request: Request):
         resp = JSONResponse({"error": "user not found"}, status_code=401)
         resp.delete_cookie(auth.COOKIE_NAME)
         return resp
-    return {"user_id": user["user_id"], "phone": user["phone"], "email": user["email"]}
+    return {"user_id": user["user_id"], "phone": user["phone"], "email": user["email"],
+            "name": user.get("name"), "theme": user.get("theme", "fresh")}
+
+
+@app.post("/api/auth/name")
+async def api_set_name(request: Request):
+    """Set or update the user's display name (called from onboarding)."""
+    user_id = _get_session_user(request)
+    if not user_id:
+        return JSONResponse({"error": "not authenticated"}, status_code=401)
+    body = await request.json()
+    name = (body.get("name") or "").strip()
+    if not name:
+        return JSONResponse({"error": "name is required"}, status_code=400)
+    user_store.set_user_name(user_id, name)
+    return JSONResponse({"success": True})
+
+
+@app.post("/api/profile/theme")
+async def api_set_theme(request: Request):
+    """Persist the user's preferred UI theme. Body: {theme: str}. Returns 204."""
+    user_id = _get_session_user(request)
+    if not user_id:
+        return JSONResponse({"error": "not authenticated"}, status_code=401)
+    body = await request.json()
+    theme = body.get("theme", "")
+    if theme not in _VALID_THEMES:
+        return JSONResponse({"error": f"unknown theme {theme!r}"}, status_code=400)
+    user_store.set_user_theme(user_id, theme)
+    return Response(status_code=204)
+
+
+@app.get("/api/history")
+async def api_history(request: Request):
+    """Return the last 50 comparison runs for the logged-in user."""
+    user_id = _get_session_user(request)
+    if not user_id:
+        return JSONResponse({"error": "not authenticated"}, status_code=401)
+    return user_store.get_history(user_id)
 
 
 # ── Store-session auth endpoints ──────────────────────────────────────────────
@@ -978,13 +1056,45 @@ async def api_compare(request: Request):
         grand_total = sum(c["total"] for c in carts.values())
         items_found = sum(1 for c in comparison if c["cheapest_app"])
 
+        # Savings = what you'd pay buying every item at its most expensive store
+        # minus the actual cross-store basket total (pre-delivery, best effort).
+        worst_basket = 0.0
+        for entry in comparison:
+            if not entry.get("cheapest_app"):
+                continue
+            max_price = 0.0
+            for _store, prods in (entry.get("prices") or {}).items():
+                if prods:
+                    p = prods[0]
+                    max_price = max(max_price, float(p.get("sale_price") or p.get("price") or 0))
+            worst_basket += max_price
+        savings = max(0.0, worst_basket - grand_total)
+
         print(f"[compare] DONE. Found {items_found}/{len(items)}, "
-              f"grand total ₹{grand_total:.0f}\n")
+              f"grand total ₹{grand_total:.0f}, savings ₹{savings:.0f}\n")
+
+        # Persist to history
+        stores_used = list(carts.keys())
+        query_text = "\n".join(
+            f"{it.get('name','')} {it.get('qty','')}".strip() for it in items
+        )
+        try:
+            user_store.save_comparison(
+                user_id=user_id,
+                query_text=query_text,
+                items=[{"name": it.get("name",""), "qty": it.get("qty","")} for it in items],
+                grand_total=grand_total,
+                savings=savings,
+                stores=stores_used,
+            )
+        except Exception as e:
+            print(f"[compare] history save failed: {e}")
 
         return {
             "comparison": comparison,
             "carts": carts,
             "grand_total": grand_total,
+            "savings": savings,
             "skipped_apps": skipped,
             "summary": {
                 "total_items": len(items),

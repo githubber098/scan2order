@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="{{ user.theme or 'fresh' }}">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+<title>scan2order · {% block title %}{% endblock %}</title>
+<link rel="stylesheet" href="/static/theme.css" />
+<script defer src="/static/app.js"></script>
+{% block head %}{% endblock %}
+</head>
+<body data-page="{{ page }}">
+<!-- Inject authenticated user so JS never needs an extra /api/auth/me call. -->
+<script>
+  window._SERVER_USER    = {{ user | tojson }};
+  window._SERVER_USER_ID = {{ user_id | tojson }};
+</script>
+
+<div class="app">
+  <div class="app-body">
+
+    <!-- ===== desktop sidebar ===== -->
+    <aside class="sidebar">
+      <div class="wm">scan2order</div>
+      <a class="nav-item" data-nav="compare" data-navlink href="/"><i data-ico="compare"></i><span>Compare</span></a>
+      <a class="nav-item" data-nav="history" data-navlink href="/history"><i data-ico="history"></i><span>History</span></a>
+      <a class="nav-item" data-nav="profile" data-navlink href="/profile"><i data-ico="user"></i><span>Profile</span></a>
+      <div class="nav-spacer"></div>
+      <button class="nav-item" onclick="logout()"><i data-ico="signout"></i><span>Sign out</span></button>
+    </aside>
+
+    <!-- ===== main ===== -->
+    <main class="main">
+      <header class="topbar">
+        <div class="wm">scan2order</div>
+        <a data-navlink href="/profile" aria-label="Profile" style="width:36px;height:36px;border-radius:12px;background:var(--accent-grad);color:var(--accent-ink);display:flex;align-items:center;justify-content:center;font-weight:800;font-size:16px;text-decoration:none">{{ (user.name or user.phone or user.email or 'U')[0] | upper }}</a>
+      </header>
+
+      <div class="page">
+        {% block content %}{% endblock %}
+      </div>
+    </main>
+  </div>
+
+  <!-- ===== mobile bottom tabs ===== -->
+  <nav class="tabbar">
+    <a class="tb" data-nav="compare" data-navlink href="/"><i data-ico="compare"></i><b>Compare</b></a>
+    <a class="tb" data-nav="history" data-navlink href="/history"><i data-ico="history"></i><b>History</b></a>
+    <a class="tb" data-nav="profile" data-navlink href="/profile"><i data-ico="user"></i><b>Profile</b></a>
+  </nav>
+</div>
+
+<!-- ===== Browser-relay connect modal ===== -->
+<div class="modal" id="connect-modal">
+  <div class="modal-box" style="max-width:420px;padding:0;overflow:hidden;position:relative">
+    <div style="display:flex;align-items:center;justify-content:space-between;padding:14px 16px;border-bottom:1px solid var(--card-br)">
+      <span id="connect-modal-title" style="font-weight:700;font-size:15px">Connect store</span>
+      <button onclick="closeConnectModal()" style="background:none;border:none;cursor:pointer;color:var(--muted);display:flex;padding:4px"><i data-ico="x" data-s="18"></i></button>
+    </div>
+    <div style="position:relative;background:#000;min-height:220px;display:flex;align-items:center;justify-content:center">
+      <img id="browser-screenshot" style="width:100%;display:block;max-height:520px;object-fit:contain" alt="Browser view" />
+      <div id="browser-caret" style="display:none;position:absolute;width:2px;height:20px;background:var(--accent);animation:blink 1s step-end infinite;pointer-events:none"></div>
+    </div>
+    <div style="padding:10px 16px;font-size:12px;color:var(--muted);text-align:center">
+      Click inside the browser view to interact · type directly to enter text
+    </div>
+  </div>
+</div>
+
+{% block extra_scripts %}{% endblock %}
+</body>
+</html>

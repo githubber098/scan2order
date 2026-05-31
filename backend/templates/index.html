@@ -1,1472 +1,340 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>scan2order: grocery price compare</title>
-    <!-- USER_ID_PLACEHOLDER -->
-    <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-            background: #0a0a1a;
-            color: #e0e0e0;
-            min-height: 100vh;
-            padding: 20px;
-        }
-        .container { max-width: 500px; margin: 0 auto; }
+{% extends "base.html" %}
+{% set page = "compare" %}
+{% block title %}Compare{% endblock %}
 
-        .logo { text-align: center; margin-bottom: 24px; }
-        .logo h1 {
-            font-size: 26px;
-            background: linear-gradient(135deg, #4ecdc4, #2db5ad);
-            background-clip: text;
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
-        }
-        .logo p { color: #667; font-size: 13px; margin-top: 4px; }
+{% block content %}
+<!-- entry card -->
+<section class="card stack" aria-label="Build your list">
+  <div class="spread">
+    <h1 class="h1">Cheapest basket</h1>
+    <span id="stores-pill" class="pill-tag">
+      <span class="dot on" style="width:7px;height:7px"></span>
+      {% set n = stores.values() | selectattr('__eq__', 'equalto', true) | list | length %}
+      {{ n }} store{{ 's' if n != 1 else '' }} connected
+    </span>
+  </div>
+  <p class="lead" style="margin-top:-6px">Scan a handwritten list or type items — we price it across Zepto, Blinkit &amp; BigBasket.</p>
 
-        textarea {
-            width: 100%; height: 180px;
-            background: #111; border: 1px solid #333; border-radius: 12px;
-            color: #eee; padding: 14px; font-size: 14px; resize: vertical;
-            font-family: inherit;
-        }
-        textarea:focus { outline: none; border-color: #4ecdc4; }
-        textarea::placeholder { color: #555; }
+  <div id="ocr-status" class="dim" style="font-size:12px;min-height:1em"></div>
+  <textarea class="textarea" id="items" placeholder="Tomatoes 1kg&#10;Amul butter 100g&#10;Onions 1kg"></textarea>
 
-        .btn {
-            width: 100%; padding: 14px; margin-top: 12px;
-            border: none; border-radius: 12px; font-size: 15px;
-            font-weight: 600; cursor: pointer; transition: opacity 0.15s;
-        }
-        .btn:disabled { opacity: 0.5; cursor: not-allowed; }
-        .btn-primary { background: linear-gradient(135deg, #4ecdc4, #2db5ad); color: #001; }
-        .btn-secondary { background: #1a1a2e; border: 1px solid #333; color: #4ecdc4; }
-        .btn-tiny {
-            display: inline-block; width: auto; padding: 4px 10px; margin-top: 0;
-            margin-left: 6px; font-size: 11px; border: 1px solid #333; background: none;
-            color: #888; border-radius: 6px; cursor: pointer;
-        }
-        .btn-tiny:hover { background: #1a2a3a; color: #4ecdc4; border-color: #4ecdc4; }
-
-        /* Auth section */
-        .auth-section {
-            background: #111122; border: 1px solid #222;
-            border-radius: 12px; padding: 14px; margin-bottom: 16px;
-        }
-        .auth-section h3 {
-            font-size: 13px; color: #888; margin-bottom: 10px;
-            text-transform: uppercase; letter-spacing: 0.5px;
-        }
-
-        /* Store connect rows */
-        .store-connect-list { display: flex; flex-direction: column; gap: 2px; }
-        .store-connect-row {
-            display: flex; align-items: center; gap: 10px; padding: 7px 0;
-        }
-        .store-connect-name { flex: 1; font-size: 14px; }
-        .btn-connect {
-            padding: 5px 14px; background: none;
-            border: 1px solid #4ecdc4; color: #4ecdc4;
-            border-radius: 8px; font-size: 12px; cursor: pointer; font-weight: 600;
-        }
-        .btn-connect:hover { background: rgba(78,205,196,0.08); }
-        .btn-connect.connected { border-color: #333; color: #555; }
-        .btn-connect.connected:hover { background: none; }
-
-        /* Status dots */
-        .dot {
-            width: 8px; height: 8px; border-radius: 50%; display: inline-block;
-            flex-shrink: 0;
-        }
-        .dot-green { background: #4ecdc4; }
-        .dot-red { background: #555; }
-        .dot-yellow { background: #e8a52a; animation: dotPulse 1.6s ease-in-out infinite; }
-        @keyframes dotPulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.45; } }
-
-        /* OCR scan box */
-        .scan-section { margin-bottom: 16px; }
-        .scan-label {
-            display: block; padding: 14px; background: #1a1a2e;
-            border: 1px dashed #4ecdc4; border-radius: 12px;
-            color: #4ecdc4; text-align: center; font-size: 14px; cursor: pointer;
-        }
-        .scan-status { margin-top: 8px; font-size: 12px; color: #888; min-height: 16px;
-            display: flex; gap: 8px; align-items: center; justify-content: center; flex-wrap: wrap; }
-
-        .status {
-            margin-top: 12px; padding: 10px 14px;
-            background: #1a1a2e; border-left: 3px solid #4ecdc4;
-            border-radius: 6px; font-size: 13px;
-        }
-        .status.error { border-left-color: #e24b4a; color: #e24b4a; }
-
-        .progress { margin-top: 12px; padding: 10px 14px; background: #1a1a2e; border-radius: 6px; font-size: 13px; }
-        .progress .progress-label { display: flex; justify-content: space-between; color: #aaa; margin-bottom: 6px; font-size: 12px; }
-        .progress .current { color: #4ecdc4; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 60%; }
-        .progress-bar { width: 100%; height: 4px; background: #222; border-radius: 2px; }
-        .progress-fill { height: 100%; background: linear-gradient(90deg, #4ecdc4, #2db5ad); border-radius: 2px; transition: width 0.3s; }
-
-        /* Results */
-        .results-section { margin-top: 20px; }
-        .results-section h2 { font-size: 16px; margin-bottom: 12px; color: #ccc; }
-
-        .item-card {
-            background: #111122; border: 1px solid #222;
-            border-radius: 12px; padding: 14px; margin-bottom: 10px;
-        }
-        .item-name { font-size: 14px; color: #888; margin-bottom: 6px; }
-        .no-match { color: #555; font-size: 13px; font-style: italic; }
-
-        .app-results { display: grid; gap: 8px; margin-top: 8px; }
-        .product-row {
-            display: flex; justify-content: space-between; align-items: center;
-            padding: 8px 10px; background: #0d0d1e; border-radius: 8px;
-            border: 1px solid #1e1e3e;
-        }
-        .product-row.cheapest { border-color: #4ecdc4; background: #0a1a1a; }
-        .product-info { flex: 1; }
-        .product-name { font-size: 13px; color: #ddd; }
-        .product-meta { font-size: 11px; color: #666; margin-top: 2px; }
-        .product-price { font-size: 15px; font-weight: 700; color: #4ecdc4; }
-        .product-price.cheapest { color: #4ecdc4; }
-        .best-badge {
-            display: inline-block; font-size: 10px; padding: 2px 6px;
-            background: #4ecdc4; color: #001; border-radius: 4px;
-            font-weight: 700; margin-left: 6px;
-        }
-
-        /* Swap / shortlist alternatives */
-        .swap-row {
-            display: flex; justify-content: space-between; align-items: center;
-            padding: 8px 10px; background: #0d0d1e; border-radius: 8px;
-            border: 1px solid #1e1e3e; margin-top: 4px; cursor: pointer;
-            transition: background 0.12s, border-color 0.12s;
-        }
-        .swap-row:hover { background: #111130; border-color: #3a3a5a; }
-        .swap-row.swap-selected { border-color: #4ecdc4; background: #0a1a1a; }
-        .swap-more-btn {
-            display: block; width: 100%; padding: 6px; margin-top: 6px;
-            background: none; border: 1px dashed #2a2a3a; color: #555;
-            border-radius: 8px; font-size: 12px; cursor: pointer; text-align: center;
-            transition: color 0.12s, border-color 0.12s;
-        }
-        .swap-more-btn:hover { border-color: #4ecdc4; color: #4ecdc4; }
-        .swap-hidden { display: none; }
-
-        /* Grand total + cart actions */
-        .summary-card {
-            background: #1a1a2e; border: 1px solid #333;
-            border-radius: 12px; padding: 16px; margin-top: 16px;
-        }
-        .grand-total { font-size: 20px; font-weight: 700; color: #4ecdc4; }
-        .cart-list { margin-top: 10px; }
-        .cart-store { margin-bottom: 12px; }
-        .cart-store-name { font-size: 12px; color: #888; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px; }
-        .cart-item-row { display: flex; justify-content: space-between; font-size: 13px; padding: 3px 0; color: #ccc; }
-        .cart-item-price { color: #888; }
-        .add-to-carts-btn { margin-top: 12px; }
-
-        .cart-result {
-            margin-top: 10px; padding: 10px; background: #0a1a0a;
-            border: 1px solid #1a3a1a; border-radius: 8px; font-size: 12px; color: #4ecdc4;
-        }
-        .cart-result.has-failed { border-color: #3a1a1a; background: #1a0a0a; }
-        .failed-item { color: #e24b4a; }
-
-        .skipped-notice { color: #888; font-size: 12px; margin-top: 6px; font-style: italic; }
-
-        /* Browser auth modal — near full-screen, mobile-sized browser pane */
-        .browser-modal {
-            display: none; position: fixed; inset: 0;
-            background: rgba(0,0,0,0.94); z-index: 1000;
-            flex-direction: column; align-items: center; justify-content: center;
-            padding: 8px;
-        }
-        .browser-modal.open { display: flex; }
-        .browser-box {
-            background: #111122; border: 1px solid #333; border-radius: 14px;
-            width: min(460px, 100%);
-            display: flex; flex-direction: column;
-            position: relative; /* anchor for #browser-kbd-hint absolute positioning */
-        }
-        .browser-titlebar {
-            display: flex; justify-content: space-between; align-items: center;
-            padding: 10px 14px; border-bottom: 1px solid #222; flex-shrink: 0;
-        }
-        .browser-title { font-size: 14px; font-weight: 600; color: #4ecdc4; }
-        .browser-close-btn {
-            background: none; border: 1px solid #444; color: #aaa;
-            border-radius: 6px; padding: 4px 10px; cursor: pointer; font-size: 13px;
-        }
-        .browser-close-btn:hover { border-color: #e24b4a; color: #e24b4a; }
-        /* Screenshot: aspect-ratio matches the 430×700 Playwright viewport exactly.
-           This means getBoundingClientRect() returns the real image bounds with
-           no letterbox bars, so click-coordinate normalisation is pixel-accurate.
-           max-height prevents overflow on short screens; the browser adjusts
-           width automatically to preserve the ratio when height is capped. */
-        #browser-screenshot {
-            display: block;
-            width: 100%;
-            height: auto;
-            aspect-ratio: 430 / 700;
-            max-height: calc(100vh - 90px);
-            background: #000;
-            cursor: crosshair;
-        }
-        .browser-footer {
-            padding: 8px 14px; border-top: 1px solid #1a1a2e;
-            display: flex; align-items: center; justify-content: space-between;
-            flex-shrink: 0;
-        }
-        .browser-footer-hint { font-size: 11px; color: #444; }
-        #browser-auth-status { font-size: 12px; color: #555; }
-
-        /* Keyboard hint — slides in when modal opens, fades after 3.5 s */
-        #browser-kbd-hint {
-            position: absolute; bottom: 52px; left: 50%; transform: translateX(-50%) translateY(4px);
-            background: rgba(78,205,196,0.92); color: #001;
-            padding: 7px 16px; border-radius: 20px; font-size: 13px; font-weight: 600;
-            white-space: nowrap; pointer-events: none;
-            opacity: 0; transition: opacity 0.4s, transform 0.4s;
-        }
-
-        /* Connect-other-method banner — matches the .auth-section card style,
-           with a teal left accent to draw attention. */
-        .connect-banner {
-            position: relative;
-            background: #111122;
-            border: 1px solid #222; border-left: 3px solid #4ecdc4;
-            border-radius: 12px;
-            padding: 14px 16px; margin-bottom: 16px;
-        }
-        .connect-banner-x {
-            position: absolute; top: 8px; right: 12px; background: none; border: none;
-            color: #667; font-size: 18px; line-height: 1; padding: 0; cursor: pointer;
-        }
-        .connect-banner-x:hover { color: #aaa; }
-        .connect-banner-head {
-            font-size: 13px; color: #cfe; margin-bottom: 12px; padding-right: 22px;
-        }
-        /* stretch so the input and button are exactly the same height */
-        .connect-banner-body { display: flex; gap: 8px; align-items: stretch; }
-        .connect-input {
-            flex: 1; min-width: 0; padding: 10px 12px;
-            background: #111; border: 1px solid #333; border-radius: 10px;
-            color: #eee; font-size: 14px; font-family: inherit;
-        }
-        .connect-input:focus { outline: none; border-color: #4ecdc4; }
-        .connect-send {
-            flex-shrink: 0; padding: 0 18px; border: none; border-radius: 10px;
-            background: linear-gradient(135deg, #4ecdc4, #2db5ad); color: #001;
-            font-weight: 600; font-size: 13px; font-family: inherit;
-            white-space: nowrap; cursor: pointer; transition: opacity 0.15s;
-        }
-        .connect-send:hover:not(:disabled) { opacity: 0.9; }
-        .connect-send:disabled { opacity: 0.5; cursor: not-allowed; }
-        .connect-banner-msg { font-size: 12px; margin-top: 10px; }
-        .connect-banner-msg.err { color: #e24b4a; }
-        .connect-banner-msg.ok { color: #4ecdc4; }
-
-        /* Profile icon + account dropdown menu */
-        .profile-wrap { position: relative; }
-        .profile-btn {
-            width: 34px; height: 34px; border-radius: 50%; border: none; cursor: pointer;
-            background: linear-gradient(135deg, #4ecdc4, #2db5ad); color: #001;
-            font-size: 16px; display: flex; align-items: center; justify-content: center;
-            padding: 0; transition: opacity 0.15s;
-        }
-        .profile-btn:hover { opacity: 0.9; }
-        .account-menu {
-            display: none; position: absolute; right: 0; top: calc(100% + 8px);
-            width: 290px; background: #15152a; border: 1px solid #333;
-            border-radius: 12px; box-shadow: 0 10px 30px rgba(0,0,0,0.5);
-            z-index: 900; overflow: hidden;
-        }
-        .account-menu.open { display: block; }
-        .account-menu-status { padding: 6px 14px 10px; }
-        .account-menu-sep { height: 1px; background: #2a2a3e; }
-        .account-menu-item {
-            display: block; width: 100%; text-align: left; padding: 11px 14px;
-            background: none; border: none; color: #ddd; font-size: 14px;
-            cursor: pointer; font-family: inherit;
-        }
-        .account-menu-item:hover:not(:disabled) { background: #1e1e38; }
-        .account-menu-item:disabled { opacity: 0.6; cursor: default; }
-        .account-menu-item.danger { color: #e2576b; }
-        .account-menu-item.danger:hover:not(:disabled) { background: #250f15; }
-        .account-row {
-            display: flex; align-items: center; gap: 8px;
-            padding: 10px 0; border-bottom: 1px solid #232340;
-        }
-        .account-row:last-child { border-bottom: none; }
-        .acct-label { font-size: 13px; color: #888; width: 70px; flex-shrink: 0; }
-        .acct-val { flex: 1; font-size: 13px; color: #eee; word-break: break-all; }
-        .acct-ok { color: #4ecdc4; font-size: 15px; }
-        .acct-connect-btn {
-            flex-shrink: 0; padding: 5px 12px; border: 1px solid #4ecdc4; background: none;
-            color: #4ecdc4; border-radius: 8px; font-size: 12px; font-weight: 600;
-            cursor: pointer; font-family: inherit;
-        }
-        .acct-connect-btn:hover { background: rgba(78,205,196,0.08); }
-        #acct-connect-area { padding: 10px 0 2px; }
-        .acct-connect-title { font-size: 12px; color: #bfe; margin-bottom: 8px; }
-        .account-connect-form { display: flex; gap: 8px; align-items: stretch; }
-
-        /* Spinner + loading/feedback */
-        .spinner {
-            width: 16px; height: 16px; border: 2px solid rgba(78,205,196,0.25);
-            border-top-color: #4ecdc4; border-radius: 50%; display: inline-block;
-            animation: spin 0.7s linear infinite; vertical-align: middle; margin-right: 6px;
-        }
-        @keyframes spin { to { transform: rotate(360deg); } }
-        .scan-cancel {
-            padding: 3px 10px; font-size: 12px; cursor: pointer;
-            background: none; border: 1px solid #444; color: #aaa; border-radius: 6px; font-family: inherit;
-        }
-        .scan-cancel:hover { border-color: #e24b4a; color: #e24b4a; }
-        .browser-loading {
-            position: absolute; inset: 0; display: none; flex-direction: column;
-            align-items: center; justify-content: center; gap: 14px;
-            background: #0a0a14; color: #aaa; font-size: 14px; z-index: 2; border-radius: 14px;
-        }
-        .browser-loading.show { display: flex; }
-        .browser-loading .spinner { width: 30px; height: 30px; border-width: 3px; margin: 0; }
-        .click-ripple {
-            position: absolute; width: 22px; height: 22px; margin: -11px 0 0 -11px;
-            border: 2px solid #4ecdc4; border-radius: 50%; pointer-events: none;
-            animation: ripple 0.5s ease-out forwards; z-index: 3;
-        }
-        @keyframes ripple { from { opacity: 0.9; transform: scale(0.4); } to { opacity: 0; transform: scale(1.7); } }
-        /* Blinking text caret at the last tap point — signals "you can type here". */
-        .relay-caret {
-            position: absolute; width: 2px; height: 20px; margin: -10px 0 0 0;
-            background: #4ecdc4; pointer-events: none; z-index: 3;
-            animation: blink 1.05s step-end infinite;
-        }
-        @keyframes blink { 0%, 50% { opacity: 1; } 50.01%, 100% { opacity: 0; } }
-    </style>
-</head>
-<body>
-<div class="container">
-    <div class="logo">
-        <h1>scan2order</h1>
-        <p>grocery price comparison across BigBasket, Blinkit &amp; Zepto</p>
-    </div>
-
-    <!-- Connect-other-method nudge: shown when the account has only phone OR only email.
-         It just opens the Account modal (which is also reachable any time via the
-         Account button), so dismissing it never loses access. -->
-    <div class="connect-banner" id="connect-banner" style="display:none">
-        <button class="connect-banner-x" onclick="dismissConnectBanner()" title="Dismiss">&times;</button>
-        <div class="connect-banner-head" id="connect-banner-text">Add a backup contact.</div>
-        <button class="connect-send" onclick="openAccountMenu()">Add it now</button>
-    </div>
-
-    <!-- Auth section: per-store Connect buttons (Playwright login relay) -->
-    <div class="auth-section" id="auth-section">
-        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
-            <h3 style="margin-bottom:0">Store connections</h3>
-            <div class="profile-wrap">
-                <button class="profile-btn" id="profile-btn" onclick="toggleAccountMenu(event)" title="Account">👤</button>
-                <div class="account-menu" id="account-menu">
-                    <div class="account-menu-status" id="account-body"></div>
-                    <div class="account-menu-sep"></div>
-                    <button class="account-menu-item" onclick="logout()">Sign out</button>
-                    <button class="account-menu-item" id="wipe-data-btn" onclick="confirmDisconnectAll()">Delete my data</button>
-                    <button class="account-menu-item danger" id="delete-acct-btn" onclick="confirmDeleteAccount()">Delete account</button>
-                </div>
-            </div>
-        </div>
-        <div class="store-connect-list">
-            <div class="store-connect-row">
-                <span class="dot dot-red" id="dot-bigbasket"></span>
-                <span class="store-connect-name">BigBasket</span>
-                <span style="font-size:11px; color:#555; padding:4px 8px">📱 Mobile only</span>
-            </div>
-            <div class="store-connect-row">
-                <span class="dot dot-red" id="dot-blinkit"></span>
-                <span class="store-connect-name">Blinkit</span>
-                <button class="btn-connect" id="btn-blinkit"
-                        onclick="openBrowserAuth('blinkit')">Connect</button>
-            </div>
-            <div class="store-connect-row">
-                <span class="dot dot-red" id="dot-zepto"></span>
-                <span class="store-connect-name">Zepto</span>
-                <button class="btn-connect" id="btn-zepto"
-                        onclick="openBrowserAuth('zepto')">Connect</button>
-            </div>
-        </div>
-    </div>
-
-    <!-- OCR scan -->
-    <div class="scan-section">
-        <label class="scan-label" for="ocr-input">
-            📷 Scan grocery list photo
-        </label>
-        <input type="file" id="ocr-input" accept="image/*" style="display:none"
-               onchange="ocrImage(event)">
-        <div class="scan-status" id="scan-status">
-            <span id="scan-msg"></span>
-            <button class="scan-cancel" id="scan-cancel" style="display:none" onclick="cancelOcr()">Cancel</button>
-        </div>
-    </div>
-
-    <!-- Manual input -->
-    <textarea id="grocery-list" placeholder="Tomatoes 500g
-Onions 1kg
-Amul Butter 100g
-Atta 5kg
-..."></textarea>
-
-    <button class="btn btn-primary" onclick="startCompare()" id="compare-btn">
-        Compare prices
+  <div class="row" style="gap:10px">
+    <button class="btn ghost" style="width:auto" onclick="document.getElementById('ocr-input').click()">
+      <i data-ico="camera" data-s="18"></i>Scan
     </button>
-    <button class="btn btn-secondary" onclick="clearAll()" style="margin-top:8px">
-        Clear
+    <button class="btn ghost sm" id="ocr-cancel" style="display:none;width:auto" onclick="s2o_cancelOcr()">Cancel</button>
+    <input id="ocr-input" type="file" accept="image/*" capture="environment" hidden onchange="s2o_handleOcr(event)" />
+    <button class="btn" style="flex:1" id="compare-btn" onclick="startCompare()">
+      <i data-ico="compare" data-s="18" data-w="2.4"></i>Compare prices
     </button>
+  </div>
+</section>
 
-    <div id="progress-bar-wrap" style="display:none">
-        <div class="progress">
-            <div class="progress-label">
-                <span id="progress-text">Searching...</span>
-                <span class="current" id="progress-current"></span>
-            </div>
-            <div class="progress-bar"><div class="progress-fill" id="progress-fill" style="width:0%"></div></div>
-        </div>
-    </div>
-
-    <div id="status-wrap"></div>
-
-    <div id="results-section" class="results-section" style="display:none">
-        <h2>Results</h2>
-        <div id="item-cards"></div>
-
-        <div class="summary-card" id="summary-card" style="display:none">
-            <div>Grand total: <span class="grand-total" id="grand-total">₹0</span></div>
-            <div class="cart-list" id="cart-list"></div>
-            <button class="btn btn-primary add-to-carts-btn" onclick="addAllToCarts()" id="add-btn">
-                Add to carts
-            </button>
-            <div id="cart-result-wrap"></div>
-        </div>
-        <div id="skipped-notice" class="skipped-notice"></div>
-    </div>
+<!-- progress -->
+<div id="progress-wrap" style="display:none" class="card tight stack">
+  <div class="row" style="justify-content:space-between;font-size:12.5px;color:var(--muted)">
+    <span id="progress-label">Searching…</span>
+    <span id="progress-item" style="max-width:55%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"></span>
+  </div>
+  <div style="height:4px;background:var(--card-br);border-radius:2px;overflow:hidden">
+    <div id="progress-fill" style="height:100%;width:0%;background:var(--accent-grad);border-radius:2px;transition:width .3s"></div>
+  </div>
 </div>
 
-<!-- Browser auth modal: live Playwright screenshot; click + type directly -->
-<div class="browser-modal" id="browser-modal">
-    <div class="browser-box">
-        <div class="browser-titlebar">
-            <span class="browser-title" id="browser-title">Login</span>
-            <button class="browser-close-btn" onclick="closeBrowserSession()">✕ Cancel</button>
-        </div>
-        <img id="browser-screenshot" src="" alt="Loading…" tabindex="0">
-        <div class="browser-loading" id="browser-loading">
-            <div class="spinner"></div>
-            <div id="browser-loading-text">Starting browser…</div>
-        </div>
-        <div class="relay-caret" id="relay-caret" style="display:none"></div>
-        <div id="browser-kbd-hint">⌨ Just start typing — keyboard input goes straight into the page</div>
-        <div class="browser-footer">
-            <span class="browser-footer-hint">Click anywhere to interact &bull; type directly &bull; scroll works too</span>
-            <span id="browser-auth-status">Waiting for login…</span>
-        </div>
-    </div>
-</div>
+<!-- ===== results ===== -->
+<section id="results" class="stack" style="display:none">
 
+  <!-- hero total -->
+  <div class="hero spread">
+    <div>
+      <div style="font-size:12.5px;opacity:.85;font-weight:600">Your cheapest basket</div>
+      <div class="big num" id="grand-total">₹—</div>
+      <div style="font-size:12px;opacity:.9;margin-top:2px" id="grand-summary"></div>
+    </div>
+    <span class="badge" id="savings-badge" style="background:var(--coral);color:#fff;font-size:13px;transform:rotate(4deg);padding:7px 11px;display:none">Save ₹—</span>
+  </div>
+
+  <!-- store split -->
+  <div id="store-split" class="row" style="gap:9px"></div>
+
+  <div class="sectiontitle" style="margin-top:4px">Item by item</div>
+  <div id="item-cards" class="stack" style="gap:8px"></div>
+
+  <div id="skipped-notice" class="dim" style="font-size:11.5px;display:none"></div>
+
+  <button class="btn block" style="margin-top:4px" id="add-btn" onclick="addAllToCarts()">
+    <i data-ico="cart" data-s="18"></i>Add all to carts
+  </button>
+  <p class="center dim" style="font-size:11.5px">Opens each store with your items pre-added.</p>
+  <div id="cart-result" class="stack" style="gap:6px"></div>
+</section>
+{% endblock %}
+
+{% block extra_scripts %}
 <script>
-// ── State ────────────────────────────────────────────────────────────────────
-
-// user_id is injected server-side via the USER_ID_PLACEHOLDER script tag.
-// The server reads the session cookie and writes window._SERVER_USER_ID
-// before serving this page, so no async fetch is needed here.
-let userId = window._SERVER_USER_ID || null;
-if (!userId) {
-    window.location.href = '/login';
-} else {
-    // Defer to the next tick so the let-declared state initConnectBanner()
-    // touches (_connectChannel, _connectTarget — declared far below) is past
-    // its temporal dead zone. Calling it synchronously here throws a
-    // ReferenceError and silently kills the rest of this script.
-    setTimeout(initConnectBanner, 0);
-}
-
+/* ============================================================
+   Compare page — inline script
+   ============================================================ */
+const userId = window._SERVER_USER_ID;
 let comparisonData = null;
-let pollTimer = null;
+let _pollTimer = null;
 
-// Browser session state
-let _browserSessionId = null;
-let _screenshotLoopActive = false; // set false to stop the sequential screenshot loop
-let _checkTimer = null;
-let _browserStartToken = 0;        // bumped on close/cancel to abort an in-flight start
-let _ocrAbort = null;              // AbortController for the in-flight OCR request
-let _browserWs = null;             // screenshot-streaming WebSocket
-let _wsGotFrame = false;           // did the WS deliver any frame? (else fall back to polling)
-
-// Keystroke batching — collect printable chars for 30 ms, send as one string.
-// Avoids one HTTP round-trip per keypress; special keys flush the buffer first.
-let _typeBuffer = '';
-let _typeFlushTimer = null;
-function _flushTypeBuffer() {
-    clearTimeout(_typeFlushTimer);
-    _typeFlushTimer = null;
-    if (!_typeBuffer || !_browserSessionId) { _typeBuffer = ''; return; }
-    const text = _typeBuffer;
-    _typeBuffer = '';
-    _sendBrowserEvent({ type: 'type', text });
-}
-
-// ── Init ─────────────────────────────────────────────────────────────────────
-
-window.addEventListener('load', () => {
-    refreshStoreStatus();
-    _initBrowserModal();
+// Pre-fill textarea if history page redirected us with a rerun
+document.addEventListener('DOMContentLoaded', () => {
+  const rerun = sessionStorage.getItem('s2o_rerun');
+  if (rerun) {
+    const ta = document.getElementById('items');
+    if (ta) ta.value = rerun;
+    sessionStorage.removeItem('s2o_rerun');
+  }
 });
 
-// ── Auth: store status ────────────────────────────────────────────────────────
-
-async function refreshStoreStatus() {
-    try {
-        const resp = await fetch(`/api/auth/status/${encodeURIComponent(userId)}`);
-        const data = await resp.json();
-        const stores = {};
-        for (const s of ['bigbasket', 'blinkit', 'zepto']) {
-            stores[s] = !!(data.connected_stores && data.connected_stores[s]);
-        }
-        updateStoreDots(stores);
-    } catch (e) { /* silent */ }
+// ── Parse textarea ──────────────────────────────────────────
+function _parseItems(raw) {
+  return raw.split('\n').map(l => l.trim()).filter(Boolean).map(line => {
+    const m = line.match(/^(.+?)\s+(\d+(?:\.\d+)?\s*(?:kg|g|gm|ml|l|L|pcs?|pieces?|pack))$/i);
+    return m ? { name: m[1].trim(), qty: m[2].trim() } : { name: line };
+  });
 }
 
-function updateStoreDots(stores) {
-    const storeNames = { bigbasket: 'BigBasket', blinkit: 'Blinkit', zepto: 'Zepto' };
-    for (const [store, connected] of Object.entries(stores)) {
-        const dot = document.getElementById('dot-' + store);
-        const btn = document.getElementById('btn-' + store);
-        if (dot) dot.className = 'dot ' + (connected ? 'dot-green' : 'dot-red');
-        if (btn) {
-            btn.textContent = connected ? 'Reconnect' : 'Connect';
-            btn.classList.toggle('connected', connected);
-        }
+// ── Savings (vs worst single store) ────────────────────────
+function _calcSavings(comparison, grandTotal) {
+  let worst = 0;
+  for (const entry of comparison) {
+    if (!entry.cheapest_app) continue;
+    let mx = 0;
+    for (const prods of Object.values(entry.prices || {})) {
+      if (prods && prods[0]) mx = Math.max(mx, prods[0].sale_price || prods[0].price || 0);
     }
+    worst += mx;
+  }
+  return Math.max(0, worst - grandTotal);
 }
 
-// ── Browser auth modal ────────────────────────────────────────────────────────
-
-// Document-level keyboard handler — active only while the modal is open.
-// Captures ALL keystrokes so the user can type directly without focusing
-// a separate input field.
-function _browserKeyHandler(e) {
-    // Let browser shortcuts (Ctrl+R, F12, etc.) pass through
-    if (e.ctrlKey || e.metaKey) return;
-    const ignore = ['Shift', 'Alt', 'Meta', 'Control', 'CapsLock', 'Fn', 'Dead'];
-    if (ignore.includes(e.key)) return;
-    e.preventDefault();
-    if (e.key.length === 1) {
-        // Printable char — accumulate for 30 ms then flush as one string
-        _typeBuffer += e.key;
-        clearTimeout(_typeFlushTimer);
-        _typeFlushTimer = setTimeout(_flushTypeBuffer, 30);
-    } else {
-        // Special key — flush any pending text first, then send the key
-        _flushTypeBuffer();
-        _sendBrowserEvent({ type: 'key', key: e.key });
-    }
+function _updateSavingsBadge(savings) {
+  const badge = document.getElementById('savings-badge');
+  if (!badge) return;
+  if (savings >= 1) {
+    badge.textContent = 'Save ₹' + Math.round(savings);
+    badge.style.display = '';
+  } else {
+    badge.style.display = 'none';
+  }
 }
 
-function _initBrowserModal() {
-    const img = document.getElementById('browser-screenshot');
-
-    // Click on screenshot → normalised coords to Playwright
-    img.addEventListener('click', (e) => {
-        const rect = img.getBoundingClientRect();
-        // getBoundingClientRect gives the rendered size; divide to normalise
-        const nx = (e.clientX - rect.left) / rect.width;
-        const ny = (e.clientY - rect.top) / rect.height;
-        _sendBrowserEvent({ type: 'click', nx, ny });
-        _showClickRipple(e.clientX, e.clientY);
-        _placeCaret(e.clientX, e.clientY);
-    });
-
-    // Scroll on screenshot → forward deltaY
-    img.addEventListener('wheel', (e) => {
-        e.preventDefault();
-        _sendBrowserEvent({ type: 'scroll', delta_y: e.deltaY });
-        // The page moved, so the caret's old position is stale — hide it.
-        const caret = document.getElementById('relay-caret');
-        if (caret) caret.style.display = 'none';
-    }, { passive: false });
-}
-
-// Park a blinking caret at the last tap point so it's obvious the field is
-// focused and ready for typing (the streamed screenshot has no real caret).
-function _placeCaret(clientX, clientY) {
-    const box = document.querySelector('.browser-box');
-    const caret = document.getElementById('relay-caret');
-    if (!box || !caret) return;
-    const r = box.getBoundingClientRect();
-    caret.style.left = (clientX - r.left) + 'px';
-    caret.style.top = (clientY - r.top) + 'px';
-    caret.style.display = 'block';
-}
-
-// Brief teal ripple at the click point so it's obvious the tap registered
-// (the streamed screenshot shows no cursor/caret).
-function _showClickRipple(clientX, clientY) {
-    const box = document.querySelector('.browser-box');
-    if (!box) return;
-    const r = box.getBoundingClientRect();
-    const dot = document.createElement('div');
-    dot.className = 'click-ripple';
-    dot.style.left = (clientX - r.left) + 'px';
-    dot.style.top = (clientY - r.top) + 'px';
-    box.appendChild(dot);
-    setTimeout(() => dot.remove(), 520);
-}
-
-async function openBrowserAuth(store) {
-    const storeNames = { bigbasket: 'BigBasket', blinkit: 'Blinkit', zepto: 'Zepto' };
-    const label = storeNames[store] || store;
-
-    // Stop any existing session
-    if (_browserSessionId) await _closeBrowserSession(false);
-
-    // Open the modal IMMEDIATELY with a loading state — launching Chromium and
-    // loading the store page takes several seconds; don't leave the user
-    // staring at a frozen page wondering if the click worked.
-    const token = ++_browserStartToken;     // guards against cancel/re-click races
-    document.getElementById('browser-title').textContent = label + ' login';
-    document.getElementById('browser-auth-status').textContent = 'Starting…';
-    document.getElementById('browser-screenshot').src = '';
-    document.getElementById('browser-loading-text').textContent = 'Starting ' + label + '…';
-    document.getElementById('browser-loading').classList.add('show');
-    document.getElementById('browser-modal').classList.add('open');
-
-    // Request the user's real GPS coordinates so Playwright can pass them
-    // to the store. We time-out after 4 s so a denied prompt doesn't stall.
-    let geolocation = null;
-    if (navigator.geolocation) {
-        geolocation = await new Promise(resolve => {
-            navigator.geolocation.getCurrentPosition(
-                p => resolve({ latitude: p.coords.latitude, longitude: p.coords.longitude }),
-                () => resolve(null),
-                { timeout: 4000, maximumAge: 60000 }
-            );
-        });
-    }
-    if (token !== _browserStartToken) return;   // user cancelled while we waited
-
-    try {
-        const resp = await fetch(`/api/auth/browser/start/${store}`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ user_id: userId, geolocation }),
-        });
-        const data = await resp.json();
-        if (token !== _browserStartToken) return;   // cancelled during launch
-        if (!data.success) {
-            await _closeBrowserModal();
-            showStatus('Browser session error: ' + (data.error || 'unknown'), 'error');
-            return;
-        }
-        _browserSessionId = data.session_id;
-    } catch (e) {
-        if (token !== _browserStartToken) return;
-        await _closeBrowserModal();
-        showStatus('Failed to start browser: ' + e.message, 'error');
-        return;
-    }
-
-    document.getElementById('browser-loading').classList.remove('show');
-    document.getElementById('browser-auth-status').textContent = 'Waiting for login…';
-    document.getElementById('browser-screenshot').focus();
-    document.addEventListener('keydown', _browserKeyHandler);
-
-    // Stream screenshots over a WebSocket (falls back to polling if it fails).
-    _startScreenshotStream();
-
-    // Poll for auth cookie detection
-    _checkTimer = setInterval(_checkBrowserAuth, 2000);
-
-    // Brief keyboard hint so the user knows they can type right away
-    _showKeyboardHint();
-}
-
-// Stream screenshots over a WebSocket: the server pushes frames, so there's no
-// per-frame request/tunnel round-trip (far smoother than polling). Falls back
-// to _runScreenshotLoop() if the socket never opens.
-function _startScreenshotStream() {
-    _wsGotFrame = false;
-    const img = document.getElementById('browser-screenshot');
-    const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const sid = _browserSessionId;
-    let ws;
-    try {
-        ws = new WebSocket(`${proto}//${location.host}/api/auth/browser/ws/${sid}`);
-    } catch (e) {
-        _runScreenshotLoop();   // fallback
-        return;
-    }
-    ws.binaryType = 'blob';
-    _browserWs = ws;
-    ws.onmessage = (ev) => {
-        if (!_browserSessionId || _browserWs !== ws) { try { ws.close(); } catch(e){} return; }
-        _wsGotFrame = true;
-        const newUrl = URL.createObjectURL(ev.data);
-        const oldUrl = img.src;
-        img.src = newUrl;
-        if (oldUrl && oldUrl.startsWith('blob:')) URL.revokeObjectURL(oldUrl);
-    };
-    ws.onclose = () => {
-        if (_browserWs === ws) _browserWs = null;
-        // If the session is still active but the socket died without ever
-        // delivering a frame, fall back to HTTP polling.
-        if (_browserSessionId && sid === _browserSessionId && !_wsGotFrame) {
-            _runScreenshotLoop();
-        }
-    };
-    ws.onerror = () => { try { ws.close(); } catch(e){} };
-}
-
-// Sequential screenshot loop using fetch + Blob URLs (fallback for no-WebSocket).
-// Each iteration waits for the previous screenshot to fully arrive before
-// requesting the next — prevents request pileup on heavy pages like Blinkit.
-async function _runScreenshotLoop() {
-    _screenshotLoopActive = true;
-    const img = document.getElementById('browser-screenshot');
-    while (_screenshotLoopActive && _browserSessionId) {
-        const t0 = Date.now();
-        try {
-            const resp = await fetch(
-                `/api/auth/browser/screenshot/${_browserSessionId}?t=${t0}`,
-                { cache: 'no-store' }
-            );
-            if (!_screenshotLoopActive || !_browserSessionId) break;
-            if (resp.ok) {
-                const blob = await resp.blob();
-                if (!_screenshotLoopActive || !_browserSessionId) break;
-                const newUrl = URL.createObjectURL(blob);
-                const oldUrl = img.src;
-                img.src = newUrl;
-                if (oldUrl && oldUrl.startsWith('blob:')) URL.revokeObjectURL(oldUrl);
-            }
-        } catch(e) {
-            if (!_browserSessionId) break;
-        }
-        // Enforce a minimum 80ms gap (cap at ~12fps on very fast servers)
-        const gap = Date.now() - t0;
-        if (gap < 80) await new Promise(r => setTimeout(r, 80 - gap));
-    }
-    _screenshotLoopActive = false;
-}
-
-function _showKeyboardHint() {
-    const hint = document.getElementById('browser-kbd-hint');
-    if (!hint) return;
-    hint.style.opacity = '1';
-    hint.style.transform = 'translateY(0)';
-    setTimeout(() => {
-        hint.style.opacity = '0';
-        hint.style.transform = 'translateY(4px)';
-    }, 3500);
-}
-
-async function _checkBrowserAuth() {
-    if (!_browserSessionId) return;
-    try {
-        const resp = await fetch(`/api/auth/browser/check/${_browserSessionId}`);
-        const data = await resp.json();
-        if (data.done) {
-            await _closeBrowserModal();
-            await refreshStoreStatus();
-            const storeNames = { bigbasket: 'BigBasket', blinkit: 'Blinkit', zepto: 'Zepto' };
-            showStatus((storeNames[data.store] || data.store) + ' connected!');
-        } else if (data.message) {
-            document.getElementById('browser-auth-status').textContent = data.message;
-        } else if (data.error) {
-            document.getElementById('browser-auth-status').textContent = '⚠ ' + data.error;
-        }
-    } catch (e) { /* ignore transient errors */ }
-}
-
-function closeBrowserSession() {
-    _closeBrowserSession(true);
-}
-
-async function _closeBrowserSession(callBackend) {
-    if (callBackend && _browserSessionId) {
-        fetch(`/api/auth/browser/session/${_browserSessionId}`, { method: 'DELETE' })
-            .catch(() => {});
-    }
-    await _closeBrowserModal();
-}
-
-async function _closeBrowserModal() {
-    _browserStartToken++;          // abort any in-flight start (e.g. cancel during launch)
-    _screenshotLoopActive = false; // signals the loop to exit
-    if (_browserWs) { try { _browserWs.close(); } catch (e) {} _browserWs = null; }
-    const caret = document.getElementById('relay-caret');
-    if (caret) caret.style.display = 'none';
-    clearInterval(_checkTimer);
-    clearTimeout(_typeFlushTimer);
-    _checkTimer = null;
-    _typeFlushTimer = null;
-    _typeBuffer = '';
-    _browserSessionId = null;
-    document.removeEventListener('keydown', _browserKeyHandler);
-    document.getElementById('browser-loading').classList.remove('show');
-    document.getElementById('browser-modal').classList.remove('open');
-    const img = document.getElementById('browser-screenshot');
-    if (img.src && img.src.startsWith('blob:')) URL.revokeObjectURL(img.src);
-    img.src = '';
-}
-
-async function _sendBrowserEvent(payload) {
-    if (!_browserSessionId) return;
-    // Prefer the open WebSocket — a click/keystroke then skips the HTTP/TLS/
-    // tunnel round-trip, so input feels much snappier. Fall back to POST.
-    if (_browserWs && _browserWs.readyState === 1) {
-        try { _browserWs.send(JSON.stringify(payload)); return; } catch (e) { /* fall through */ }
-    }
-    fetch(`/api/auth/browser/event/${_browserSessionId}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-    }).catch(() => {});
-}
-
-// ── Account ───────────────────────────────────────────────────────────────────
-
-async function logout() {
-    await fetch('/api/auth/logout', { method: 'POST' });
-    window.location.href = '/login';
-}
-
-// ── Account modal: status, connect phone/email, delete account ────────────────
-
-let _acctChannel = null;   // channel currently being connected ('phone' | 'email')
-let _acctTarget = '';
-
-function _normaliseContact(channel, raw) {
-    if (channel === 'phone') {
-        const d = (raw || '').replace(/\D/g, '');
-        if (d.length === 10 && /^[6-9]/.test(d)) return '+91' + d;
-        if (d.length === 12 && d.startsWith('91')) return '+' + d;
-        if ((raw || '').trim().startsWith('+')) return raw.replace(/[\s\-()]/g, '');
-        return null;
-    }
-    const s = (raw || '').trim().toLowerCase();
-    return /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(s) ? s : null;
-}
-
-function openAccountMenu() {
-    dismissConnectBanner();
-    document.getElementById('account-menu').classList.add('open');
-    refreshAccountStatus();
-    // Close when clicking anywhere outside the profile area (added next tick so
-    // this same click doesn't immediately close it).
-    setTimeout(() => document.addEventListener('click', _closeMenuOutside), 0);
-}
-function toggleAccountMenu(e) {
-    if (e) e.stopPropagation();
-    const menu = document.getElementById('account-menu');
-    if (menu.classList.contains('open')) closeAccountMenu();
-    else openAccountMenu();
-}
-function closeAccountMenu() {
-    document.getElementById('account-menu').classList.remove('open');
-    document.removeEventListener('click', _closeMenuOutside);
-}
-function _closeMenuOutside(e) {
-    const wrap = document.querySelector('.profile-wrap');
-    if (wrap && !wrap.contains(e.target)) closeAccountMenu();
-}
-
-// Fetch the authoritative status from the server and render the two rows.
-// Called on open and after a successful connect, so the user can SEE the ✓.
-async function refreshAccountStatus() {
-    _acctChannel = null;
-    const body = document.getElementById('account-body');
-    body.textContent = 'Loading…';
-    let u;
-    try { u = await (await fetch('/api/auth/me')).json(); }
-    catch { body.textContent = 'Could not load your account.'; return; }
-
-    body.innerHTML = '';
-    body.appendChild(_acctRow('phone', '📱 Phone', u.phone));
-    body.appendChild(_acctRow('email', '✉️ Email', u.email));
-    const area = document.createElement('div');
-    area.id = 'acct-connect-area';
-    area.style.display = 'none';
-    body.appendChild(area);
-}
-
-// +918050660543 → "+91 80506 60543" (display only; stored value is unchanged)
-function _fmtPhone(p) {
-    const m = (p || '').match(/^(\+\d{1,3})(\d{5})(\d{5})$/);
-    return m ? `${m[1]} ${m[2]} ${m[3]}` : p;
-}
-
-function _acctRow(channel, label, value) {
-    const row = document.createElement('div');
-    row.className = 'account-row';
-    const lab = document.createElement('span');
-    lab.className = 'acct-label'; lab.textContent = label;
-    const val = document.createElement('span');
-    val.className = 'acct-val';
-    row.appendChild(lab); row.appendChild(val);
-    if (value) {
-        val.textContent = (channel === 'phone') ? _fmtPhone(value) : value;
-        const ok = document.createElement('span');
-        ok.className = 'acct-ok'; ok.textContent = '✓';
-        row.appendChild(ok);
-    } else {
-        val.textContent = 'Not connected';
-        val.style.color = '#667';
-        const btn = document.createElement('button');
-        btn.className = 'acct-connect-btn'; btn.textContent = 'Connect';
-        btn.onclick = () => acctStartConnect(channel);
-        row.appendChild(btn);
-    }
-    return row;
-}
-
-function _acctMsg(text, kind) {
-    const m = document.getElementById('acct-msg');
-    if (m) { m.className = 'connect-banner-msg' + (kind ? ' ' + kind : ''); m.textContent = text; }
-}
-
-function acctStartConnect(channel) {
-    _acctChannel = channel; _acctTarget = '';
-    const area = document.getElementById('acct-connect-area');
-    area.style.display = 'block';
-    area.innerHTML =
-        '<div class="acct-connect-title">Connect your ' + channel + '</div>' +
-        '<div class="account-connect-form">' +
-        (channel === 'phone'
-            ? '<input id="acct-input" class="connect-input" type="tel" placeholder="+91 98765 43210">'
-            : '<input id="acct-input" class="connect-input" type="email" placeholder="you@example.com">') +
-        '<button class="connect-send" id="acct-send-btn" onclick="acctSendOtp()">Send code</button>' +
-        '</div><div class="connect-banner-msg" id="acct-msg"></div>';
-    document.getElementById('acct-input').focus();
-}
-
-async function acctSendOtp() {
-    _acctMsg('');
-    const target = _normaliseContact(_acctChannel, document.getElementById('acct-input').value);
-    if (!target) { _acctMsg('Enter a valid ' + _acctChannel + '.', 'err'); return; }
-    _acctTarget = target;
-    const btn = document.getElementById('acct-send-btn');
-    btn.disabled = true; btn.textContent = 'Sending…';
-    try {
-        const resp = await fetch('/api/auth/method/send-otp', {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ channel: _acctChannel, value: target }),
-        });
-        const data = await resp.json();
-        if (!data.success) { _acctMsg(data.error || 'Failed to send code.', 'err'); return; }
-        const form = document.querySelector('#acct-connect-area .account-connect-form');
-        form.innerHTML =
-            '<input id="acct-code" class="connect-input" maxlength="6" inputmode="numeric" ' +
-            'placeholder="6-digit code" autocomplete="one-time-code">' +
-            '<button class="connect-send" id="acct-verify-btn" onclick="acctVerifyOtp()">Verify</button>';
-        _acctMsg('Code sent to ' + target + ' — enter it below.', 'ok');
-        document.getElementById('acct-code').focus();
-    } catch {
-        _acctMsg('Network error.', 'err');
-    } finally {
-        btn.disabled = false; btn.textContent = 'Send code';
-    }
-}
-
-async function acctVerifyOtp() {
-    _acctMsg('');
-    const code = (document.getElementById('acct-code').value || '').trim();
-    if (code.length !== 6) { _acctMsg('Enter the 6-digit code.', 'err'); return; }
-    const btn = document.getElementById('acct-verify-btn');
-    btn.disabled = true; btn.textContent = 'Verifying…';
-    try {
-        const resp = await fetch('/api/auth/method/verify', {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ channel: _acctChannel, value: _acctTarget, code }),
-        });
-        const data = await resp.json();
-        if (!data.success) { _acctMsg(data.error || 'Invalid code.', 'err'); return; }
-        // Re-render so the just-connected method shows its ✓ — the user can confirm it worked.
-        refreshAccountStatus();
-    } catch {
-        _acctMsg('Network error.', 'err');
-    } finally {
-        if (btn) { btn.disabled = false; btn.textContent = 'Verify'; }
-    }
-}
-
-// Two-tap delete: first tap arms, second tap (within 4s) deletes.
-let _deleteArmed = false;
-function confirmDeleteAccount() {
-    const btn = document.getElementById('delete-acct-btn');
-    if (!_deleteArmed) {
-        _deleteArmed = true;
-        btn.textContent = 'Tap again to permanently delete';
-        setTimeout(() => { _deleteArmed = false; btn.textContent = 'Delete account'; }, 4000);
-        return;
-    }
-    _deleteArmed = false;
-    btn.disabled = true; btn.textContent = 'Deleting…';
-    fetch('/api/auth/delete', { method: 'POST' })
-        .then(r => r.json())
-        .then(d => {
-            if (d.success) { window.location.href = '/login'; }
-            else { btn.disabled = false; btn.textContent = 'Delete account'; }
-        })
-        .catch(() => { btn.disabled = false; btn.textContent = 'Delete account'; });
-}
-
-// Two-tap "Delete my data" — disconnects all stores but keeps the account.
-let _wipeArmed = false;
-function confirmDisconnectAll() {
-    const btn = document.getElementById('wipe-data-btn');
-    if (!_wipeArmed) {
-        _wipeArmed = true;
-        btn.textContent = 'Tap again to delete your data';
-        setTimeout(() => { _wipeArmed = false; btn.textContent = 'Delete my data'; }, 4000);
-        return;
-    }
-    _wipeArmed = false;
-    btn.disabled = true; btn.textContent = 'Deleting…';
-    fetch('/api/auth/disconnect-all', { method: 'POST' })
-        .then(r => r.json())
-        .then(d => {
-            if (d.success) { window.location.reload(); }   // reflect cleared store connections
-            else { btn.disabled = false; btn.textContent = 'Delete my data'; }
-        })
-        .catch(() => { btn.disabled = false; btn.textContent = 'Delete my data'; });
-}
-
-// ── Connect-other-method nudge (a thin prompt that opens the Account modal) ───
-
-let _connectChannel = null;
-function initConnectBanner() {
-    const u = window._SERVER_USER || {};
-    if (u.phone && !u.email)      _connectChannel = 'email';
-    else if (u.email && !u.phone) _connectChannel = 'phone';
-    else return;  // both present (or neither) → nothing to prompt
-    if (sessionStorage.getItem('connectBannerDismissed') === _connectChannel) return;
-    document.getElementById('connect-banner-text').textContent =
-        (_connectChannel === 'email'
-            ? '✉️ Add your email as a backup way to sign in.'
-            : '📱 Add your phone as a backup way to sign in.');
-    document.getElementById('connect-banner').style.display = 'block';
-}
-function dismissConnectBanner() {
-    if (_connectChannel) sessionStorage.setItem('connectBannerDismissed', _connectChannel);
-    document.getElementById('connect-banner').style.display = 'none';
-}
-
-// ── OCR ──────────────────────────────────────────────────────────────────────
-
-async function ocrImage(event) {
-    const file = event.target.files[0];
-    if (!file) return;
-    const status = document.getElementById('scan-msg');
-    const cancelBtn = document.getElementById('scan-cancel');
-
-    status.innerHTML = '<span class="spinner"></span>Reading your list… handwriting can take up to a minute.';
-    cancelBtn.style.display = 'inline-block';
-    _ocrAbort = new AbortController();
-
-    const formData = new FormData();
-    formData.append('image', file);
-
-    try {
-        const resp = await fetch('/api/ocr', {
-            method: 'POST', body: formData, signal: _ocrAbort.signal,
-        });
-        const data = await resp.json();
-        if (data.error) {
-            status.textContent = 'OCR error: ' + data.error;
-            return;
-        }
-        const items = data.items || [];
-        if (items.length === 0) {
-            status.textContent = 'No items found. Try a clearer, well-lit photo.';
-            return;
-        }
-        document.getElementById('grocery-list').value = items.join('\n');
-        status.textContent = `✓ Found ${items.length} items`;
-    } catch (e) {
-        if (e.name === 'AbortError') status.textContent = 'Scan cancelled.';
-        else status.textContent = 'Error: ' + e.message;
-    } finally {
-        cancelBtn.style.display = 'none';
-        _ocrAbort = null;
-        event.target.value = '';
-    }
-}
-
-// Cancel an in-flight scan. Aborting the fetch also drops the server's
-// connection to Ollama, so the model stops generating and the queue frees up.
-function cancelOcr() {
-    if (_ocrAbort) _ocrAbort.abort();
-}
-
-// ── Compare ──────────────────────────────────────────────────────────────────
-
+// ── Compare ─────────────────────────────────────────────────
 async function startCompare() {
-    const raw = document.getElementById('grocery-list').value.trim();
-    if (!raw) {
-        showStatus('Enter a grocery list or scan a photo', 'error');
-        return;
-    }
+  const raw = document.getElementById('items').value.trim();
+  if (!raw) return;
+  const items = _parseItems(raw);
+  if (!items.length) return;
 
-    const items = raw.split('\n')
-        .map(line => line.trim())
-        .filter(line => line.length > 0)
-        .map(line => {
-            const m = line.match(/^(.+?)\s+(\d+(?:\.\d+)?\s*(?:kg|g|gm|ml|l|L|pcs?|pieces?|pack))$/i);
-            if (m) return { name: m[1].trim(), qty: m[2].trim() };
-            return { name: line };
-        });
+  const btn = document.getElementById('compare-btn');
+  btn.disabled = true;
+  document.getElementById('results').style.display = 'none';
+  document.getElementById('progress-wrap').style.display = '';
+  document.getElementById('progress-fill').style.width = '0%';
 
-    if (items.length === 0) {
-        showStatus('No items parsed from input', 'error');
-        return;
-    }
-
-    document.getElementById('compare-btn').disabled = true;
-    document.getElementById('results-section').style.display = 'none';
-    document.getElementById('progress-bar-wrap').style.display = 'block';
-    document.getElementById('status-wrap').innerHTML = '';
-
-    let lastDone = 0;
-    pollTimer = setInterval(async () => {
-        try {
-            const pr = await fetch(`/api/compare/progress?user_id=${encodeURIComponent(userId)}`);
-            const p = await pr.json();
-            if (p.total > 0) {
-                const pct = Math.round(100 * p.done / p.total);
-                document.getElementById('progress-fill').style.width = pct + '%';
-                document.getElementById('progress-text').textContent =
-                    `${p.done}/${p.total} items`;
-                document.getElementById('progress-current').textContent =
-                    p.current || '';
-            }
-        } catch (e) { /* silent */ }
-    }, 500);
-
+  _pollTimer = setInterval(async () => {
     try {
-        const resp = await fetch('/api/compare', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ items, user_id: userId }),
-        });
-        const data = await resp.json();
+      const p = await (await fetch(`/api/compare/progress?user_id=${encodeURIComponent(userId)}`)).json();
+      if (p.total > 0) {
+        document.getElementById('progress-fill').style.width = Math.round(100*p.done/p.total)+'%';
+        document.getElementById('progress-label').textContent = p.done+'/'+p.total+' items';
+        document.getElementById('progress-item').textContent = p.current || '';
+      }
+    } catch(_){}
+  }, 500);
 
-        clearInterval(pollTimer);
-        document.getElementById('progress-bar-wrap').style.display = 'none';
-        document.getElementById('compare-btn').disabled = false;
-
-        if (data.error) {
-            showStatus(data.error, 'error');
-            return;
-        }
-
-        comparisonData = data;
-        renderResults(data);
-    } catch (e) {
-        clearInterval(pollTimer);
-        document.getElementById('progress-bar-wrap').style.display = 'none';
-        document.getElementById('compare-btn').disabled = false;
-        showStatus('Error: ' + e.message, 'error');
-    }
+  try {
+    const resp = await fetch('/api/compare', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ items, user_id: userId }),
+    });
+    const data = await resp.json();
+    clearInterval(_pollTimer);
+    document.getElementById('progress-wrap').style.display = 'none';
+    btn.disabled = false;
+    if (data.error) { alert(data.error); return; }
+    comparisonData = data;
+    // Server computes savings; use it if provided, else compute client-side.
+    data.savings = data.savings ?? _calcSavings(data.comparison, data.grand_total);
+    renderResults(data);
+  } catch(e) {
+    clearInterval(_pollTimer);
+    document.getElementById('progress-wrap').style.display = 'none';
+    btn.disabled = false;
+    alert('Error: ' + e.message);
+  }
 }
+
+// ── Render ──────────────────────────────────────────────────
+const _SL = { bigbasket:'bb', blinkit:'bk', zepto:'zp' };
+const _SN = { bigbasket:'BigBasket', blinkit:'Blinkit', zepto:'Zepto' };
 
 function renderResults(data) {
-    const comparison = data.comparison || [];
-    const carts = data.carts || {};
-    const grandTotal = data.grand_total || 0;
-    const skipped = data.skipped_apps || [];
+  const comparison = data.comparison || [];
+  const carts = data.carts || {};
+  const grandTotal = data.grand_total || 0;
+  const savings = data.savings || 0;
 
-    document.getElementById('results-section').style.display = 'block';
-    document.getElementById('status-wrap').innerHTML = '';
+  document.getElementById('results').style.display = '';
+  document.getElementById('grand-total').textContent = '₹' + Math.round(grandTotal);
+  document.getElementById('grand-summary').textContent =
+    comparison.filter(e=>e.cheapest_app).length + ' items · ' +
+    Object.keys(carts).length + ' store' + (Object.keys(carts).length===1?'':'s');
 
-    const cardsEl = document.getElementById('item-cards');
-    cardsEl.innerHTML = '';
+  _updateSavingsBadge(savings);
 
-    for (let i = 0; i < comparison.length; i++) {
-        const entry = comparison[i];
-        const item = entry.item || {};
-        const prices = entry.prices || {};
-        const cheapestApp = entry.cheapest_app;
-        const selectedPid = entry.selected_pid;
-        const shortlist = entry.shortlist || [];
+  // Store split chips
+  const split = document.getElementById('store-split');
+  split.innerHTML = '';
+  for (const [store, cart] of Object.entries(carts)) {
+    const chip = document.createElement('div');
+    chip.className = 'card tight center'; chip.style.cssText='flex:1;padding:12px 6px';
+    chip.innerHTML = `<div class="slogo ${_SL[store]||'bb'}">${_SL[store]==='bb'?'bb':_SL[store]==='bk'?'b':'Z'}</div><div class="smeta" style="margin-top:5px">${_SN[store]||store}</div><div class="num" style="font-weight:800">₹${Math.round(cart.total)}</div>`;
+    split.appendChild(chip);
+  }
 
-        const card = document.createElement('div');
-        card.className = 'item-card';
-        card.dataset.idx = String(i);
+  // Item cards
+  const cardsEl = document.getElementById('item-cards');
+  cardsEl.innerHTML = '';
+  for (let i = 0; i < comparison.length; i++) {
+    const entry = comparison[i];
+    const shortlist = entry.shortlist || [];
+    const card = document.createElement('div');
+    card.className = 'card tight stack'; card.style.gap='0'; card.dataset.idx = i;
 
-        const nameEl = document.createElement('div');
-        nameEl.className = 'item-name';
-        nameEl.textContent = `${item.name || ''}${item.qty ? ' · ' + item.qty : ''}`;
-        card.appendChild(nameEl);
+    const qname = document.createElement('div');
+    qname.className='sname'; qname.style.padding='2px 0 8px';
+    qname.textContent = (entry.item && entry.item.name) || entry.query || '—';
+    card.appendChild(qname);
 
-        if (!cheapestApp) {
-            const nm = document.createElement('div');
-            nm.className = 'no-match';
-            nm.textContent = 'No matching products found';
-            card.appendChild(nm);
-            cardsEl.appendChild(card);
-            continue;
-        }
-
-        // ── Winner row (always first, highlighted) ───────────────────────────
-        const winnerProds = prices[cheapestApp] || [];
-        const winnerProd = winnerProds.find(p => p.product_id === selectedPid) || winnerProds[0];
-        if (winnerProd) {
-            card.appendChild(_makeSwapRow(i, winnerProd, cheapestApp, true));
-        }
-
-        // ── Shortlist: first 2 always visible ────────────────────────────────
-        for (const sp of shortlist.slice(0, 2)) {
-            card.appendChild(_makeSwapRow(i, sp, sp.app, false));
-        }
-
-        // ── "Show N more" expander for the rest ───────────────────────────────
-        if (shortlist.length > 2) {
-            const moreCount = shortlist.length - 2;
-            const moreWrap = document.createElement('div');
-            moreWrap.className = 'swap-hidden';
-            for (const sp of shortlist.slice(2)) {
-                moreWrap.appendChild(_makeSwapRow(i, sp, sp.app, false));
-            }
-            const moreBtn = document.createElement('button');
-            moreBtn.className = 'swap-more-btn';
-            moreBtn.textContent = `▾ ${moreCount} more alternative${moreCount !== 1 ? 's' : ''}`;
-            moreBtn.onclick = () => {
-                moreWrap.classList.remove('swap-hidden');
-                moreBtn.style.display = 'none';
-            };
-            card.appendChild(moreBtn);
-            card.appendChild(moreWrap);
-        }
-
-        cardsEl.appendChild(card);
+    if (!entry.cheapest_app) {
+      const na = document.createElement('div');
+      na.className='dim'; na.style.fontSize='12.5px';
+      na.textContent='Not found in connected stores';
+      card.appendChild(na);
+    } else {
+      // Winner
+      const winnerProds = (entry.prices||{})[entry.cheapest_app]||[];
+      const winner = winnerProds.find(p=>p.product_id===entry.selected_pid)||winnerProds[0];
+      if (winner) card.appendChild(_makeSwapRow(i, winner, entry.cheapest_app, true));
+      // Shortlist
+      for (const sp of shortlist.slice(0,2)) card.appendChild(_makeSwapRow(i, sp, sp.app||sp.app_name, false));
+      if (shortlist.length > 2) {
+        const moreCount = shortlist.length - 2;
+        const moreWrap = document.createElement('div'); moreWrap.style.display='none';
+        for (const sp of shortlist.slice(2)) moreWrap.appendChild(_makeSwapRow(i, sp, sp.app||sp.app_name, false));
+        const moreBtn = document.createElement('button');
+        moreBtn.className='btn ghost sm'; moreBtn.style.marginTop='4px';
+        moreBtn.textContent=`▾ ${moreCount} more`;
+        moreBtn.onclick=()=>{moreWrap.style.display='';moreBtn.style.display='none';};
+        card.appendChild(moreBtn); card.appendChild(moreWrap);
+      }
     }
+    cardsEl.appendChild(card);
+  }
 
-    if (grandTotal > 0) {
-        document.getElementById('grand-total').textContent = '₹' + grandTotal.toFixed(0);
-        const cartList = document.getElementById('cart-list');
-        cartList.innerHTML = '';
-        for (const [storeName, cartData] of Object.entries(carts)) {
-            const storeLabel = { bigbasket: 'BigBasket', blinkit: 'Blinkit', zepto: 'Zepto' }[storeName] || storeName;
-            const div = document.createElement('div');
-            div.className = 'cart-store';
-            let html = `<div class="cart-store-name">${escHtml(storeLabel)} — ₹${(cartData.total || 0).toFixed(0)}</div>`;
-            for (const item of (cartData.items || [])) {
-                html += `<div class="cart-item-row"><span>${escHtml(item.matched_name || item.name || '')}</span><span class="cart-item-price">₹${(item.price || 0).toFixed(0)}</span></div>`;
-            }
-            div.innerHTML = html;
-            cartList.appendChild(div);
-        }
-        document.getElementById('summary-card').style.display = 'block';
-    }
-
-    if (skipped.length > 0) {
-        document.getElementById('skipped-notice').textContent =
-            `Skipped (not connected): ${skipped.join(', ')}`;
-    }
+  // Skipped
+  const skip = document.getElementById('skipped-notice');
+  if (data.skipped_apps && data.skipped_apps.length) {
+    skip.textContent = 'Skipped (not connected): ' + data.skipped_apps.join(', ');
+    skip.style.display='';
+  } else skip.style.display='none';
 }
 
-// ── Swap / shortlist helpers ─────────────────────────────────────────────────
-
-const _STORE_LABELS = { bigbasket: 'BigBasket', blinkit: 'Blinkit', zepto: 'Zepto' };
-
-function _makeSwapRow(entryIndex, prod, app, isSelected) {
-    const row = document.createElement('div');
-    row.className = 'swap-row' + (isSelected ? ' swap-selected' : '');
-    row.dataset.app = app;
-    row.dataset.pid = prod.product_id;
-    const price = prod.sale_price || prod.price || 0;
-    const storeLabel = _STORE_LABELS[app] || app;
-    row.innerHTML = `
-        <div class="product-info">
-            <div class="product-name">${escHtml(prod.name || '')}${isSelected ? '<span class="best-badge">✓</span>' : ''}</div>
-            <div class="product-meta">${escHtml(storeLabel)}${prod.unit ? ' · ' + escHtml(prod.unit) : ''}</div>
-        </div>
-        <div class="product-price${isSelected ? ' cheapest' : ''}">₹${price.toFixed(0)}</div>
-    `;
-    row.onclick = () => swapSelection(entryIndex, app, prod.product_id, price);
-    return row;
+function _makeSwapRow(idx, prod, app, selected) {
+  const row = document.createElement('div');
+  row.className = 'srow'; row.style.cssText='padding:8px 0;cursor:pointer;border-radius:6px;' + (selected?'background:var(--accent-light, color-mix(in srgb,var(--accent) 10%,transparent));':'');
+  row.dataset.app = app; row.dataset.pid = prod.product_id;
+  const price = prod.sale_price || prod.price || 0;
+  const storeAbbr = _SL[app] || 'bb';
+  row.innerHTML =
+    `<div class="slogo ${storeAbbr}" style="flex-shrink:0">${storeAbbr==='bb'?'bb':storeAbbr==='bk'?'b':'Z'}</div>`+
+    `<div style="flex:1;min-width:0"><div class="sname" style="font-size:13px">${_esc(prod.name||'')}${selected?'<span style="color:var(--ok);font-size:11px;margin-left:6px">✓ best</span>':''}</div>`+
+    `<div class="smeta">${_SN[app]||app}${prod.unit?' · '+_esc(prod.unit):''}</div></div>`+
+    `<div class="num" style="font-weight:800;font-size:15px;color:${selected?'var(--accent2)':'inherit'}">₹${Math.round(price)}</div>`;
+  row.onclick = () => swapSelection(idx, app, prod.product_id, price);
+  return row;
 }
 
-function swapSelection(entryIndex, app, pid, price) {
-    const entry = comparisonData.comparison[entryIndex];
-    if (entry.cheapest_app === app && entry.selected_pid === pid) return; // already selected
-
-    entry.cheapest_app = app;
-    entry.selected_pid = pid;
-    entry.cheapest_price = price;
-
-    // Move the green border to the newly selected row
-    const card = document.querySelector(`.item-card[data-idx="${entryIndex}"]`);
-    if (card) {
-        card.querySelectorAll('.swap-row').forEach(row => {
-            const sel = row.dataset.app === app && row.dataset.pid === pid;
-            row.classList.toggle('swap-selected', sel);
-            // Move the ✓ badge
-            const nameEl = row.querySelector('.product-name');
-            if (!nameEl) return;
-            const badge = nameEl.querySelector('.best-badge');
-            if (sel && !badge) {
-                const b = document.createElement('span');
-                b.className = 'best-badge';
-                b.textContent = '✓';
-                nameEl.appendChild(b);
-            } else if (!sel && badge) {
-                badge.remove();
-            }
-            // Price colour
-            const priceEl = row.querySelector('.product-price');
-            if (priceEl) priceEl.classList.toggle('cheapest', sel);
-        });
-    }
-
-    _rebuildCarts();
+function swapSelection(idx, app, pid, price) {
+  if (!comparisonData) return;
+  const entry = comparisonData.comparison[idx];
+  if (entry.cheapest_app === app && entry.selected_pid === pid) return;
+  entry.cheapest_app = app; entry.selected_pid = pid; entry.cheapest_price = price;
+  _rebuildCarts();
+  // Re-render that card's highlight
+  const card = document.querySelector(`[data-idx="${idx}"]`);
+  if (card) {
+    card.querySelectorAll('[data-pid]').forEach(row => {
+      const sel = row.dataset.app === app && row.dataset.pid === pid;
+      row.style.background = sel ? 'var(--accent-light, color-mix(in srgb,var(--accent) 10%,transparent))' : '';
+      const badge = row.querySelector('[data-best]');
+      if (badge) badge.remove();
+      if (sel) {
+        const nm = row.querySelector('.sname');
+        if (nm) { const b=document.createElement('span'); b.dataset.best='1'; b.style.cssText='color:var(--ok);font-size:11px;margin-left:6px'; b.textContent='✓ best'; nm.appendChild(b); }
+      }
+      const priceEl = row.querySelector('.num');
+      if (priceEl) priceEl.style.color = sel ? 'var(--accent2)' : 'inherit';
+    });
+  }
 }
 
 function _rebuildCarts() {
-    const carts = {};
-    let grandTotal = 0;
-
-    for (let i = 0; i < comparisonData.comparison.length; i++) {
-        const entry = comparisonData.comparison[i];
-        const app = entry.cheapest_app;
-        if (!app || !entry.cheapest_price) continue;
-        if (!carts[app]) carts[app] = { items: [], total: 0 };
-
-        // Find the selected product in the store's result list
-        const storeProds = entry.prices[app] || [];
-        const prod = storeProds.find(p => p.product_id === entry.selected_pid)
-                  || storeProds[0] || {};
-
-        const count = Math.max(1, parseInt((entry.item && entry.item.count) || 1));
-        const price = entry.cheapest_price;
-
-        carts[app].items.push({
-            ...(entry.item || {}),
-            price,
-            product_id: entry.selected_pid || prod.product_id,
-            fc_id: prod.fc_id,
-            search_query: entry.search_query || '',
-            matched_name: prod.name || '',
-            matched_unit: prod.unit || '',
-            comparison_index: i,
-        });
-        carts[app].total += price * count;
-        grandTotal += price * count;
-    }
-
-    comparisonData.carts = carts;
-    comparisonData.grand_total = grandTotal;
-
-    // Re-render summary section
-    document.getElementById('grand-total').textContent = '₹' + grandTotal.toFixed(0);
-    const cartList = document.getElementById('cart-list');
-    cartList.innerHTML = '';
-    for (const [storeName, cartData] of Object.entries(carts)) {
-        const storeLabel = _STORE_LABELS[storeName] || storeName;
-        const div = document.createElement('div');
-        div.className = 'cart-store';
-        let html = `<div class="cart-store-name">${escHtml(storeLabel)} — ₹${cartData.total.toFixed(0)}</div>`;
-        for (const itm of (cartData.items || [])) {
-            html += `<div class="cart-item-row"><span>${escHtml(itm.matched_name || itm.name || '')}</span><span class="cart-item-price">₹${(itm.price || 0).toFixed(0)}</span></div>`;
-        }
-        div.innerHTML = html;
-        cartList.appendChild(div);
-    }
-    document.getElementById('summary-card').style.display = grandTotal > 0 ? 'block' : 'none';
+  const carts = {}; let grandTotal = 0;
+  for (const entry of comparisonData.comparison) {
+    const app = entry.cheapest_app;
+    if (!app || !entry.cheapest_price) continue;
+    if (!carts[app]) carts[app] = { items:[], total:0 };
+    const storeProds = (entry.prices||{})[app]||[];
+    const prod = storeProds.find(p=>p.product_id===entry.selected_pid)||storeProds[0]||{};
+    const count = Math.max(1, parseInt((entry.item&&entry.item.count)||1));
+    const price = entry.cheapest_price;
+    carts[app].items.push({...(entry.item||{}), price, product_id:entry.selected_pid||prod.product_id, matched_name:prod.name||'', comparison_index: comparisonData.comparison.indexOf(entry)});
+    carts[app].total += price * count;
+    grandTotal += price * count;
+  }
+  comparisonData.carts = carts; comparisonData.grand_total = grandTotal;
+  const savings = _calcSavings(comparisonData.comparison, grandTotal);
+  comparisonData.savings = savings;
+  document.getElementById('grand-total').textContent = '₹' + Math.round(grandTotal);
+  _updateSavingsBadge(savings);
+  // Re-render store split
+  const split = document.getElementById('store-split'); split.innerHTML='';
+  for (const [store, cart] of Object.entries(carts)) {
+    const chip=document.createElement('div'); chip.className='card tight center'; chip.style.cssText='flex:1;padding:12px 6px';
+    chip.innerHTML=`<div class="slogo ${_SL[store]||'bb'}">${_SL[store]==='bb'?'bb':_SL[store]==='bk'?'b':'Z'}</div><div class="smeta" style="margin-top:5px">${_SN[store]||store}</div><div class="num" style="font-weight:800">₹${Math.round(cart.total)}</div>`;
+    split.appendChild(chip);
+  }
 }
 
-// ── Add to carts ──────────────────────────────────────────────────────────────
-
+// ── Add to carts ────────────────────────────────────────────
 async function addAllToCarts() {
-    if (!comparisonData) return;
-
-    document.getElementById('add-btn').disabled = true;
-    document.getElementById('cart-result-wrap').innerHTML = '';
-
-    const carts = comparisonData.carts || {};
-
-    try {
-        const resp = await fetch('/api/cart/add-all', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ carts, user_id: userId }),
-        });
-        const data = await resp.json();
-        renderCartResult(data.results || {});
-    } catch (e) {
-        document.getElementById('cart-result-wrap').innerHTML =
-            `<div class="cart-result has-failed">Error: ${escHtml(e.message)}</div>`;
+  if (!comparisonData) return;
+  const btn = document.getElementById('add-btn');
+  btn.disabled = true;
+  const res = document.getElementById('cart-result'); res.innerHTML='';
+  try {
+    const resp = await fetch('/api/cart/add-all', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ carts: comparisonData.carts, user_id: userId }),
+    });
+    const data = await resp.json();
+    for (const [store, r] of Object.entries(data.results||{})) {
+      const div=document.createElement('div'); div.className='card tight srow';
+      div.innerHTML=`<div class="slogo ${_SL[store]||'bb'}">${_SN[store]||store}</div><div style="flex:1"><div class="sname">${_SN[store]||store}</div><div class="smeta">${r.added||0} items added</div></div>${r.error?`<div class="dim" style="font-size:12px;color:var(--err)">${_esc(r.error)}</div>`:'<i data-ico="check" data-s="16" style="color:var(--ok)"></i>'}`;
+      res.appendChild(div);
     }
-    document.getElementById('add-btn').disabled = false;
+    if (window.s2o) window.s2o.paintIcons(res);
+  } catch(e) {
+    res.innerHTML=`<div class="dim" style="color:var(--err)">Error: ${_esc(e.message)}</div>`;
+  }
+  btn.disabled=false;
 }
 
-function renderCartResult(results) {
-    const wrap = document.getElementById('cart-result-wrap');
-    wrap.innerHTML = '';
-
-    for (const [storeName, r] of Object.entries(results)) {
-        const storeLabel = { bigbasket: 'BigBasket', blinkit: 'Blinkit', zepto: 'Zepto' }[storeName] || storeName;
-        const added = r.added || [];
-        const failed = r.failed || [];
-
-        const div = document.createElement('div');
-        div.className = 'cart-result' + (failed.length > 0 ? ' has-failed' : '');
-
-        let html = `<strong>${escHtml(storeLabel)}</strong>: ${added.length} added`;
-        if (failed.length > 0) html += `, ${failed.length} failed`;
-
-        const checkoutUrls = {
-            bigbasket: 'https://www.bigbasket.com/basket/',
-            blinkit: 'https://blinkit.com/cart',
-            zepto: 'https://www.zepto.com/?cart=open',
-        };
-        if (added.length > 0 && checkoutUrls[storeName]) {
-            html += ` — <a href="${checkoutUrls[storeName]}" target="_blank" style="color:#4ecdc4">Open cart →</a>`;
-        }
-
-        for (const f of failed.slice(0, 3)) {
-            html += `<div class="failed-item">✗ ${escHtml(f.matched_name || f.name || '')}${f.failed_reason ? ': ' + escHtml(f.failed_reason) : ''}</div>`;
-        }
-
-        div.innerHTML = html;
-        wrap.appendChild(div);
-    }
-}
-
-// ── Utilities ─────────────────────────────────────────────────────────────────
-
-function showStatus(msg, type) {
-    const el = document.getElementById('status-wrap');
-    el.innerHTML = `<div class="status${type === 'error' ? ' error' : ''}">${escHtml(msg)}</div>`;
-}
-
-function clearAll() {
-    document.getElementById('grocery-list').value = '';
-    document.getElementById('results-section').style.display = 'none';
-    document.getElementById('status-wrap').innerHTML = '';
-    document.getElementById('scan-msg').textContent = '';
-    document.getElementById('scan-cancel').style.display = 'none';
-    comparisonData = null;
-}
-
-function escHtml(s) {
-    return String(s)
-        .replace(/&/g,'&amp;').replace(/</g,'&lt;')
-        .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
-}
+function _esc(s) { const d=document.createElement('div'); d.textContent=s; return d.innerHTML; }
 </script>
-</body>
-</html>
+{% endblock %}
