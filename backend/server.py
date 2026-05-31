@@ -26,7 +26,7 @@ import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, Request, UploadFile, File
+from fastapi import FastAPI, Request, UploadFile, File, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 
@@ -530,6 +530,74 @@ async def browser_auth_screenshot(session_id: str):
     jpeg = await s.screenshot_jpeg()
     return Response(content=jpeg, media_type="image/jpeg",
                     headers={"Cache-Control": "no-store"})
+
+
+@app.websocket("/api/auth/browser/ws/{session_id}")
+async def browser_auth_ws(websocket: WebSocket, session_id: str):
+    """Stream JPEG screenshots AND receive input over one persistent WebSocket.
+
+    Server-push beats the old per-frame HTTP polling: no per-frame request /
+    TLS / tunnel round-trip, and `await send_bytes` applies natural backpressure
+    so we never get ahead of a slow client. Input events arrive as JSON text
+    frames on the same socket, so a click/keystroke skips the HTTP round-trip
+    too. The frontend falls back to polling /screenshot + POST /event if the
+    socket can't be established.
+    """
+    await websocket.accept()
+
+    async def send_frames():
+        while True:
+            s = auth_browser.get(session_id)
+            if not s:
+                break
+            try:
+                jpeg = await s.screenshot_jpeg()
+            except Exception:
+                await asyncio.sleep(0.1)   # page mid-navigation/closing
+                continue
+            try:
+                await websocket.send_bytes(jpeg)
+            except Exception:
+                break                       # client gone
+            await asyncio.sleep(0.04)       # ~capture-bound; floor ~20fps
+
+    async def recv_events():
+        while True:
+            try:
+                msg = await websocket.receive_text()
+            except Exception:
+                break
+            try:
+                ev = json.loads(msg)
+            except Exception:
+                continue
+            s = auth_browser.get(session_id)
+            if not s:
+                break
+            t = ev.get("type")
+            try:
+                if t == "click":
+                    await s.click(float(ev["nx"]), float(ev["ny"]))
+                elif t == "type":
+                    await s.type_text(str(ev.get("text", "")))
+                elif t == "key":
+                    await s.key_press(str(ev.get("key", "")))
+                elif t == "scroll":
+                    await s.scroll(float(ev.get("delta_y", 0)))
+            except Exception:
+                pass                        # never let one bad event kill the socket
+
+    send_task = asyncio.create_task(send_frames())
+    recv_task = asyncio.create_task(recv_events())
+    try:
+        await asyncio.wait({send_task, recv_task}, return_when=asyncio.FIRST_COMPLETED)
+    finally:
+        send_task.cancel()
+        recv_task.cancel()
+        try:
+            await websocket.close()
+        except Exception:
+            pass
 
 
 @app.post("/api/auth/browser/event/{session_id}")

@@ -92,7 +92,8 @@
             border: 1px dashed #4ecdc4; border-radius: 12px;
             color: #4ecdc4; text-align: center; font-size: 14px; cursor: pointer;
         }
-        .scan-status { margin-top: 8px; font-size: 12px; color: #888; text-align: center; min-height: 16px; }
+        .scan-status { margin-top: 8px; font-size: 12px; color: #888; min-height: 16px;
+            display: flex; gap: 8px; align-items: center; justify-content: center; flex-wrap: wrap; }
 
         .status {
             margin-top: 12px; padding: 10px 14px;
@@ -303,7 +304,7 @@
         }
         @keyframes spin { to { transform: rotate(360deg); } }
         .scan-cancel {
-            margin-top: 8px; padding: 4px 12px; font-size: 12px; cursor: pointer;
+            padding: 3px 10px; font-size: 12px; cursor: pointer;
             background: none; border: 1px solid #444; color: #aaa; border-radius: 6px; font-family: inherit;
         }
         .scan-cancel:hover { border-color: #e24b4a; color: #e24b4a; }
@@ -320,6 +321,13 @@
             animation: ripple 0.5s ease-out forwards; z-index: 3;
         }
         @keyframes ripple { from { opacity: 0.9; transform: scale(0.4); } to { opacity: 0; transform: scale(1.7); } }
+        /* Blinking text caret at the last tap point — signals "you can type here". */
+        .relay-caret {
+            position: absolute; width: 2px; height: 20px; margin: -10px 0 0 0;
+            background: #4ecdc4; pointer-events: none; z-index: 3;
+            animation: blink 1.05s step-end infinite;
+        }
+        @keyframes blink { 0%, 50% { opacity: 1; } 50.01%, 100% { opacity: 0; } }
     </style>
 </head>
 <body>
@@ -381,9 +389,9 @@
         </label>
         <input type="file" id="ocr-input" accept="image/*" style="display:none"
                onchange="ocrImage(event)">
-        <div class="scan-status" id="scan-status"></div>
-        <div style="text-align:center">
-            <button class="scan-cancel" id="scan-cancel" style="display:none" onclick="cancelOcr()">Cancel scan</button>
+        <div class="scan-status" id="scan-status">
+            <span id="scan-msg"></span>
+            <button class="scan-cancel" id="scan-cancel" style="display:none" onclick="cancelOcr()">Cancel</button>
         </div>
     </div>
 
@@ -441,6 +449,7 @@ Atta 5kg
             <div class="spinner"></div>
             <div id="browser-loading-text">Starting browser…</div>
         </div>
+        <div class="relay-caret" id="relay-caret" style="display:none"></div>
         <div id="browser-kbd-hint">⌨ Just start typing — keyboard input goes straight into the page</div>
         <div class="browser-footer">
             <span class="browser-footer-hint">Click anywhere to interact &bull; type directly &bull; scroll works too</span>
@@ -475,6 +484,8 @@ let _screenshotLoopActive = false; // set false to stop the sequential screensho
 let _checkTimer = null;
 let _browserStartToken = 0;        // bumped on close/cancel to abort an in-flight start
 let _ocrAbort = null;              // AbortController for the in-flight OCR request
+let _browserWs = null;             // screenshot-streaming WebSocket
+let _wsGotFrame = false;           // did the WS deliver any frame? (else fall back to polling)
 
 // Keystroke batching — collect printable chars for 30 ms, send as one string.
 // Avoids one HTTP round-trip per keypress; special keys flush the buffer first.
@@ -557,13 +568,29 @@ function _initBrowserModal() {
         const ny = (e.clientY - rect.top) / rect.height;
         _sendBrowserEvent({ type: 'click', nx, ny });
         _showClickRipple(e.clientX, e.clientY);
+        _placeCaret(e.clientX, e.clientY);
     });
 
     // Scroll on screenshot → forward deltaY
     img.addEventListener('wheel', (e) => {
         e.preventDefault();
         _sendBrowserEvent({ type: 'scroll', delta_y: e.deltaY });
+        // The page moved, so the caret's old position is stale — hide it.
+        const caret = document.getElementById('relay-caret');
+        if (caret) caret.style.display = 'none';
     }, { passive: false });
+}
+
+// Park a blinking caret at the last tap point so it's obvious the field is
+// focused and ready for typing (the streamed screenshot has no real caret).
+function _placeCaret(clientX, clientY) {
+    const box = document.querySelector('.browser-box');
+    const caret = document.getElementById('relay-caret');
+    if (!box || !caret) return;
+    const r = box.getBoundingClientRect();
+    caret.style.left = (clientX - r.left) + 'px';
+    caret.style.top = (clientY - r.top) + 'px';
+    caret.style.display = 'block';
 }
 
 // Brief teal ripple at the click point so it's obvious the tap registered
@@ -638,8 +665,8 @@ async function openBrowserAuth(store) {
     document.getElementById('browser-screenshot').focus();
     document.addEventListener('keydown', _browserKeyHandler);
 
-    // Sequential screenshot loop — never queues up concurrent requests.
-    _runScreenshotLoop();
+    // Stream screenshots over a WebSocket (falls back to polling if it fails).
+    _startScreenshotStream();
 
     // Poll for auth cookie detection
     _checkTimer = setInterval(_checkBrowserAuth, 2000);
@@ -648,7 +675,43 @@ async function openBrowserAuth(store) {
     _showKeyboardHint();
 }
 
-// Sequential screenshot loop using fetch + Blob URLs.
+// Stream screenshots over a WebSocket: the server pushes frames, so there's no
+// per-frame request/tunnel round-trip (far smoother than polling). Falls back
+// to _runScreenshotLoop() if the socket never opens.
+function _startScreenshotStream() {
+    _wsGotFrame = false;
+    const img = document.getElementById('browser-screenshot');
+    const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const sid = _browserSessionId;
+    let ws;
+    try {
+        ws = new WebSocket(`${proto}//${location.host}/api/auth/browser/ws/${sid}`);
+    } catch (e) {
+        _runScreenshotLoop();   // fallback
+        return;
+    }
+    ws.binaryType = 'blob';
+    _browserWs = ws;
+    ws.onmessage = (ev) => {
+        if (!_browserSessionId || _browserWs !== ws) { try { ws.close(); } catch(e){} return; }
+        _wsGotFrame = true;
+        const newUrl = URL.createObjectURL(ev.data);
+        const oldUrl = img.src;
+        img.src = newUrl;
+        if (oldUrl && oldUrl.startsWith('blob:')) URL.revokeObjectURL(oldUrl);
+    };
+    ws.onclose = () => {
+        if (_browserWs === ws) _browserWs = null;
+        // If the session is still active but the socket died without ever
+        // delivering a frame, fall back to HTTP polling.
+        if (_browserSessionId && sid === _browserSessionId && !_wsGotFrame) {
+            _runScreenshotLoop();
+        }
+    };
+    ws.onerror = () => { try { ws.close(); } catch(e){} };
+}
+
+// Sequential screenshot loop using fetch + Blob URLs (fallback for no-WebSocket).
 // Each iteration waits for the previous screenshot to fully arrive before
 // requesting the next — prevents request pileup on heavy pages like Blinkit.
 async function _runScreenshotLoop() {
@@ -724,6 +787,9 @@ async function _closeBrowserSession(callBackend) {
 async function _closeBrowserModal() {
     _browserStartToken++;          // abort any in-flight start (e.g. cancel during launch)
     _screenshotLoopActive = false; // signals the loop to exit
+    if (_browserWs) { try { _browserWs.close(); } catch (e) {} _browserWs = null; }
+    const caret = document.getElementById('relay-caret');
+    if (caret) caret.style.display = 'none';
     clearInterval(_checkTimer);
     clearTimeout(_typeFlushTimer);
     _checkTimer = null;
@@ -740,6 +806,11 @@ async function _closeBrowserModal() {
 
 async function _sendBrowserEvent(payload) {
     if (!_browserSessionId) return;
+    // Prefer the open WebSocket — a click/keystroke then skips the HTTP/TLS/
+    // tunnel round-trip, so input feels much snappier. Fall back to POST.
+    if (_browserWs && _browserWs.readyState === 1) {
+        try { _browserWs.send(JSON.stringify(payload)); return; } catch (e) { /* fall through */ }
+    }
     fetch(`/api/auth/browser/event/${_browserSessionId}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -980,7 +1051,7 @@ function dismissConnectBanner() {
 async function ocrImage(event) {
     const file = event.target.files[0];
     if (!file) return;
-    const status = document.getElementById('scan-status');
+    const status = document.getElementById('scan-msg');
     const cancelBtn = document.getElementById('scan-cancel');
 
     status.innerHTML = '<span class="spinner"></span>Reading your list… handwriting can take up to a minute.';
@@ -1248,7 +1319,8 @@ function clearAll() {
     document.getElementById('grocery-list').value = '';
     document.getElementById('results-section').style.display = 'none';
     document.getElementById('status-wrap').innerHTML = '';
-    document.getElementById('scan-status').textContent = '';
+    document.getElementById('scan-msg').textContent = '';
+    document.getElementById('scan-cancel').style.display = 'none';
     comparisonData = null;
 }
 

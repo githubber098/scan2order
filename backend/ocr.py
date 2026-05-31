@@ -200,7 +200,12 @@ async def _extract_vlm(raw_bytes: bytes, host: str) -> dict:
     declared MIME type does not need to match the real format.
     """
     model = _ocr_model()
-    max_dim = int(os.getenv("OCR_MAX_DIM", "1100") or "1100")
+    # Smaller image = far less image-token prefill = much faster on CPU. 900px
+    # keeps a grocery list legible. max_tokens kept tight (a list is short).
+    # Both tunable; drop OCR_MAX_DIM toward 768 for more speed at some accuracy.
+    max_dim = int(os.getenv("OCR_MAX_DIM", "900") or "900")
+    max_tokens = int(os.getenv("OCR_MAX_TOKENS", "256") or "256")
+    timeout_s = float(os.getenv("OCR_TIMEOUT", "60") or "60")
     img_bytes = _downscale_for_vlm(raw_bytes, max_dim)
     b64 = base64.b64encode(img_bytes).decode()
     data_url = f"data:image/jpeg;base64,{b64}"
@@ -211,7 +216,7 @@ async def _extract_vlm(raw_bytes: bytes, host: str) -> dict:
         # Total cap so a runaway generation can't block the Ollama queue for
         # minutes (the frontend can also cancel, which closes this connection
         # and makes Ollama abort the run).
-        async with httpx.AsyncClient(timeout=httpx.Timeout(150.0)) as client:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(timeout_s)) as client:
             resp = await client.post(
                 f"{host}/v1/chat/completions",
                 json={
@@ -224,7 +229,7 @@ async def _extract_vlm(raw_bytes: bytes, host: str) -> dict:
                         ],
                     }],
                     "temperature": 0,
-                    "max_tokens": 512,
+                    "max_tokens": max_tokens,
                 },
             )
         if resp.status_code != 200:
