@@ -178,7 +178,9 @@ class _Session:
         return time.time() - self.last_active > _SESSION_TIMEOUT
 
     async def screenshot_jpeg(self) -> bytes:
-        return await self._page.screenshot(type="jpeg", quality=50)
+        # Lower quality = smaller payload = higher framerate over the tunnel.
+        # 38 is still legible for login forms; tune via screenshot bottleneck.
+        return await self._page.screenshot(type="jpeg", quality=38)
 
     async def click(self, nx: float, ny: float):
         """nx, ny are 0-1 normalised coordinates relative to the viewport."""

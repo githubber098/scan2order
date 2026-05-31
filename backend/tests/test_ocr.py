@@ -78,6 +78,37 @@ class TestIsHeaderLine:
         assert _is_header_line("SHOPPING LIST") is True
 
 
+# ── VLM image downscaling (speed fix) ─────────────────────────────────────────
+
+class TestDownscale:
+    def _jpeg(self, w, h):
+        from PIL import Image
+        import io
+        buf = io.BytesIO()
+        Image.new("RGB", (w, h), "white").save(buf, format="JPEG")
+        return buf.getvalue()
+
+    def test_large_image_is_shrunk_to_max_dim(self):
+        import io, ocr
+        from PIL import Image
+        out = ocr._downscale_for_vlm(self._jpeg(3000, 2000), max_dim=1100)
+        w, h = Image.open(io.BytesIO(out)).size
+        assert max(w, h) == 1100
+        assert (w, h) == (1100, 733)   # aspect ratio preserved
+
+    def test_small_image_is_left_alone(self):
+        import io, ocr
+        from PIL import Image
+        out = ocr._downscale_for_vlm(self._jpeg(800, 600), max_dim=1100)
+        w, h = Image.open(io.BytesIO(out)).size
+        assert (w, h) == (800, 600)
+
+    def test_garbage_bytes_fall_back_to_original(self):
+        import ocr
+        raw = b"not an image"
+        assert ocr._downscale_for_vlm(raw, max_dim=1100) == raw
+
+
 # ── Backend dispatcher (auto | ollama | tesseract) ───────────────────────────
 
 class TestOcrBackendSelection:

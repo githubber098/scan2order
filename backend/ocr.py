@@ -158,6 +158,40 @@ def _ocr_model() -> str:
             or "gemma4:e2b")
 
 
+def _downscale_for_vlm(raw_bytes: bytes, max_dim: int) -> bytes:
+    """Shrink the image so the vision model has far fewer pixels to process.
+
+    Vision-LLM latency is dominated by image-token prefill, which scales with
+    pixel count. Phone photos are huge (e.g. 3000px), making CPU inference take
+    minutes. Downscaling the longest side to ~max_dim keeps handwriting legible
+    while cutting prefill dramatically. Re-encoded as JPEG. Falls back to the
+    original bytes on any error.
+    """
+    try:
+        import io
+        from PIL import Image, ImageOps
+        img = Image.open(io.BytesIO(raw_bytes))
+        t = ImageOps.exif_transpose(img)
+        if t is not None:
+            img = t
+        if img.mode not in ("RGB", "L"):
+            img = img.convert("RGB")
+        w, h = img.size
+        if max(w, h) > max_dim:
+            scale = max_dim / max(w, h)
+            try:
+                resample = Image.Resampling.LANCZOS
+            except AttributeError:
+                resample = Image.LANCZOS  # type: ignore[attr-defined]
+            img = img.resize((max(1, int(w * scale)), max(1, int(h * scale))), resample)
+        buf = io.BytesIO()
+        img.save(buf, format="JPEG", quality=80)
+        return buf.getvalue()
+    except Exception as e:
+        print(f"[ocr] downscale skipped: {e}")
+        return raw_bytes
+
+
 async def _extract_vlm(raw_bytes: bytes, host: str) -> dict:
     """OCR via a local vision LLM on Ollama (OpenAI-compatible endpoint).
 
@@ -166,12 +200,18 @@ async def _extract_vlm(raw_bytes: bytes, host: str) -> dict:
     declared MIME type does not need to match the real format.
     """
     model = _ocr_model()
-    b64 = base64.b64encode(raw_bytes).decode()
+    max_dim = int(os.getenv("OCR_MAX_DIM", "1100") or "1100")
+    img_bytes = _downscale_for_vlm(raw_bytes, max_dim)
+    b64 = base64.b64encode(img_bytes).decode()
     data_url = f"data:image/jpeg;base64,{b64}"
+    print(f"[ocr] vlm sending {len(img_bytes)//1024}KB image (max_dim={max_dim}) to {model}")
 
     try:
         import httpx
-        async with httpx.AsyncClient(timeout=180.0) as client:
+        # Total cap so a runaway generation can't block the Ollama queue for
+        # minutes (the frontend can also cancel, which closes this connection
+        # and makes Ollama abort the run).
+        async with httpx.AsyncClient(timeout=httpx.Timeout(150.0)) as client:
             resp = await client.post(
                 f"{host}/v1/chat/completions",
                 json={

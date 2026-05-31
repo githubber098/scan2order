@@ -294,6 +294,32 @@
         #acct-connect-area { padding: 10px 0 2px; }
         .acct-connect-title { font-size: 12px; color: #bfe; margin-bottom: 8px; }
         .account-connect-form { display: flex; gap: 8px; align-items: stretch; }
+
+        /* Spinner + loading/feedback */
+        .spinner {
+            width: 16px; height: 16px; border: 2px solid rgba(78,205,196,0.25);
+            border-top-color: #4ecdc4; border-radius: 50%; display: inline-block;
+            animation: spin 0.7s linear infinite; vertical-align: middle; margin-right: 6px;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        .scan-cancel {
+            margin-top: 8px; padding: 4px 12px; font-size: 12px; cursor: pointer;
+            background: none; border: 1px solid #444; color: #aaa; border-radius: 6px; font-family: inherit;
+        }
+        .scan-cancel:hover { border-color: #e24b4a; color: #e24b4a; }
+        .browser-loading {
+            position: absolute; inset: 0; display: none; flex-direction: column;
+            align-items: center; justify-content: center; gap: 14px;
+            background: #0a0a14; color: #aaa; font-size: 14px; z-index: 2; border-radius: 14px;
+        }
+        .browser-loading.show { display: flex; }
+        .browser-loading .spinner { width: 30px; height: 30px; border-width: 3px; margin: 0; }
+        .click-ripple {
+            position: absolute; width: 22px; height: 22px; margin: -11px 0 0 -11px;
+            border: 2px solid #4ecdc4; border-radius: 50%; pointer-events: none;
+            animation: ripple 0.5s ease-out forwards; z-index: 3;
+        }
+        @keyframes ripple { from { opacity: 0.9; transform: scale(0.4); } to { opacity: 0; transform: scale(1.7); } }
     </style>
 </head>
 <body>
@@ -356,6 +382,9 @@
         <input type="file" id="ocr-input" accept="image/*" style="display:none"
                onchange="ocrImage(event)">
         <div class="scan-status" id="scan-status"></div>
+        <div style="text-align:center">
+            <button class="scan-cancel" id="scan-cancel" style="display:none" onclick="cancelOcr()">Cancel scan</button>
+        </div>
     </div>
 
     <!-- Manual input -->
@@ -408,6 +437,10 @@ Atta 5kg
             <button class="browser-close-btn" onclick="closeBrowserSession()">✕ Cancel</button>
         </div>
         <img id="browser-screenshot" src="" alt="Loading…" tabindex="0">
+        <div class="browser-loading" id="browser-loading">
+            <div class="spinner"></div>
+            <div id="browser-loading-text">Starting browser…</div>
+        </div>
         <div id="browser-kbd-hint">⌨ Just start typing — keyboard input goes straight into the page</div>
         <div class="browser-footer">
             <span class="browser-footer-hint">Click anywhere to interact &bull; type directly &bull; scroll works too</span>
@@ -440,6 +473,8 @@ let pollTimer = null;
 let _browserSessionId = null;
 let _screenshotLoopActive = false; // set false to stop the sequential screenshot loop
 let _checkTimer = null;
+let _browserStartToken = 0;        // bumped on close/cancel to abort an in-flight start
+let _ocrAbort = null;              // AbortController for the in-flight OCR request
 
 // Keystroke batching — collect printable chars for 30 ms, send as one string.
 // Avoids one HTTP round-trip per keypress; special keys flush the buffer first.
@@ -521,6 +556,7 @@ function _initBrowserModal() {
         const nx = (e.clientX - rect.left) / rect.width;
         const ny = (e.clientY - rect.top) / rect.height;
         _sendBrowserEvent({ type: 'click', nx, ny });
+        _showClickRipple(e.clientX, e.clientY);
     });
 
     // Scroll on screenshot → forward deltaY
@@ -530,15 +566,40 @@ function _initBrowserModal() {
     }, { passive: false });
 }
 
+// Brief teal ripple at the click point so it's obvious the tap registered
+// (the streamed screenshot shows no cursor/caret).
+function _showClickRipple(clientX, clientY) {
+    const box = document.querySelector('.browser-box');
+    if (!box) return;
+    const r = box.getBoundingClientRect();
+    const dot = document.createElement('div');
+    dot.className = 'click-ripple';
+    dot.style.left = (clientX - r.left) + 'px';
+    dot.style.top = (clientY - r.top) + 'px';
+    box.appendChild(dot);
+    setTimeout(() => dot.remove(), 520);
+}
+
 async function openBrowserAuth(store) {
     const storeNames = { bigbasket: 'BigBasket', blinkit: 'Blinkit', zepto: 'Zepto' };
+    const label = storeNames[store] || store;
 
     // Stop any existing session
     if (_browserSessionId) await _closeBrowserSession(false);
 
+    // Open the modal IMMEDIATELY with a loading state — launching Chromium and
+    // loading the store page takes several seconds; don't leave the user
+    // staring at a frozen page wondering if the click worked.
+    const token = ++_browserStartToken;     // guards against cancel/re-click races
+    document.getElementById('browser-title').textContent = label + ' login';
+    document.getElementById('browser-auth-status').textContent = 'Starting…';
+    document.getElementById('browser-screenshot').src = '';
+    document.getElementById('browser-loading-text').textContent = 'Starting ' + label + '…';
+    document.getElementById('browser-loading').classList.add('show');
+    document.getElementById('browser-modal').classList.add('open');
+
     // Request the user's real GPS coordinates so Playwright can pass them
-    // to the store — this makes "Use my location" buttons work inside the
-    // browser relay. We time-out after 4 s so a denied prompt doesn't stall.
+    // to the store. We time-out after 4 s so a denied prompt doesn't stall.
     let geolocation = null;
     if (navigator.geolocation) {
         geolocation = await new Promise(resolve => {
@@ -549,6 +610,7 @@ async function openBrowserAuth(store) {
             );
         });
     }
+    if (token !== _browserStartToken) return;   // user cancelled while we waited
 
     try {
         const resp = await fetch(`/api/auth/browser/start/${store}`, {
@@ -557,25 +619,26 @@ async function openBrowserAuth(store) {
             body: JSON.stringify({ user_id: userId, geolocation }),
         });
         const data = await resp.json();
+        if (token !== _browserStartToken) return;   // cancelled during launch
         if (!data.success) {
+            await _closeBrowserModal();
             showStatus('Browser session error: ' + (data.error || 'unknown'), 'error');
             return;
         }
         _browserSessionId = data.session_id;
     } catch (e) {
+        if (token !== _browserStartToken) return;
+        await _closeBrowserModal();
         showStatus('Failed to start browser: ' + e.message, 'error');
         return;
     }
 
-    document.getElementById('browser-title').textContent =
-        (storeNames[store] || store) + ' login';
+    document.getElementById('browser-loading').classList.remove('show');
     document.getElementById('browser-auth-status').textContent = 'Waiting for login…';
-    document.getElementById('browser-modal').classList.add('open');
     document.getElementById('browser-screenshot').focus();
     document.addEventListener('keydown', _browserKeyHandler);
 
     // Sequential screenshot loop — never queues up concurrent requests.
-    // Fast sites (Zepto): ~8-10fps. Heavy sites (Blinkit): matches actual speed.
     _runScreenshotLoop();
 
     // Poll for auth cookie detection
@@ -659,6 +722,7 @@ async function _closeBrowserSession(callBackend) {
 }
 
 async function _closeBrowserModal() {
+    _browserStartToken++;          // abort any in-flight start (e.g. cancel during launch)
     _screenshotLoopActive = false; // signals the loop to exit
     clearInterval(_checkTimer);
     clearTimeout(_typeFlushTimer);
@@ -667,6 +731,7 @@ async function _closeBrowserModal() {
     _typeBuffer = '';
     _browserSessionId = null;
     document.removeEventListener('keydown', _browserKeyHandler);
+    document.getElementById('browser-loading').classList.remove('show');
     document.getElementById('browser-modal').classList.remove('open');
     const img = document.getElementById('browser-screenshot');
     if (img.src && img.src.startsWith('blob:')) URL.revokeObjectURL(img.src);
@@ -748,6 +813,12 @@ async function refreshAccountStatus() {
     body.appendChild(area);
 }
 
+// +918050660543 → "+91 80506 60543" (display only; stored value is unchanged)
+function _fmtPhone(p) {
+    const m = (p || '').match(/^(\+\d{1,3})(\d{5})(\d{5})$/);
+    return m ? `${m[1]} ${m[2]} ${m[3]}` : p;
+}
+
 function _acctRow(channel, label, value) {
     const row = document.createElement('div');
     row.className = 'account-row';
@@ -757,7 +828,7 @@ function _acctRow(channel, label, value) {
     val.className = 'acct-val';
     row.appendChild(lab); row.appendChild(val);
     if (value) {
-        val.textContent = value;
+        val.textContent = (channel === 'phone') ? _fmtPhone(value) : value;
         const ok = document.createElement('span');
         ok.className = 'acct-ok'; ok.textContent = '✓';
         row.appendChild(ok);
@@ -909,29 +980,46 @@ function dismissConnectBanner() {
 async function ocrImage(event) {
     const file = event.target.files[0];
     if (!file) return;
-    document.getElementById('scan-status').textContent = 'Processing image...';
+    const status = document.getElementById('scan-status');
+    const cancelBtn = document.getElementById('scan-cancel');
+
+    status.innerHTML = '<span class="spinner"></span>Reading your list… handwriting can take up to a minute.';
+    cancelBtn.style.display = 'inline-block';
+    _ocrAbort = new AbortController();
 
     const formData = new FormData();
     formData.append('image', file);
 
     try {
-        const resp = await fetch('/api/ocr', { method: 'POST', body: formData });
+        const resp = await fetch('/api/ocr', {
+            method: 'POST', body: formData, signal: _ocrAbort.signal,
+        });
         const data = await resp.json();
         if (data.error) {
-            document.getElementById('scan-status').textContent = 'OCR error: ' + data.error;
+            status.textContent = 'OCR error: ' + data.error;
             return;
         }
         const items = data.items || [];
         if (items.length === 0) {
-            document.getElementById('scan-status').textContent = 'No items found. Try better lighting.';
+            status.textContent = 'No items found. Try a clearer, well-lit photo.';
             return;
         }
         document.getElementById('grocery-list').value = items.join('\n');
-        document.getElementById('scan-status').textContent = `✓ Found ${items.length} items`;
+        status.textContent = `✓ Found ${items.length} items`;
     } catch (e) {
-        document.getElementById('scan-status').textContent = 'Error: ' + e.message;
+        if (e.name === 'AbortError') status.textContent = 'Scan cancelled.';
+        else status.textContent = 'Error: ' + e.message;
+    } finally {
+        cancelBtn.style.display = 'none';
+        _ocrAbort = null;
+        event.target.value = '';
     }
-    event.target.value = '';
+}
+
+// Cancel an in-flight scan. Aborting the fetch also drops the server's
+// connection to Ollama, so the model stops generating and the queue frees up.
+function cancelOcr() {
+    if (_ocrAbort) _ocrAbort.abort();
 }
 
 // ── Compare ──────────────────────────────────────────────────────────────────
