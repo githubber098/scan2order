@@ -9,13 +9,14 @@ Two backends, selected by the OCR_BACKEND env var:
 
 The vision LLM reads handwriting far better than Tesseract. It reuses the same
 Ollama instance and OLLAMA_MODEL used by the ranker, so one model
-(default gemma4:e2b) serves both OCR and ranking — nothing extra to run.
+(default qwen2.5vl:3b — OCR-specialised and light enough for a CPU-only box)
+serves both OCR and ranking — nothing extra to run.
 
 Env vars:
   OCR_BACKEND        auto | ollama | tesseract   (default: auto)
   OLLAMA_HOST        e.g. http://ollama:11434     (required for the VLM path)
-  OCR_VISION_MODEL   overrides the OCR model only (default: OLLAMA_MODEL or gemma4:e2b)
-  OLLAMA_MODEL       shared model name            (default: gemma4:e2b)
+  OCR_VISION_MODEL   overrides the OCR model only (default: OLLAMA_MODEL or qwen2.5vl:3b)
+  OLLAMA_MODEL       shared model name            (default: qwen2.5vl:3b)
 """
 
 import asyncio
@@ -155,7 +156,7 @@ _VLM_PROMPT = (
 def _ocr_model() -> str:
     return (os.getenv("OCR_VISION_MODEL")
             or os.getenv("OLLAMA_MODEL")
-            or "gemma4:e2b")
+            or "qwen2.5vl:3b")
 
 
 def _downscale_for_vlm(raw_bytes: bytes, max_dim: int) -> bytes:
@@ -200,11 +201,11 @@ async def _extract_vlm(raw_bytes: bytes, host: str) -> dict:
     declared MIME type does not need to match the real format.
     """
     model = _ocr_model()
-    # Resolution vs speed trade-off. Live testing showed gemma4:e2b reads this
-    # handwriting correctly at 1100px (5/5 items) but returns NOTHING at 900px —
-    # the downscale made the strokes unreadable. So 1200px is the floor for
-    # accuracy; going lower for speed silently breaks reads. max_tokens 384 is
-    # enough for a ~30-item list without truncating.
+    # Resolution vs speed trade-off. gemma4:e2b needed 1100px+ to read handwriting
+    # (returned nothing at 900px); qwen2.5vl is OCR-specialised and usually reads
+    # at lower res, so try OCR_MAX_DIM=900 for ~2x speed and only raise it if a
+    # scan comes back empty. 1200 default is the safe (accurate) starting point.
+    # max_tokens 384 is enough for a ~30-item list without truncating.
     max_dim = int(os.getenv("OCR_MAX_DIM", "1200") or "1200")
     max_tokens = int(os.getenv("OCR_MAX_TOKENS", "384") or "384")
     timeout_s = float(os.getenv("OCR_TIMEOUT", "90") or "90")

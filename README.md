@@ -42,7 +42,7 @@ Backend is FastAPI + httpx for store API calls + Playwright only for the login r
 | Store API calls | httpx — no Playwright in the request path |
 | Browser login relay | Playwright headless Chromium for Blinkit and Zepto only |
 | OCR | Vision LLM (Gemma 4 via Ollama) reads handwriting; Tesseract fallback. `OCR_BACKEND`=auto/ollama/tesseract |
-| LLM ranking fallback | Local Ollama (default `gemma4:e2b` — the **same** model as OCR); only fires when the algorithmic ranker finds no winner |
+| LLM ranking fallback | Local Ollama (default `qwen2.5vl:3b` — the **same** model as OCR); only fires when the algorithmic ranker finds no winner |
 | Deployment | Docker + docker-compose on a homeserver, optionally fronted by Cloudflare Tunnel |
 | CI / auto-deploy | systemd timer that `git pull`s every 30 s and rebuilds on change |
 
@@ -130,7 +130,8 @@ If you want the LLM fallback, run Ollama separately and set `OLLAMA_HOST=http://
 | `TWILIO_ACCOUNT_SID` / `TWILIO_AUTH_TOKEN` / `TWILIO_FROM_NUMBER` | For phone login | Twilio creds for sending SMS OTP. If unset, OTP codes are printed to the server log (dev fallback). |
 | `SMTP_HOST` / `SMTP_PORT` / `SMTP_USER` / `SMTP_PASS` / `SMTP_FROM` | For email login | SMTP creds for sending email OTP (any provider). If unset, OTP codes are printed to the server log (dev fallback). |
 | `OLLAMA_HOST` | No | Defaults to `http://ollama:11434` in docker-compose. Set to `http://localhost:11434` for local-without-Docker. Required for the vision-LLM OCR path. |
-| `OLLAMA_MODEL` | No | Defaults to `gemma4:e2b` — serves both OCR and ranking. Bump to `gemma4:e4b` for accuracy if RAM allows. Not auto-pulled (`ollama pull` it). |
+| `OLLAMA_MODEL` | No | Defaults to `qwen2.5vl:3b` — serves both OCR and ranking. Not auto-pulled (`ollama pull qwen2.5vl:3b`). |
+| `OCR_MAX_DIM` | No | Max image dimension fed to the OCR model (default 1200). Lower → faster; raise if scans return empty. |
 | `OCR_BACKEND` | No | `auto` (default — vision LLM, Tesseract fallback), `ollama`, or `tesseract`. |
 | `OCR_VISION_MODEL` | No | Override the OCR model only (defaults to `OLLAMA_MODEL`). |
 | `MYSQL_URL` | No | If set, uses MySQL/MariaDB instead of SQLite. Format: `mysql://user:pass@host:3306/db`. |

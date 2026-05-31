@@ -3,7 +3,7 @@
 Algorithmic logic ported verbatim from scan2order2/server.py and
 scan2order2/automators/base.py. Local Ollama LLM ranking is used as an
 optional fallback when the algorithmic ranker finds no winner; the model
-is selected via the OLLAMA_MODEL env var (default gemma4:e2b — the same
+is selected via the OLLAMA_MODEL env var (default qwen2.5vl:3b — the same
 multimodal model used for OCR) and reached via OLLAMA_HOST
 (default http://ollama:11434 in docker-compose).
 """
@@ -233,7 +233,7 @@ async def _ollama_rank(original_item: str, products: list[dict]) -> list[dict]:
     if not host:
         return products
 
-    model = os.getenv("OLLAMA_MODEL", "gemma4:e2b")
+    model = os.getenv("OLLAMA_MODEL", "qwen2.5vl:3b")
 
     try:
         import httpx as _httpx

@@ -23,7 +23,7 @@ services:
       - key: OLLAMA_HOST
         sync: false
       - key: OLLAMA_MODEL
-        value: gemma4:e2b
+        value: qwen2.5vl:3b
       # Optional: switch from SQLite to MySQL/MariaDB.
       # Format: mysql://USER:PASSWORD@HOST:PORT/DATABASE
       - key: MYSQL_URL

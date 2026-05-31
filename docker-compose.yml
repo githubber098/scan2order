@@ -8,11 +8,15 @@ services:
     environment:
       - OLLAMA_HOST=http://ollama:11434
       # One multimodal model serves BOTH OCR (handwriting) and the ranking
-      # fallback. gemma4:e2b (~7GB resident) suits a 16GB CPU-only box; bump to
-      # gemma4:e4b for better accuracy if you have the RAM/GPU headroom.
-      - OLLAMA_MODEL=gemma4:e2b
+      # fallback. qwen2.5vl:3b is OCR-specialised and ~3GB (lighter + faster on
+      # a CPU-only box than gemma4:e2b, which needed 1100px+ to read handwriting
+      # and ran ~40-60s). Pull it once:  docker compose exec ollama ollama pull qwen2.5vl:3b
+      - OLLAMA_MODEL=qwen2.5vl:3b
       # OCR backend: auto (VLM first, Tesseract fallback) | ollama | tesseract
       - OCR_BACKEND=auto
+      # Optional: shrink the image fed to the VLM. qwen2.5vl reads handwriting
+      # at lower res than gemma4 did, so try 900 for ~2x speed; raise if reads fail.
+      # - OCR_MAX_DIM=900
       # ── Auth ───────────────────────────────────────────────────────────────
       # REQUIRED: sign session cookies.  Generate with:
       #   python3 -c "import secrets; print(secrets.token_hex(32))"
@@ -36,15 +40,15 @@ services:
     image: ollama/ollama:latest
     restart: unless-stopped
     # No mem_limit on purpose. Under a cgroup memory limit, Linux counts page
-    # cache against the limit, so Ollama computed only ~6.4GiB "available" and
-    # refused to load gemma4:e2b (~7.2GiB) even though the host had 11GiB free.
-    # Letting Ollama see host memory (16GB box) fixes it; e2b is size-bounded so
-    # it won't balloon. If you ever run a bigger model and want a safety cap,
-    # add `mem_limit: 13g` (leaves headroom for the app + OS).
+    # cache against the limit, so Ollama under-reported available RAM and refused
+    # to load the model even with GiBs free on the host. Letting Ollama see host
+    # memory (16GB box) fixes it; qwen2.5vl:3b (~3GB) is size-bounded. Add
+    # `mem_limit: 13g` only if you later run a much bigger model.
     volumes:
       - ollama_data:/root/.ollama
     # NOTE: the model is NOT auto-pulled. After first `docker compose up`, run:
-    #   docker compose exec ollama ollama pull gemma4:e2b
+    #   docker compose exec ollama ollama pull qwen2.5vl:3b
+    # (You can `ollama rm gemma4:e2b` afterwards to reclaim ~7GB of disk.)
 
   # ── MySQL (opt-in) ──────────────────────────────────────────────────────────
   # Uncomment this entire block AND the MYSQL_URL line above to use MySQL
