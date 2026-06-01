@@ -18,11 +18,52 @@ from ranker import (
     _parse_qty,
     _price_per_unit,
     _qty_distance,
+    _qty_multiplier,
+    _effective_price,
     _is_reasonable_size,
     filter_by_query_relevance,
     selected_product,
     build_carts_from_comparison,
 )
+
+
+# ── _qty_multiplier (weight-aware whole-unit matching) ──────────────────────────
+
+class TestQtyMultiplier:
+    def test_250g_for_1kg_is_4(self):
+        assert _qty_multiplier("1kg", {"unit": "250 g"}) == 4
+
+    def test_500g_for_1kg_is_2(self):
+        assert _qty_multiplier("1kg", {"unit": "500 g"}) == 2
+
+    def test_exact_match_is_1(self):
+        assert _qty_multiplier("1kg", {"unit": "1 kg"}) == 1
+
+    def test_non_integer_multiple_excluded(self):
+        # 300g cannot tile 1kg in whole units
+        assert _qty_multiplier("1kg", {"unit": "300 g"}) is None
+
+    def test_oversize_unit_excluded(self):
+        assert _qty_multiplier("1kg", {"unit": "2 kg"}) is None
+
+    def test_product_without_size_excluded_when_target_given(self):
+        assert _qty_multiplier("1kg", {"name": "Tomato"}) is None
+
+    def test_no_target_returns_1(self):
+        assert _qty_multiplier("", {"unit": "500 g"}) == 1
+
+    def test_unit_kind_mismatch_excluded(self):
+        # target is mass, product is volume
+        assert _qty_multiplier("1kg", {"unit": "500 ml"}) is None
+
+    def test_effective_price_multiplies(self):
+        # 250g @ ₹10 → 4 units → ₹40
+        assert _effective_price("1kg", {"unit": "250 g", "sale_price": 10}) == 40
+        # 500g @ ₹18 → 2 units → ₹36 (cheaper, should win)
+        assert _effective_price("1kg", {"unit": "500 g", "sale_price": 18}) == 36
+
+    def test_effective_price_excluded_is_inf(self):
+        assert _effective_price("1kg", {"unit": "300 g", "sale_price": 5}) == float("inf")
 
 
 # ── _parse_qty ────────────────────────────────────────────────────────────────

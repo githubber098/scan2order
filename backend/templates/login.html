@@ -111,7 +111,13 @@
         document.getElementById('sent-to').textContent = val;
         document.getElementById('step-contact').style.display = 'none';
         document.getElementById('step-code').style.display = '';
-        document.getElementById('login-msg2').textContent = resend ? 'New code sent.' : '';
+        // Dev mode: server echoes the code when no SMTP/SMS is configured.
+        if (d.dev_code) {
+          document.getElementById('input-code').value = d.dev_code;
+          document.getElementById('login-msg2').textContent = 'Dev code auto-filled: ' + d.dev_code;
+        } else {
+          document.getElementById('login-msg2').textContent = resend ? 'New code sent.' : '';
+        }
         document.getElementById('input-code').value = '';
         document.getElementById('input-code').focus();
         setTimeout(() => { document.getElementById('resend-row').style.display=''; }, 20000);

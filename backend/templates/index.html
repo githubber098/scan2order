@@ -98,13 +98,19 @@ function _parseItems(raw) {
 }
 
 // ── Savings (vs worst single store) ────────────────────────
+// Per item, find the most expensive store's effective price (price × qty_count
+// for the chosen unit), sum those, and subtract the optimised basket total.
 function _calcSavings(comparison, grandTotal) {
   let worst = 0;
   for (const entry of comparison) {
     if (!entry.cheapest_app) continue;
+    const n = entry.qty_count || 1;
     let mx = 0;
     for (const prods of Object.values(entry.prices || {})) {
-      if (prods && prods[0]) mx = Math.max(mx, prods[0].sale_price || prods[0].price || 0);
+      if (prods && prods[0]) {
+        const p = (prods[0].sale_price || prods[0].price || 0) * n;
+        mx = Math.max(mx, p);
+      }
     }
     worst += mx;
   }
@@ -216,10 +222,11 @@ function renderResults(data) {
       na.textContent='Not found in connected stores';
       card.appendChild(na);
     } else {
-      // Winner
+      // Winner — show ×N badge if buying multiple units to reach target qty
       const winnerProds = (entry.prices||{})[entry.cheapest_app]||[];
       const winner = winnerProds.find(p=>p.product_id===entry.selected_pid)||winnerProds[0];
-      if (winner) card.appendChild(_makeSwapRow(i, winner, entry.cheapest_app, true));
+      const qtyCount = entry.qty_count || 1;
+      if (winner) card.appendChild(_makeSwapRow(i, winner, entry.cheapest_app, true, qtyCount));
       // Shortlist
       for (const sp of shortlist.slice(0,2)) card.appendChild(_makeSwapRow(i, sp, sp.app||sp.app_name, false));
       if (shortlist.length > 2) {
@@ -244,26 +251,32 @@ function renderResults(data) {
   } else skip.style.display='none';
 }
 
-function _makeSwapRow(idx, prod, app, selected) {
+function _makeSwapRow(idx, prod, app, selected, qtyCount) {
   const row = document.createElement('div');
   row.className = 'srow'; row.style.cssText='padding:8px 0;cursor:pointer;border-radius:6px;' + (selected?'background:var(--accent-light, color-mix(in srgb,var(--accent) 10%,transparent));':'');
   row.dataset.app = app; row.dataset.pid = prod.product_id;
   const price = prod.sale_price || prod.price || 0;
+  const n = qtyCount || 1;
+  const effPrice = price * n;
   const storeAbbr = _SL[app] || 'bb';
+  const qtyLabel = n > 1 ? `<span style="font-size:11px;color:var(--muted);margin-left:4px">×${n}</span>` : '';
+  const effLabel = n > 1 ? `₹${Math.round(effPrice)}` : `₹${Math.round(price)}`;
+  const unitLabel = n > 1 ? `${_esc(prod.unit||'')} × ${n}` : _esc(prod.unit||'');
   row.innerHTML =
     `<div class="slogo ${storeAbbr}" style="flex-shrink:0">${storeAbbr==='bb'?'bb':storeAbbr==='bk'?'b':'Z'}</div>`+
-    `<div style="flex:1;min-width:0"><div class="sname" style="font-size:13px">${_esc(prod.name||'')}${selected?'<span style="color:var(--ok);font-size:11px;margin-left:6px">✓ best</span>':''}</div>`+
-    `<div class="smeta">${_SN[app]||app}${prod.unit?' · '+_esc(prod.unit):''}</div></div>`+
-    `<div class="num" style="font-weight:800;font-size:15px;color:${selected?'var(--accent2)':'inherit'}">₹${Math.round(price)}</div>`;
-  row.onclick = () => swapSelection(idx, app, prod.product_id, price);
+    `<div style="flex:1;min-width:0"><div class="sname" style="font-size:13px">${_esc(prod.name||'')}${qtyLabel}${selected?'<span style="color:var(--ok);font-size:11px;margin-left:6px">✓ best</span>':''}</div>`+
+    `<div class="smeta">${_SN[app]||app}${unitLabel?' · '+unitLabel:''}</div></div>`+
+    `<div class="num" style="font-weight:800;font-size:15px;color:${selected?'var(--accent2)':'inherit'}">${effLabel}</div>`;
+  row.onclick = () => swapSelection(idx, app, prod.product_id, price, n);
   return row;
 }
 
-function swapSelection(idx, app, pid, price) {
+function swapSelection(idx, app, pid, price, qtyCount) {
   if (!comparisonData) return;
   const entry = comparisonData.comparison[idx];
   if (entry.cheapest_app === app && entry.selected_pid === pid) return;
   entry.cheapest_app = app; entry.selected_pid = pid; entry.cheapest_price = price;
+  entry.qty_count = qtyCount || 1;
   _rebuildCarts();
   // Re-render that card's highlight
   const card = document.querySelector(`[data-idx="${idx}"]`);
@@ -291,9 +304,19 @@ function _rebuildCarts() {
     if (!carts[app]) carts[app] = { items:[], total:0 };
     const storeProds = (entry.prices||{})[app]||[];
     const prod = storeProds.find(p=>p.product_id===entry.selected_pid)||storeProds[0]||{};
-    const count = Math.max(1, parseInt((entry.item&&entry.item.count)||1));
+    // qty_count > 1 when weight multiplier applies (e.g. 4× 250g to make 1kg)
+    const count = Math.max(1, parseInt(entry.qty_count || (entry.item&&entry.item.count) || 1));
     const price = entry.cheapest_price;
-    carts[app].items.push({...(entry.item||{}), price, product_id:entry.selected_pid||prod.product_id, matched_name:prod.name||'', comparison_index: comparisonData.comparison.indexOf(entry)});
+    carts[app].items.push({
+      ...(entry.item||{}),
+      price, count,
+      product_id: entry.selected_pid || prod.product_id,
+      store_product_id: prod.store_product_id || '',
+      fc_id: prod.fc_id || '',
+      matched_name: prod.name || '',
+      matched_unit: prod.unit || '',
+      comparison_index: comparisonData.comparison.indexOf(entry),
+    });
     carts[app].total += price * count;
     grandTotal += price * count;
   }

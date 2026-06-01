@@ -258,6 +258,12 @@ def _send_otp_via(channel: str, target: str, code: str) -> str | None:
     return sms.send_otp(target, code)
 
 
+def _otp_dev_mode() -> bool:
+    """True when OTP_DEV_MODE is set — echoes OTP codes in API responses so the
+    flow is testable on a server with no SMTP/SMS provider. Never set in prod."""
+    return os.getenv("OTP_DEV_MODE", "").strip().lower() in ("1", "true", "yes")
+
+
 def _channel_value(body: dict) -> tuple[str | None, str | None]:
     """Pull (channel, normalised_value) from a request body.
 
@@ -303,7 +309,12 @@ async def api_send_otp(request: Request):
         return JSONResponse({"success": False, "error": err})
 
     print(f"[auth] OTP sent via {channel} to {_mask(channel, target)}")
-    return JSONResponse({"success": True})
+    resp = {"success": True}
+    # Dev mode: when no real transport is configured (test instance), echo the
+    # code so the flow is testable. Never enabled in production.
+    if _otp_dev_mode():
+        resp["dev_code"] = code
+    return JSONResponse(resp)
 
 
 @app.post("/api/auth/verify-otp")
@@ -376,7 +387,10 @@ async def api_method_send_otp(request: Request):
         return JSONResponse({"success": False, "error": err})
 
     print(f"[auth] link OTP via {channel} to {_mask(channel, target)} for {user_id[:8]}…")
-    return JSONResponse({"success": True})
+    resp = {"success": True}
+    if _otp_dev_mode():
+        resp["dev_code"] = code
+    return JSONResponse(resp)
 
 
 @app.post("/api/auth/method/verify")
@@ -1058,15 +1072,19 @@ async def api_compare(request: Request):
 
         # Savings = what you'd pay buying every item at its most expensive store
         # minus the actual cross-store basket total (pre-delivery, best effort).
+        # Each item's price is multiplied by qty_count so weight multipliers
+        # (e.g. 4× 250g for 1kg) are reflected consistently with the basket.
         worst_basket = 0.0
         for entry in comparison:
             if not entry.get("cheapest_app"):
                 continue
+            n = max(1, int(entry.get("qty_count") or 1))
             max_price = 0.0
             for _store, prods in (entry.get("prices") or {}).items():
                 if prods:
                     p = prods[0]
-                    max_price = max(max_price, float(p.get("sale_price") or p.get("price") or 0))
+                    unit = float(p.get("sale_price") or p.get("price") or 0)
+                    max_price = max(max_price, unit * n)
             worst_basket += max_price
         savings = max(0.0, worst_basket - grand_total)
 

@@ -600,6 +600,7 @@ async def add_to_cart_api(user_id: str, product_id: str, count: int = 1) -> dict
             resp = await client.post(
                 f"{BASE_URL}/v2/client/user_cart/",
                 json=body, headers=headers,
+                cookies=httpx_cookies,
             )
         elapsed_ms = int((time.time() - t_start) * 1000)
 
