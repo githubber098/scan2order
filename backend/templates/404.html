@@ -43,12 +43,26 @@
 
         /* Logo */
         .logo {
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            gap: 9px;
+            position: relative;
+            display: inline-block;
+            line-height: 1;
+            padding: 0 16px;
             margin-bottom: 48px;
         }
+        .logo::before,
+        .logo::after {
+            content: '';
+            position: absolute;
+            top: 50%;
+            transform: translateY(-50%);
+            width: 6px;
+            height: 6px;
+            background: #4ecdc4;
+            border-radius: 50%;
+            opacity: 0.65;
+        }
+        .logo::before { left: 0; }
+        .logo::after  { right: 0; }
         .logo-text {
             font-size: 22px;
             font-weight: 700;
@@ -58,14 +72,6 @@
             -webkit-background-clip: text;
             -webkit-text-fill-color: transparent;
             letter-spacing: -0.4px;
-        }
-        .logo-dot {
-            width: 6px;
-            height: 6px;
-            background: #4ecdc4;
-            border-radius: 50%;
-            opacity: 0.65;
-            flex-shrink: 0;
         }
 
 
@@ -147,7 +153,7 @@
 </head>
 <body>
 <div class="wrap">
-    <div class="logo"><span class="logo-dot"></span><span class="logo-text">scan2order</span><span class="logo-dot"></span></div>
+    <div class="logo"><span class="logo-text">scan2order</span></div>
     <div class="code">404</div>
     <div class="rule"></div>
     <div class="title">Page not found</div>
