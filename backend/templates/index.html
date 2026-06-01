@@ -339,13 +339,6 @@
             animation: ripple 0.5s ease-out forwards; z-index: 3;
         }
         @keyframes ripple { from { opacity: 0.9; transform: scale(0.4); } to { opacity: 0; transform: scale(1.7); } }
-        /* Blinking text caret at the last tap point — signals "you can type here". */
-        .relay-caret {
-            position: absolute; width: 2px; height: 20px; margin: -10px 0 0 0;
-            background: #4ecdc4; pointer-events: none; z-index: 3;
-            animation: blink 1.05s step-end infinite;
-        }
-        @keyframes blink { 0%, 50% { opacity: 1; } 50.01%, 100% { opacity: 0; } }
     </style>
 </head>
 <body>
@@ -467,7 +460,6 @@ Atta 5kg
             <div class="spinner"></div>
             <div id="browser-loading-text">Starting browser…</div>
         </div>
-        <div class="relay-caret" id="relay-caret" style="display:none"></div>
         <div id="browser-kbd-hint">⌨ Just start typing — keyboard input goes straight into the page</div>
         <div class="browser-footer">
             <span class="browser-footer-hint">Click anywhere to interact &bull; type directly &bull; scroll works too</span>
@@ -588,29 +580,13 @@ function _initBrowserModal() {
         const ny = (e.clientY - rect.top) / rect.height;
         _sendBrowserEvent({ type: 'click', nx, ny });
         _showClickRipple(e.clientX, e.clientY);
-        _placeCaret(e.clientX, e.clientY);
     });
 
     // Scroll on screenshot → forward deltaY
     img.addEventListener('wheel', (e) => {
         e.preventDefault();
         _sendBrowserEvent({ type: 'scroll', delta_y: e.deltaY });
-        // The page moved, so the caret's old position is stale — hide it.
-        const caret = document.getElementById('relay-caret');
-        if (caret) caret.style.display = 'none';
     }, { passive: false });
-}
-
-// Park a blinking caret at the last tap point so it's obvious the field is
-// focused and ready for typing (the streamed screenshot has no real caret).
-function _placeCaret(clientX, clientY) {
-    const box = document.querySelector('.browser-box');
-    const caret = document.getElementById('relay-caret');
-    if (!box || !caret) return;
-    const r = box.getBoundingClientRect();
-    caret.style.left = (clientX - r.left) + 'px';
-    caret.style.top = (clientY - r.top) + 'px';
-    caret.style.display = 'block';
 }
 
 // Brief teal ripple at the click point so it's obvious the tap registered
@@ -826,8 +802,6 @@ async function _closeBrowserModal() {
     _browserStartToken++;          // abort any in-flight start (e.g. cancel during launch)
     _screenshotLoopActive = false; // signals the loop to exit
     if (_browserWs) { try { _browserWs.close(); } catch (e) {} _browserWs = null; }
-    const caret = document.getElementById('relay-caret');
-    if (caret) caret.style.display = 'none';
     clearInterval(_checkTimer);
     clearTimeout(_typeFlushTimer);
     _checkTimer = null;
