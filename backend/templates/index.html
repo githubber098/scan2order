@@ -504,6 +504,8 @@ let _browserStartToken = 0;        // bumped on close/cancel to abort an in-flig
 let _ocrAbort = null;              // AbortController for the in-flight OCR request
 let _browserWs = null;             // screenshot-streaming WebSocket
 let _wsGotFrame = false;           // did the WS deliver any frame? (else fall back to polling)
+let _pendingFrame = null;          // newest stream frame awaiting paint (older ones dropped)
+let _rafScheduled = false;         // is a requestAnimationFrame paint already queued?
 
 // Keystroke batching — collect printable chars for 30 ms, send as one string.
 // Avoids one HTTP round-trip per keypress; special keys flush the buffer first.
@@ -693,6 +695,19 @@ async function openBrowserAuth(store) {
     _showKeyboardHint();
 }
 
+// Paint the newest frame into the <img>, at most once per animation frame.
+function _paintFrame() {
+    _rafScheduled = false;
+    const blob = _pendingFrame;
+    _pendingFrame = null;
+    if (!blob || !_browserSessionId) return;
+    const img = document.getElementById('browser-screenshot');
+    const url = URL.createObjectURL(blob);
+    const old = img.src;
+    img.src = url;
+    if (old && old.startsWith('blob:')) URL.revokeObjectURL(old);
+}
+
 // Stream screenshots over a WebSocket: the server pushes frames, so there's no
 // per-frame request/tunnel round-trip (far smoother than polling). Falls back
 // to _runScreenshotLoop() if the socket never opens.
@@ -710,13 +725,18 @@ function _startScreenshotStream() {
     }
     ws.binaryType = 'blob';
     _browserWs = ws;
+    // Decouple rendering from arrival: keep only the newest frame and paint it
+    // once per animation frame. If frames arrive faster than the browser can
+    // paint, the stale ones are dropped instead of queuing up — that's what
+    // keeps it smooth (no stutter / lag build-up).
     ws.onmessage = (ev) => {
         if (!_browserSessionId || _browserWs !== ws) { try { ws.close(); } catch(e){} return; }
         _wsGotFrame = true;
-        const newUrl = URL.createObjectURL(ev.data);
-        const oldUrl = img.src;
-        img.src = newUrl;
-        if (oldUrl && oldUrl.startsWith('blob:')) URL.revokeObjectURL(oldUrl);
+        _pendingFrame = ev.data;
+        if (!_rafScheduled) {
+            _rafScheduled = true;
+            requestAnimationFrame(_paintFrame);
+        }
     };
     ws.onclose = () => {
         if (_browserWs === ws) _browserWs = null;

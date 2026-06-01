@@ -11,6 +11,7 @@ Session expires after 10 min of inactivity.
 """
 
 import asyncio
+import base64
 import json
 import time
 from typing import Optional
@@ -190,12 +191,82 @@ class _Session:
         self._page = page
         self.started_at = time.time()
         self.last_active = time.time()
+        self._cdp = None              # CDP session used for the screencast
+        self._screencast_on = False
 
     def touch(self):
         self.last_active = time.time()
 
     def expired(self) -> bool:
         return time.time() - self.last_active > _SESSION_TIMEOUT
+
+    # ── Live video stream (CDP screencast) ─────────────────────────────────────
+    # page.screenshot() in a loop re-captures + re-encodes every frame in
+    # Playwright — far too slow for smooth video. Chrome's Page.startScreencast
+    # pushes JPEG frames itself, ONLY when the page actually changes, encoded in
+    # the render process. That's how we get a smooth ~30fps feed without pegging
+    # the CPU. Each frame must be ACKed or Chrome stops sending.
+
+    async def start_screencast(self, on_frame, quality: int = 55,
+                               max_w: int = 560, max_h: int = 1120) -> bool:
+        """Begin streaming JPEG frames to on_frame(bytes). Returns True on success.
+
+        Frames are capped to max_w/max_h (aspect preserved) so they're small and
+        fast over the tunnel. Returns False if CDP isn't available, so the caller
+        can fall back to the screenshot loop.
+        """
+        await self.stop_screencast()   # ensure only one screencast at a time
+        try:
+            cdp = await self._context.new_cdp_session(self._page)
+        except Exception as e:
+            print(f"[browser] screencast unavailable, will fall back: {e}")
+            return False
+        self._cdp = cdp
+        self._screencast_on = True
+
+        def _on_frame(params):
+            if not self._screencast_on:
+                return
+            try:
+                on_frame(base64.b64decode(params["data"]))
+            except Exception:
+                pass
+            sid = params.get("sessionId")
+            if sid is not None:
+                # Must ack to receive the next frame; schedule it on the loop.
+                try:
+                    asyncio.create_task(
+                        cdp.send("Page.screencastFrameAck", {"sessionId": sid}))
+                except Exception:
+                    pass
+
+        cdp.on("Page.screencastFrame", _on_frame)
+        try:
+            await cdp.send("Page.startScreencast", {
+                "format": "jpeg", "quality": quality,
+                "maxWidth": max_w, "maxHeight": max_h, "everyNthFrame": 1,
+            })
+        except Exception as e:
+            print(f"[browser] startScreencast failed, will fall back: {e}")
+            self._screencast_on = False
+            self._cdp = None
+            return False
+        self.touch()
+        print(f"[browser] screencast started ({max_w}x{max_h} q{quality})")
+        return True
+
+    async def stop_screencast(self):
+        self._screencast_on = False
+        cdp, self._cdp = self._cdp, None
+        if cdp:
+            try:
+                await cdp.send("Page.stopScreencast")
+            except Exception:
+                pass
+            try:
+                await cdp.detach()
+            except Exception:
+                pass
 
     async def screenshot_jpeg(self) -> bytes:
         # Streamed over WebSocket (no per-frame HTTP overhead), so we can afford
@@ -352,6 +423,8 @@ class _Session:
         return ""                           # done (caller checks get_auth_cookies)
 
     async def close(self):
+        self._screencast_on = False
+        self._cdp = None   # closing the context below detaches the CDP session
         for obj in (self._context, self._browser):
             try:
                 await obj.close()

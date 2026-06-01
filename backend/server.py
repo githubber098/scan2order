@@ -534,32 +534,65 @@ async def browser_auth_screenshot(session_id: str):
 
 @app.websocket("/api/auth/browser/ws/{session_id}")
 async def browser_auth_ws(websocket: WebSocket, session_id: str):
-    """Stream JPEG screenshots AND receive input over one persistent WebSocket.
+    """Stream the page as live video AND receive input over one WebSocket.
 
-    Server-push beats the old per-frame HTTP polling: no per-frame request /
-    TLS / tunnel round-trip, and `await send_bytes` applies natural backpressure
-    so we never get ahead of a slow client. Input events arrive as JSON text
-    frames on the same socket, so a click/keystroke skips the HTTP round-trip
-    too. The frontend falls back to polling /screenshot + POST /event if the
-    socket can't be established.
+    Frames come from Chrome's CDP screencast (Page.startScreencast): Chrome
+    pushes JPEG frames itself, only when the page changes, encoded in the render
+    process — far smoother and cheaper than calling page.screenshot() in a loop
+    (~30fps vs ~10fps on a CPU box). If CDP isn't available we fall back to the
+    screenshot loop. Input events arrive as JSON text frames on the same socket,
+    so a click/keystroke skips the HTTP round-trip too.
     """
     await websocket.accept()
+    s0 = auth_browser.get(session_id)
+    if not s0:
+        try:
+            await websocket.close()
+        except Exception:
+            pass
+        return
+
+    # Bounded queue with drop-oldest: always show the freshest frame so latency
+    # (and therefore stutter) never builds up if the client/tunnel lags.
+    frame_q: asyncio.Queue = asyncio.Queue(maxsize=2)
+
+    def _on_frame(jpeg: bytes):
+        if frame_q.full():
+            try:
+                frame_q.get_nowait()
+            except Exception:
+                pass
+        try:
+            frame_q.put_nowait(jpeg)
+        except Exception:
+            pass
+
+    streaming = await s0.start_screencast(_on_frame)
 
     async def send_frames():
-        while True:
-            s = auth_browser.get(session_id)
-            if not s:
-                break
-            try:
-                jpeg = await s.screenshot_jpeg()
-            except Exception:
-                await asyncio.sleep(0.1)   # page mid-navigation/closing
-                continue
-            try:
-                await websocket.send_bytes(jpeg)
-            except Exception:
-                break                       # client gone
-            await asyncio.sleep(0.04)       # ~capture-bound; floor ~20fps
+        if streaming:
+            while True:
+                jpeg = await frame_q.get()
+                try:
+                    await websocket.send_bytes(jpeg)
+                except Exception:
+                    break
+        else:
+            # Fallback: capture loop (works without CDP, slower).
+            while True:
+                s = auth_browser.get(session_id)
+                if not s:
+                    break
+                try:
+                    jpeg = await s.screenshot_jpeg()
+                except Exception:
+                    await asyncio.sleep(0.1)
+                    continue
+                try:
+                    await websocket.send_bytes(jpeg)
+                except Exception:
+                    break
+                await asyncio.sleep(0.04)
 
     async def recv_events():
         while True:
@@ -594,6 +627,10 @@ async def browser_auth_ws(websocket: WebSocket, session_id: str):
     finally:
         send_task.cancel()
         recv_task.cancel()
+        try:
+            await s0.stop_screencast()
+        except Exception:
+            pass
         try:
             await websocket.close()
         except Exception:

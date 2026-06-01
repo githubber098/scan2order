@@ -285,6 +285,12 @@ class FakeBrowserSession:
     async def screenshot_jpeg(self) -> bytes:
         return b"\xff\xd8\xff\xe0" + b"\x00" * 100  # minimal JPEG-like header
 
+    async def start_screencast(self, on_frame, **kwargs) -> bool:
+        return False   # no CDP in tests → WS endpoint uses the screenshot fallback
+
+    async def stop_screencast(self) -> None:
+        pass
+
     async def click(self, nx: float, ny: float) -> None:
         self.touch()
 
