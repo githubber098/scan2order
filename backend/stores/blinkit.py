@@ -301,36 +301,46 @@ async def search_item_api(user_id: str, query: str) -> list[dict]:
     print(f"[blinkit] location: lat={lat!r} lng={lng!r} merchant_id={merchant_id!r}")
 
     # ── Strategy 1: POST /v1/layout/search ───────────────────────────────────
+    # Request shape mirrors a captured working browser request byte-for-byte:
+    #   POST /v1/layout/search?q=<query>&search_type=type_to_search
+    #   headers: lat + lon (BOTH required — serviceability is resolved server-
+    #            side from the coordinate pair; sending only lat → "location
+    #            not serviceable"), access_token (decoded), auth_key, and
+    #            app_client=consumer_web.
+    #   cookies: gr_1_lat / gr_1_lon / gr_1_locality must be present and match
+    #            the lat/lon headers (already in httpx_cookies, URL-decoded).
     products: list[dict] = []
     try:
-        # Always derive a fresh auth key from /v2/accounts/auth_key/ — this is
-        # the same call Blinkit's React app makes on every page load, so it's
-        # reliable without Playwright. Fall back to a cached key only if the
-        # endpoint is unreachable.
-        api_auth_key = await _get_auth_key(access_token, httpx_cookies)
-        if not api_auth_key or api_auth_key == access_token:
-            api_auth_key = cookies.get("api_auth_key") or access_token
-        else:
-            # Cache so add_to_cart can reuse without another round-trip.
-            update_store_cookies(user_id, APP_NAME, {"api_auth_key": api_auth_key})
-        is_derived = (api_auth_key != access_token)
-        print(f"[blinkit] auth_key derived={is_derived} "
-              f"key_prefix={api_auth_key[:12]!r}")
+        # Prefer the cached derived key (captured during the login relay). It's
+        # a long-lived 64-hex key; only derive a fresh one if we have none. The
+        # /v2/accounts/auth_key/ derivation endpoint often 400s for standalone
+        # httpx calls, so we don't rely on it when a cached key exists.
+        api_auth_key = cookies.get("api_auth_key", "")
+        if not api_auth_key:
+            derived = await _get_auth_key(access_token, httpx_cookies)
+            if derived and derived != access_token:
+                api_auth_key = derived
+                update_store_cookies(user_id, APP_NAME, {"api_auth_key": derived})
+            else:
+                api_auth_key = access_token
+        print(f"[blinkit] auth_key key_prefix={api_auth_key[:12]!r} "
+              f"(cached={bool(cookies.get('api_auth_key'))})")
 
-        # Match exactly what the browser sends: auth_key + lat + Origin + Referer.
-        # lon and merchant_id come from cookies; do NOT send them as headers.
-        # Referer must be the search page URL, not the site root.
         layout_headers = {
             **_API_HEADERS_BASE,
+            "app_client": "consumer_web",   # capture uses consumer_web, not web
+            "access_token": access_token,   # decoded gr_1_accessToken (v2::...)
             "auth_key": api_auth_key,
             "Origin": BASE_URL,
             "Referer": f"{BASE_URL}/s/?q={quote(query)}",
         }
+        # BOTH lat and lon are mandatory headers — this is the fix for the
+        # "location not serviceable" 400 we were getting with lat alone.
         if lat:
             layout_headers["lat"] = str(lat)
+        if lng:
+            layout_headers["lon"] = str(lng)
 
-        # Match the format used by Blinkit's React app (uses previous_search_query,
-        # not q, and includes sort / similar_entities / monet_assets).
         layout_body = {
             "previous_search_query": query,
             "applied_filters": None,
@@ -340,12 +350,17 @@ async def search_item_api(user_id: str, query: str) -> list[dict]:
             "similar_entities": None,
             "sort": "",
         }
-        print(f"[blinkit] Strategy 1 POST headers keys: "
-              f"{[k for k in layout_headers if k not in _API_HEADERS_BASE]}")
+        print(f"[blinkit] Strategy 1 headers: "
+              f"lat={layout_headers.get('lat')!r} lon={layout_headers.get('lon')!r} "
+              f"app_client=consumer_web")
 
+        # The actual search term goes in the URL query params (q=...), matching
+        # the captured request; the body only carries pagination/ranking state.
+        search_url = (f"{BASE_URL}/v1/layout/search"
+                      f"?q={quote(query)}&search_type=type_to_search")
         async with httpx.AsyncClient(timeout=12.0) as client:
             resp = await client.post(
-                f"{BASE_URL}/v1/layout/search",
+                search_url,
                 json=layout_body,
                 headers=layout_headers,
                 cookies=httpx_cookies,

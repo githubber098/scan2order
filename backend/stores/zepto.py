@@ -66,6 +66,51 @@ def is_session_valid(user_id: str) -> bool:
     return has_token
 
 
+def _hunt_store_id(local_storage: dict, raw_cookies: dict) -> str:
+    """Recursively search every stored JSON blob for a 'storeId' value.
+
+    Zepto scatters the active store id across several persisted keys
+    (userAddresses, page-layout state, recent-search state, cart state).
+    When the serviceability cookie is empty, any of these may still carry
+    a usable storeId. Returns the first UUID-shaped storeId found, or "".
+    """
+    import re
+    _UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-"
+                          r"[0-9a-f]{4}-[0-9a-f]{12}$", re.I)
+
+    def _search(obj) -> str:
+        if isinstance(obj, dict):
+            # Prefer an explicit storeId key with a UUID-shaped value
+            for key in ("storeId", "store_id", "primaryStoreId"):
+                v = obj.get(key)
+                if isinstance(v, str) and _UUID_RE.match(v):
+                    return v
+            for v in obj.values():
+                got = _search(v)
+                if got:
+                    return got
+        elif isinstance(obj, list):
+            for item in obj:
+                got = _search(item)
+                if got:
+                    return got
+        return ""
+
+    for source in (local_storage, raw_cookies):
+        for val in (source or {}).values():
+            if not isinstance(val, str) or "{" not in val:
+                continue
+            raw = unquote(val) if "%" in val else val
+            try:
+                parsed = json.loads(raw)
+            except Exception:
+                continue
+            got = _search(parsed)
+            if got:
+                return got
+    return ""
+
+
 def _get_zepto_session(user_id: str) -> dict:
     """Pull Zepto tokens from the user_store cookies dict (SQLite/MySQL backed).
 
@@ -114,6 +159,19 @@ def _get_zepto_session(user_id: str) -> dict:
             store_etas = json.dumps(etas, separators=(",", ":"))
         except Exception:
             pass
+
+    # Fallback: the serviceability cookie is frequently saved empty
+    # (e.g. {"timeSaved": ...}) even when the user has a delivery address.
+    # The storeId still lives in OTHER stored blobs — userAddresses, the
+    # page-layout state, the search/cart state in localStorage. Recursively
+    # hunt for any "storeId" in every stored JSON value as a last resort.
+    # Only runs when the primary path found nothing, so it can't regress.
+    if not store_id:
+        found = _hunt_store_id(local_storage, raw_cookies)
+        if found:
+            store_id = found
+            store_ids = found
+            print(f"[zepto] store_id recovered from stored blobs: {store_id}")
 
     return {
         "cookies": raw_cookies,
