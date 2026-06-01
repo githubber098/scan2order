@@ -43,6 +43,13 @@
 
         /* Logo */
         .logo {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 9px;
+            margin-bottom: 48px;
+        }
+        .logo-text {
             font-size: 22px;
             font-weight: 700;
             background: linear-gradient(135deg, #4ecdc4, #2db5ad);
@@ -50,7 +57,14 @@
             -webkit-background-clip: text;
             -webkit-text-fill-color: transparent;
             letter-spacing: -0.4px;
-            margin-bottom: 48px;
+        }
+        .logo-dot {
+            width: 6px;
+            height: 6px;
+            background: #4ecdc4;
+            border-radius: 50%;
+            opacity: 0.65;
+            flex-shrink: 0;
         }
 
 
@@ -132,7 +146,7 @@
 </head>
 <body>
 <div class="wrap">
-    <div class="logo">scan2order</div>
+    <div class="logo"><span class="logo-dot"></span><span class="logo-text">scan2order</span><span class="logo-dot"></span></div>
     <div class="code">404</div>
     <div class="rule"></div>
     <div class="title">Page not found</div>
