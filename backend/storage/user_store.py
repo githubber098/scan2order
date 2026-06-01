@@ -685,11 +685,18 @@ def attach_contact(user_id: str, channel: str, value: str) -> tuple[bool, str | 
 
 def get_user_by_id(user_id: str) -> dict | None:
     row = _conn.execute(
-        "SELECT user_id, phone, email FROM users WHERE user_id=?", (user_id,)
+        "SELECT user_id, phone, email, name, theme FROM users WHERE user_id=?",
+        (user_id,),
     ).fetchone()
     if not row:
         return None
-    return {"user_id": row["user_id"], "phone": row["phone"], "email": row["email"]}
+    return {
+        "user_id": row["user_id"],
+        "phone": row["phone"],
+        "email": row["email"],
+        "name": row["name"],
+        "theme": row["theme"] or "fresh",
+    }
 
 
 def update_last_login(user_id: str) -> None:
