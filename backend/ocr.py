@@ -201,12 +201,12 @@ async def _extract_vlm(raw_bytes: bytes, host: str) -> dict:
     declared MIME type does not need to match the real format.
     """
     model = _ocr_model()
-    # Resolution vs speed trade-off. gemma4:e2b needed 1100px+ to read handwriting
-    # (returned nothing at 900px); qwen2.5vl is OCR-specialised and usually reads
-    # at lower res, so try OCR_MAX_DIM=900 for ~2x speed and only raise it if a
-    # scan comes back empty. 1200 default is the safe (accurate) starting point.
-    # max_tokens 384 is enough for a ~30-item list without truncating.
-    max_dim = int(os.getenv("OCR_MAX_DIM", "1200") or "1200")
+    # Resolution vs memory/speed. On the 16GB CPU box qwen2.5vl at 1200px needs
+    # ~10.1GB (more than is free) and OOMs → Tesseract garbage; 900px needs ~7GB,
+    # fits, AND is faster. qwen reads handwriting fine at 900px (gemma4 couldn't).
+    # The memory ceiling here is ~1000px, so if a scan returns empty nudge up only
+    # slightly. max_tokens 384 covers a ~30-item list without truncating.
+    max_dim = int(os.getenv("OCR_MAX_DIM", "900") or "900")
     max_tokens = int(os.getenv("OCR_MAX_TOKENS", "384") or "384")
     timeout_s = float(os.getenv("OCR_TIMEOUT", "90") or "90")
     img_bytes = _downscale_for_vlm(raw_bytes, max_dim)
