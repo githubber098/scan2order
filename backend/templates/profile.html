@@ -62,7 +62,7 @@
   </div>
   <div id="add-method-step2" style="display:none">
     <div class="label" style="margin-bottom:8px">Enter the 6-digit code</div>
-    <input class="input" id="add-method-code" type="number" inputmode="numeric" placeholder="000000" maxlength="6" />
+    <input class="input" id="add-method-code" type="text" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]*" placeholder="000000" maxlength="6" />
     <button class="btn" style="margin-top:10px" onclick="verifyAddMethodCode()">Verify</button>
   </div>
   <div id="add-method-msg" class="dim" style="font-size:12.5px"></div>

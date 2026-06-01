@@ -55,7 +55,7 @@
           </button>
           <h1 class="h1" style="margin-bottom:6px">Enter the code</h1>
           <p class="lead" style="margin-bottom:20px">Sent to <span class="num" id="sent-to" style="color:var(--accent2);font-weight:600"></span></p>
-          <input class="input" id="input-code" type="number" inputmode="numeric" placeholder="000000" maxlength="6" style="font-size:22px;letter-spacing:4px;text-align:center" />
+          <input class="input" id="input-code" type="text" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]*" placeholder="000000" maxlength="6" style="font-size:22px;letter-spacing:4px;text-align:center" />
           <div id="login-msg2" class="dim" style="font-size:12.5px;margin-top:8px;min-height:1em"></div>
           <button class="btn" style="margin-top:12px" onclick="verifyCode()">Verify</button>
           <div class="center muted" id="resend-row" style="margin-top:14px;font-size:12.5px;display:none">
