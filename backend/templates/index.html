@@ -9,7 +9,7 @@
     <h1 class="h1">Cheapest basket</h1>
     <span id="stores-pill" class="pill-tag">
       <span class="dot on" style="width:7px;height:7px"></span>
-      {% set n = stores.values() | selectattr('__eq__', 'equalto', true) | list | length %}
+      {% set n = (stores.bigbasket | int) + (stores.blinkit | int) + (stores.zepto | int) %}
       {{ n }} store{{ 's' if n != 1 else '' }} connected
     </span>
   </div>
