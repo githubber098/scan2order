@@ -403,6 +403,17 @@ async def compare_one_item(item: dict, user_id: str,
     selected_qty_count = 1        # how many units to order
     relevant_count = {}
 
+    # Target amount in base units (g / ml / count) — used to normalise the
+    # relaxed fallback so a tiny pack can't masquerade as cheaper than a
+    # legitimately-tiling product at another store.
+    _tq = _parse_qty(qty_str) if qty_str else None
+    target_amount = _tq[0] if _tq else 0
+
+    # Two separate accumulators. The tiling candidate (whole-unit multiple of
+    # the requested quantity) ALWAYS wins over a relaxed fallback, no matter the
+    # raw price — buying 1×180ml is not a substitute for 1L.
+    best_fb = None  # (eff, ppu, price, app, pid, name, n) — relaxed fallback
+
     for app_name, products in app_results.items():
         if not products:
             relevant_count[app_name] = 0
@@ -421,46 +432,61 @@ async def compare_one_item(item: dict, user_id: str,
         if not sized:
             continue
 
-        # Weight-aware filtering: only keep products whose unit size can be
-        # multiplied by an integer to reach the desired target quantity.
         if qty_str:
+            # PRIMARY: only products whose unit size tiles the target exactly.
             qty_valid = [(p, _qty_multiplier(qty_str, p)) for p in sized]
             filtered = [(p, n) for p, n in qty_valid if n is not None]
             if filtered:
-                # Sort by effective total price (price × N), then PPU fallback
                 filtered.sort(key=lambda pn: (
                     _product_price(pn[0]) * pn[1],
                     _price_per_unit(pn[0]),
                 ))
                 best, best_n = filtered[0]
                 eff_price = _product_price(best) * best_n
+                if _product_price(best) > 0 and eff_price < cheapest_eff:
+                    cheapest_eff = eff_price
+                    cheapest_ppu = _price_per_unit(best)
+                    cheapest_price = _product_price(best)
+                    cheapest_app = app_name
+                    selected_pid = best.get("product_id")
+                    selected_name = best.get("name")
+                    selected_qty_count = best_n
+
+            # RELAXED FALLBACK: no exact-tiling product at this store. Score by
+            # the cost to obtain the target quantity at this product's per-unit
+            # rate (ppu × target) so it's comparable across stores. Only used if
+            # NO store has a tiling product at all.
             else:
-                # No exact-integer match → fall back to PPU ordering (original)
                 sized.sort(key=lambda p: (
                     _qty_distance(qty_str, p), _price_per_unit(p), _product_price(p),
                 ))
-                best = sized[0]
-                best_n = 1
-                eff_price = _product_price(best)
-        else:
-            sized.sort(key=lambda p: (
-                _price_per_unit(p), _product_price(p),
-            ))
-            best = sized[0]
-            best_n = 1
-            eff_price = _product_price(best)
+                fb = sized[0]
+                fb_price = _product_price(fb)
+                fb_ppu = _price_per_unit(fb)
+                fb_eff = (fb_ppu * target_amount
+                          if (fb_ppu < float("inf") and target_amount) else fb_price)
+                if fb_price > 0 and (best_fb is None or fb_eff < best_fb[0]):
+                    best_fb = (fb_eff, fb_ppu, fb_price, app_name,
+                               fb.get("product_id"), fb.get("name"), 1)
+            continue
 
-        price = _product_price(best)
-        ppu = _price_per_unit(best)
-
-        if price > 0 and eff_price < cheapest_eff:
+        # No target quantity — rank purely by per-unit price.
+        sized.sort(key=lambda p: (_price_per_unit(p), _product_price(p)))
+        best = sized[0]
+        eff_price = _product_price(best)
+        if _product_price(best) > 0 and eff_price < cheapest_eff:
             cheapest_eff = eff_price
-            cheapest_ppu = ppu
-            cheapest_price = price
+            cheapest_ppu = _price_per_unit(best)
+            cheapest_price = _product_price(best)
             cheapest_app = app_name
             selected_pid = best.get("product_id")
             selected_name = best.get("name")
-            selected_qty_count = best_n
+            selected_qty_count = 1
+
+    # Use the relaxed fallback only when no store had an exact-tiling product.
+    if cheapest_app is None and best_fb is not None:
+        (cheapest_eff, cheapest_ppu, cheapest_price,
+         cheapest_app, selected_pid, selected_name, selected_qty_count) = best_fb
 
     # No algorithmic winner — try Ollama as a fallback
     if not cheapest_app and os.getenv("OLLAMA_HOST") and app_results:
