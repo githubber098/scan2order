@@ -1,22 +1,26 @@
 """ocr.py - Grocery list extraction from images.
 
-Two backends, selected by the OCR_BACKEND env var:
+Backends, selected by the OCR_BACKEND env var:
 
-  "auto" (default)  Try the local vision LLM (Gemma 4 via Ollama) first; if it
-                    errors or returns nothing, fall back to Tesseract.
-  "ollama" / "vlm"  Vision LLM only.
-  "tesseract"       Tesseract only (the legacy path).
+  "auto" (default)  Groq cloud vision first if GROQ_API_KEY is set (fast, runs
+                    off-box so concurrent scans don't lag each other); else the
+                    local vision LLM (qwen2.5vl via Ollama); else Tesseract.
+                    Falls through on error/empty.
+  "groq"            Groq cloud vision only (needs GROQ_API_KEY).
+  "ollama" / "vlm"  Local vision LLM only (needs OLLAMA_HOST).
+  "tesseract"       Tesseract only (the no-network/no-model fallback).
 
-The vision LLM reads handwriting far better than Tesseract. It reuses the same
-Ollama instance and OLLAMA_MODEL used by the ranker, so one model
-(default qwen2.5vl:3b — OCR-specialised and light enough for a CPU-only box)
-serves both OCR and ranking — nothing extra to run.
+A vision model reads handwriting far better than Tesseract. The local path
+reuses the same OLLAMA_MODEL as the ranker (one model serves both); the Groq
+path runs Llama 4 Scout on Groq's LPUs (~1-2s, no local CPU cost).
 
 Env vars:
-  OCR_BACKEND        auto | ollama | tesseract   (default: auto)
-  OLLAMA_HOST        e.g. http://ollama:11434     (required for the VLM path)
-  OCR_VISION_MODEL   overrides the OCR model only (default: OLLAMA_MODEL or qwen2.5vl:3b)
-  OLLAMA_MODEL       shared model name            (default: qwen2.5vl:3b)
+  OCR_BACKEND        auto | groq | ollama | tesseract   (default: auto)
+  GROQ_API_KEY       enables the Groq cloud path (preferred in auto mode)
+  GROQ_OCR_MODEL     Groq vision model (default: meta-llama/llama-4-scout-17b-16e-instruct)
+  OLLAMA_HOST        e.g. http://ollama:11434           (required for the local VLM path)
+  OCR_VISION_MODEL   overrides the local OCR model only (default: OLLAMA_MODEL or qwen2.5vl:3b)
+  OLLAMA_MODEL       shared local model name            (default: qwen2.5vl:3b)
 """
 
 import asyncio
@@ -248,31 +252,99 @@ async def _extract_vlm(raw_bytes: bytes, host: str) -> dict:
         return {"error": f"VLM error: {e}", "items": []}
 
 
+# ── Groq cloud backend (Llama 4 vision, OpenAI-compatible) ───────────────────
+
+_GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
+
+
+async def _extract_groq(raw_bytes: bytes, api_key: str) -> dict:
+    """OCR via Groq's hosted vision model (OpenAI-compatible endpoint).
+
+    Runs off-box on Groq's LPUs — fast (~1-2s) and doesn't compete with the
+    local CPU, so concurrent scans don't lag each other. Same image-message
+    shape as the Ollama path; only the URL, auth header, and model differ.
+    Default model: Llama 4 Scout (smaller/faster; plenty for a grocery list).
+    """
+    model = os.getenv("GROQ_OCR_MODEL", "meta-llama/llama-4-scout-17b-16e-instruct")
+    # Groq allows up to 20MB and is fast, so we can afford a higher resolution
+    # than the local path (which is RAM-bound). 1280px reads handwriting well.
+    img_bytes = _downscale_for_vlm(raw_bytes, int(os.getenv("GROQ_OCR_MAX_DIM", "1280") or "1280"))
+    b64 = base64.b64encode(img_bytes).decode()
+    data_url = f"data:image/jpeg;base64,{b64}"
+    print(f"[ocr] groq sending {len(img_bytes)//1024}KB image to {model}")
+
+    try:
+        import httpx
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.post(
+                _GROQ_URL,
+                headers={"Authorization": f"Bearer {api_key}",
+                         "Content-Type": "application/json"},
+                json={
+                    "model": model,
+                    "messages": [{
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": _VLM_PROMPT},
+                            {"type": "image_url", "image_url": {"url": data_url}},
+                        ],
+                    }],
+                    "temperature": 0,
+                    "max_tokens": 512,
+                },
+            )
+        if resp.status_code != 200:
+            print(f"[ocr] groq HTTP {resp.status_code}: {resp.text[:200]}")
+            return {"error": f"Groq HTTP {resp.status_code}", "items": []}
+        text = resp.json()["choices"][0]["message"]["content"].strip()
+        items = _lines_to_items(text)
+        print(f"[ocr] groq ({model}): {len(items)} items")
+        return {"raw_text": text, "items": items}
+    except Exception as e:
+        print(f"[ocr] groq error: {e}")
+        return {"error": f"Groq error: {e}", "items": []}
+
+
 # ── Dispatcher ───────────────────────────────────────────────────────────────
 
 async def extract_grocery_list(raw_bytes: bytes) -> dict:
     """Extract grocery list items from image bytes.
 
-    Backend chosen by OCR_BACKEND (auto | ollama | tesseract). In "auto" mode
-    the vision LLM is tried first and Tesseract is the fallback. Returns
-    {"raw_text": str, "items": [str]} or {"error": str, "items": []}.
+    Backend chosen by OCR_BACKEND (auto | groq | ollama | tesseract):
+      • groq      — Groq cloud vision only (needs GROQ_API_KEY).
+      • ollama    — local vision LLM only (needs OLLAMA_HOST).
+      • tesseract — local Tesseract only.
+      • auto      — Groq first if GROQ_API_KEY is set (fast, off-box), then the
+                    local vision LLM if OLLAMA_HOST is set, then Tesseract.
+    Returns {"raw_text": str, "items": [str]} or {"error": str, "items": []}.
     """
     backend = os.getenv("OCR_BACKEND", "auto").strip().lower()
+    groq_key = os.getenv("GROQ_API_KEY")
     host = os.getenv("OLLAMA_HOST")
 
-    want_vlm = backend in ("auto", "ollama", "vlm")
-    if want_vlm and host:
+    # ── Explicit single-backend modes ───────────────────────────────────────
+    if backend == "groq":
+        if not groq_key:
+            return {"error": "OCR_BACKEND=groq but GROQ_API_KEY is not set", "items": []}
+        return await _extract_groq(raw_bytes, groq_key)
+    if backend in ("ollama", "vlm"):
+        if not host:
+            return {"error": "OCR_BACKEND=ollama but OLLAMA_HOST is not set", "items": []}
+        return await _extract_vlm(raw_bytes, host)
+    if backend == "tesseract":
+        return await asyncio.to_thread(_extract_tesseract, raw_bytes)
+
+    # ── auto: Groq → local VLM → Tesseract ───────────────────────────────────
+    if groq_key:
+        result = await _extract_groq(raw_bytes, groq_key)
+        if result.get("items"):
+            return result
+        print("[ocr] groq returned nothing → trying next backend")
+    if host:
         result = await _extract_vlm(raw_bytes, host)
         if result.get("items"):
             return result
-        if backend in ("ollama", "vlm"):
-            # VLM-only mode: return its result (possibly an error/empty) as-is.
-            return result
         print("[ocr] vlm returned nothing → falling back to Tesseract")
-    elif want_vlm and not host:
-        if backend in ("ollama", "vlm"):
-            return {"error": "OCR_BACKEND=ollama but OLLAMA_HOST is not set", "items": []}
-        # auto mode with no Ollama configured → silently use Tesseract.
 
     # Tesseract path (sync, CPU-bound → offload so we don't block the event loop).
     return await asyncio.to_thread(_extract_tesseract, raw_bytes)

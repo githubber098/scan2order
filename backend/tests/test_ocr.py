@@ -117,6 +117,7 @@ class TestOcrBackendSelection:
     async def test_auto_uses_tesseract_when_no_ollama(self, monkeypatch):
         import ocr
         monkeypatch.delenv("OLLAMA_HOST", raising=False)
+        monkeypatch.delenv("GROQ_API_KEY", raising=False)
         monkeypatch.setenv("OCR_BACKEND", "auto")
         seen = {}
 
@@ -133,6 +134,7 @@ class TestOcrBackendSelection:
     async def test_vlm_used_when_configured(self, monkeypatch):
         import ocr
         monkeypatch.setenv("OLLAMA_HOST", "http://fake:11434")
+        monkeypatch.delenv("GROQ_API_KEY", raising=False)
         monkeypatch.setenv("OCR_BACKEND", "auto")
 
         async def _vlm(raw, host):
@@ -147,6 +149,7 @@ class TestOcrBackendSelection:
     async def test_vlm_empty_falls_back_to_tesseract(self, monkeypatch):
         import ocr
         monkeypatch.setenv("OLLAMA_HOST", "http://fake:11434")
+        monkeypatch.delenv("GROQ_API_KEY", raising=False)
         monkeypatch.setenv("OCR_BACKEND", "auto")
 
         async def _vlm(raw, host):
@@ -156,6 +159,58 @@ class TestOcrBackendSelection:
 
         out = await ocr.extract_grocery_list(b"img")
         assert out["items"] == ["onions"]
+
+    # ── Groq cloud path ──────────────────────────────────────────────────────
+    async def test_groq_preferred_in_auto(self, monkeypatch):
+        import ocr
+        monkeypatch.setenv("OCR_BACKEND", "auto")
+        monkeypatch.setenv("GROQ_API_KEY", "gsk_test")
+        monkeypatch.setenv("OLLAMA_HOST", "http://fake:11434")
+
+        async def _groq(raw, key):
+            return {"items": ["mango"]}
+        async def _vlm(raw, host):
+            raise AssertionError("local VLM must not run when Groq succeeds")
+        monkeypatch.setattr(ocr, "_extract_groq", _groq)
+        monkeypatch.setattr(ocr, "_extract_vlm", _vlm)
+
+        out = await ocr.extract_grocery_list(b"img")
+        assert out["items"] == ["mango"]
+
+    async def test_groq_empty_falls_back_to_vlm(self, monkeypatch):
+        import ocr
+        monkeypatch.setenv("OCR_BACKEND", "auto")
+        monkeypatch.setenv("GROQ_API_KEY", "gsk_test")
+        monkeypatch.setenv("OLLAMA_HOST", "http://fake:11434")
+
+        async def _groq(raw, key):
+            return {"items": []}          # Groq down / rate-limited
+        async def _vlm(raw, host):
+            return {"items": ["onion"]}
+        monkeypatch.setattr(ocr, "_extract_groq", _groq)
+        monkeypatch.setattr(ocr, "_extract_vlm", _vlm)
+
+        out = await ocr.extract_grocery_list(b"img")
+        assert out["items"] == ["onion"]
+
+    async def test_groq_only_requires_key(self, monkeypatch):
+        import ocr
+        monkeypatch.delenv("GROQ_API_KEY", raising=False)
+        monkeypatch.setenv("OCR_BACKEND", "groq")
+        out = await ocr.extract_grocery_list(b"img")
+        assert out["items"] == [] and "error" in out
+
+    async def test_groq_only_mode(self, monkeypatch):
+        import ocr
+        monkeypatch.setenv("OCR_BACKEND", "groq")
+        monkeypatch.setenv("GROQ_API_KEY", "gsk_test")
+
+        async def _groq(raw, key):
+            return {"items": ["tomato"]}
+        monkeypatch.setattr(ocr, "_extract_groq", _groq)
+
+        out = await ocr.extract_grocery_list(b"img")
+        assert out["items"] == ["tomato"]
 
     async def test_tesseract_only_never_calls_vlm(self, monkeypatch):
         import ocr
