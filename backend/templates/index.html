@@ -112,48 +112,113 @@
         .results-section { margin-top: 20px; }
         .results-section h2 { font-size: 16px; margin-bottom: 12px; color: #ccc; }
 
+        /* Compact result cards — one row per item */
         .item-card {
             background: #111122; border: 1px solid #222;
-            border-radius: 12px; padding: 14px; margin-bottom: 10px;
+            border-radius: 12px; padding: 10px 14px; margin-bottom: 8px;
         }
-        .item-name { font-size: 14px; color: #888; margin-bottom: 6px; }
-        .no-match { color: #555; font-size: 13px; font-style: italic; }
+        .cart-item {
+            display: flex; flex-direction: column; gap: 4px;
+            padding: 6px 0; font-size: 13px; border-bottom: 1px solid #1a1a2a;
+        }
+        .cart-item:last-child { border-bottom: none; }
+        .cart-item.has-failed { border-left: 3px solid #e26060; padding-left: 8px; margin-left: -8px; }
+        .cart-item.updating { opacity: 0.6; position: relative; pointer-events: none; }
+        .cart-item.updating::after {
+            content: ''; position: absolute; right: 6px; top: 50%; margin-top: -8px;
+            width: 16px; height: 16px; border: 2px solid #4ecdc4;
+            border-top-color: transparent; border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+        }
+        .cart-item.updating .cart-actions > button,
+        .cart-item.updating .cart-stepper-cell { visibility: hidden; }
+        .cart-row-top, .cart-row-bottom {
+            display: flex; justify-content: space-between; align-items: center; gap: 12px;
+        }
+        .cart-name { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; font-size: 13px; color: #ccc; }
+        .cart-name small { color: #555; margin-left: 4px; font-size: 11px; }
+        .cart-desc { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; font-size: 11px; color: #666; }
+        .cart-actions {
+            flex: 0 0 auto; display: inline-flex; align-items: center; gap: 4px;
+            color: #4ecdc4; font-weight: 600; white-space: nowrap; font-size: 13px;
+        }
+        .cart-stepper-cell { flex: 0 0 auto; display: inline-flex; align-items: center; }
+        .no-match-row { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
 
-        .app-results { display: grid; gap: 8px; margin-top: 8px; }
-        .product-row {
-            display: flex; justify-content: space-between; align-items: center;
-            padding: 8px 10px; background: #0d0d1e; border-radius: 8px;
-            border: 1px solid #1e1e3e;
+        .btn-qty {
+            padding: 2px 6px; font-size: 11px; background: none;
+            border: 1px solid #333; border-radius: 4px; color: #888; cursor: pointer;
         }
-        .product-row.cheapest { border-color: #4ecdc4; background: #0a1a1a; }
-        .product-info { flex: 1; }
-        .product-name { font-size: 13px; color: #ddd; }
-        .product-meta { font-size: 11px; color: #666; margin-top: 2px; }
-        .product-price { font-size: 15px; font-weight: 700; color: #4ecdc4; }
-        .product-price.cheapest { color: #4ecdc4; }
-        .best-badge {
-            display: inline-block; font-size: 10px; padding: 2px 6px;
-            background: #4ecdc4; color: #001; border-radius: 4px;
-            font-weight: 700; margin-left: 6px;
+        .btn-qty:hover:not(:disabled) { background: #1a2a3a; color: #4ecdc4; border-color: #4ecdc4; }
+        .btn-qty:disabled { opacity: 0.3; cursor: not-allowed; }
+        .btn-remove {
+            padding: 2px 6px; font-size: 11px; background: none;
+            border: 1px solid #333; border-radius: 4px; color: #888; cursor: pointer;
+        }
+        .btn-remove:hover:not(:disabled) { background: #3a1a1a; color: #e24b4a; border-color: #e24b4a; }
+        .btn-remove:disabled { opacity: 0.3; cursor: not-allowed; }
+
+        .count-step {
+            display: inline-flex; align-items: center;
+            border: 1px solid #333; border-radius: 6px; background: #0e0e18;
+        }
+        .count-step button {
+            padding: 2px 8px; background: none; border: none; color: #aaa;
+            cursor: pointer; font-size: 13px; line-height: 1;
+        }
+        .count-step button:hover:not(:disabled) { color: #4ecdc4; }
+        .count-step button:disabled { color: #444; cursor: not-allowed; }
+        .count-step .count-val {
+            min-width: 18px; text-align: center; color: #ddd; font-size: 12px; padding: 0 2px;
         }
 
-        /* Swap / shortlist alternatives */
+        .icon { width: 14px; height: 14px; vertical-align: -2px; display: inline-block; }
+
+        /* Swap modal */
+        .swap-modal {
+            position: fixed; inset: 0; background: rgba(0,0,0,0.65);
+            display: none; align-items: flex-start; justify-content: center;
+            z-index: 2000; padding: 20px; overflow-y: auto;
+        }
+        .swap-modal.open { display: flex; }
+        .swap-card {
+            width: 100%; max-width: 480px; background: #111122;
+            border: 1px solid #333; border-radius: 12px; padding: 16px; margin: 12px 0;
+        }
+        .swap-card h3 { color: #4ecdc4; font-size: 16px; margin-bottom: 4px; }
+        .swap-card .swap-sub { color: #888; font-size: 12px; margin-bottom: 12px; }
         .swap-row {
-            display: flex; justify-content: space-between; align-items: center;
-            padding: 8px 10px; background: #0d0d1e; border-radius: 8px;
-            border: 1px solid #1e1e3e; margin-top: 4px; cursor: pointer;
-            transition: background 0.12s, border-color 0.12s;
+            display: flex; align-items: center;
+            padding: 10px 8px; border-radius: 8px; border: 1px solid #222;
+            background: #0e0e18; margin-bottom: 6px; cursor: pointer;
         }
-        .swap-row:hover { background: #111130; border-color: #3a3a5a; }
-        .swap-row.swap-selected { border-color: #4ecdc4; background: #0a1a1a; }
-        .swap-more-btn {
-            display: block; width: 100%; padding: 6px; margin-top: 6px;
-            background: none; border: 1px dashed #2a2a3a; color: #555;
-            border-radius: 8px; font-size: 12px; cursor: pointer; text-align: center;
-            transition: color 0.12s, border-color 0.12s;
+        .swap-row:hover { border-color: #4ecdc4; background: #14223a; }
+        .swap-row.current { border-color: #4ecdc4; background: #1a3a3a; }
+        .swap-thumb {
+            width: 52px; height: 52px; border-radius: 6px; object-fit: contain;
+            background: #fff; flex-shrink: 0; margin-right: 10px; padding: 2px; box-sizing: border-box;
         }
-        .swap-more-btn:hover { border-color: #4ecdc4; color: #4ecdc4; }
-        .swap-hidden { display: none; }
+        .swap-thumb-fallback {
+            width: 52px; height: 52px; border-radius: 6px; background: #1a1a25;
+            flex-shrink: 0; margin-right: 10px; display: inline-block; box-sizing: border-box;
+        }
+        .swap-meta { font-size: 12px; flex: 1; min-width: 0; }
+        .swap-app {
+            display: inline-block; font-size: 10px; text-transform: uppercase;
+            letter-spacing: 0.5px; padding: 2px 6px; border-radius: 4px;
+            background: #1a2a3a; color: #4ecdc4; margin-right: 4px;
+        }
+        .current-tag { color: #4ecdc4; font-size: 10px; }
+        .swap-name { color: #ddd; display: block; margin-top: 4px; line-height: 1.3; overflow-wrap: break-word; }
+        .swap-unit { color: #777; font-size: 11px; }
+        .swap-price { color: #4ecdc4; font-weight: 700; font-size: 14px; margin-left: 10px; white-space: nowrap; flex-shrink: 0; }
+        .ppu { display: block; font-size: 11px; color: #777; font-weight: 400; margin-top: 2px; }
+        .swap-close {
+            display: block; width: 100%; margin-top: 8px; padding: 10px;
+            background: none; border: 1px solid #333; border-radius: 8px;
+            color: #888; cursor: pointer; font-family: inherit; font-size: 14px;
+        }
+        .swap-close:hover { border-color: #4ecdc4; color: #4ecdc4; }
 
         /* Grand total + cart actions */
         .summary-card {
@@ -342,6 +407,19 @@
     </style>
 </head>
 <body>
+<!-- SVG icon sprites -->
+<svg style="display:none" xmlns="http://www.w3.org/2000/svg">
+    <symbol id="i-swap" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/>
+        <polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/>
+    </symbol>
+    <symbol id="i-pencil" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z"/>
+    </symbol>
+    <symbol id="i-x" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+    </symbol>
+</svg>
 <div class="container">
     <div class="logo">
         <h1>scan2order</h1>
@@ -448,6 +526,16 @@ Atta 5kg
     </div>
 </div>
 
+<!-- Swap product modal: all alternatives sorted by price per unit -->
+<div class="swap-modal" id="swap-modal" onclick="onSwapBackdrop(event)">
+    <div class="swap-card" onclick="event.stopPropagation()">
+        <h3 id="swap-title">Swap product</h3>
+        <div class="swap-sub" id="swap-sub"></div>
+        <div id="swap-list"></div>
+        <button class="swap-close" onclick="closeSwap()">Close</button>
+    </div>
+</div>
+
 <!-- Browser auth modal: live Playwright screenshot; click + type directly -->
 <div class="browser-modal" id="browser-modal">
     <div class="browser-box">
@@ -487,6 +575,7 @@ if (!userId) {
 
 let comparisonData = null;
 let pollTimer = null;
+let _swapIndex = -1;
 
 // Browser session state
 let _browserSessionId = null;
@@ -1178,177 +1267,101 @@ async function startCompare() {
     }
 }
 
+const _STORE_LABELS = { bigbasket: 'BigBasket', blinkit: 'Blinkit', zepto: 'Zepto' };
+
+// ── Results rendering ────────────────────────────────────────────────────────
+
 function renderResults(data) {
+    comparisonData = data;
     const comparison = data.comparison || [];
-    const carts = data.carts || {};
-    const grandTotal = data.grand_total || 0;
-    const skipped = data.skipped_apps || [];
+    for (let i = 0; i < comparison.length; i++) comparison[i].comparison_index = i;
 
     document.getElementById('results-section').style.display = 'block';
     document.getElementById('status-wrap').innerHTML = '';
 
     const cardsEl = document.getElementById('item-cards');
     cardsEl.innerHTML = '';
-
     for (let i = 0; i < comparison.length; i++) {
-        const entry = comparison[i];
-        const item = entry.item || {};
-        const prices = entry.prices || {};
-        const cheapestApp = entry.cheapest_app;
-        const selectedPid = entry.selected_pid;
-        const shortlist = entry.shortlist || [];
-
-        const card = document.createElement('div');
-        card.className = 'item-card';
-        card.dataset.idx = String(i);
-
-        const nameEl = document.createElement('div');
-        nameEl.className = 'item-name';
-        nameEl.textContent = `${item.name || ''}${item.qty ? ' · ' + item.qty : ''}`;
-        card.appendChild(nameEl);
-
-        if (!cheapestApp) {
-            const nm = document.createElement('div');
-            nm.className = 'no-match';
-            nm.textContent = 'No matching products found';
-            card.appendChild(nm);
-            cardsEl.appendChild(card);
-            continue;
-        }
-
-        // ── Winner row (always first, highlighted) ───────────────────────────
-        const winnerProds = prices[cheapestApp] || [];
-        const winnerProd = winnerProds.find(p => p.product_id === selectedPid) || winnerProds[0];
-        if (winnerProd) {
-            card.appendChild(_makeSwapRow(i, winnerProd, cheapestApp, true));
-        }
-
-        // ── Shortlist: first 2 always visible ────────────────────────────────
-        for (const sp of shortlist.slice(0, 2)) {
-            card.appendChild(_makeSwapRow(i, sp, sp.app, false));
-        }
-
-        // ── "Show N more" expander for the rest ───────────────────────────────
-        if (shortlist.length > 2) {
-            const moreCount = shortlist.length - 2;
-            const moreWrap = document.createElement('div');
-            moreWrap.className = 'swap-hidden';
-            for (const sp of shortlist.slice(2)) {
-                moreWrap.appendChild(_makeSwapRow(i, sp, sp.app, false));
-            }
-            const moreBtn = document.createElement('button');
-            moreBtn.className = 'swap-more-btn';
-            moreBtn.textContent = `▾ ${moreCount} more alternative${moreCount !== 1 ? 's' : ''}`;
-            moreBtn.onclick = () => {
-                moreWrap.classList.remove('swap-hidden');
-                moreBtn.style.display = 'none';
-            };
-            card.appendChild(moreBtn);
-            card.appendChild(moreWrap);
-        }
-
-        cardsEl.appendChild(card);
+        cardsEl.appendChild(_makeItemCard(i, comparison[i]));
     }
 
-    if (grandTotal > 0) {
-        document.getElementById('grand-total').textContent = '₹' + grandTotal.toFixed(0);
-        const cartList = document.getElementById('cart-list');
-        cartList.innerHTML = '';
-        for (const [storeName, cartData] of Object.entries(carts)) {
-            const storeLabel = { bigbasket: 'BigBasket', blinkit: 'Blinkit', zepto: 'Zepto' }[storeName] || storeName;
-            const div = document.createElement('div');
-            div.className = 'cart-store';
-            let html = `<div class="cart-store-name">${escHtml(storeLabel)} — ₹${(cartData.total || 0).toFixed(0)}</div>`;
-            for (const item of (cartData.items || [])) {
-                html += `<div class="cart-item-row"><span>${escHtml(item.matched_name || item.name || '')}</span><span class="cart-item-price">₹${(item.price || 0).toFixed(0)}</span></div>`;
-            }
-            div.innerHTML = html;
-            cartList.appendChild(div);
-        }
-        document.getElementById('summary-card').style.display = 'block';
-    }
-
-    if (skipped.length > 0) {
-        document.getElementById('skipped-notice').textContent =
-            `Skipped (not connected): ${skipped.join(', ')}`;
-    }
-}
-
-// ── Swap / shortlist helpers ─────────────────────────────────────────────────
-
-const _STORE_LABELS = { bigbasket: 'BigBasket', blinkit: 'Blinkit', zepto: 'Zepto' };
-
-function _makeSwapRow(entryIndex, prod, app, isSelected) {
-    const row = document.createElement('div');
-    row.className = 'swap-row' + (isSelected ? ' swap-selected' : '');
-    row.dataset.app = app;
-    row.dataset.pid = prod.product_id;
-    const price = prod.sale_price || prod.price || 0;
-    const storeLabel = _STORE_LABELS[app] || app;
-    row.innerHTML = `
-        <div class="product-info">
-            <div class="product-name">${escHtml(prod.name || '')}${isSelected ? '<span class="best-badge">✓</span>' : ''}</div>
-            <div class="product-meta">${escHtml(storeLabel)}${prod.unit ? ' · ' + escHtml(prod.unit) : ''}</div>
-        </div>
-        <div class="product-price${isSelected ? ' cheapest' : ''}">₹${price.toFixed(0)}</div>
-    `;
-    row.onclick = () => swapSelection(entryIndex, app, prod.product_id, price);
-    return row;
-}
-
-function swapSelection(entryIndex, app, pid, price) {
-    const entry = comparisonData.comparison[entryIndex];
-    if (entry.cheapest_app === app && entry.selected_pid === pid) return; // already selected
-
-    entry.cheapest_app = app;
-    entry.selected_pid = pid;
-    entry.cheapest_price = price;
-
-    // Move the green border to the newly selected row
-    const card = document.querySelector(`.item-card[data-idx="${entryIndex}"]`);
-    if (card) {
-        card.querySelectorAll('.swap-row').forEach(row => {
-            const sel = row.dataset.app === app && row.dataset.pid === pid;
-            row.classList.toggle('swap-selected', sel);
-            // Move the ✓ badge
-            const nameEl = row.querySelector('.product-name');
-            if (!nameEl) return;
-            const badge = nameEl.querySelector('.best-badge');
-            if (sel && !badge) {
-                const b = document.createElement('span');
-                b.className = 'best-badge';
-                b.textContent = '✓';
-                nameEl.appendChild(b);
-            } else if (!sel && badge) {
-                badge.remove();
-            }
-            // Price colour
-            const priceEl = row.querySelector('.product-price');
-            if (priceEl) priceEl.classList.toggle('cheapest', sel);
-        });
-    }
+    const skipped = data.skipped_apps || [];
+    document.getElementById('skipped-notice').textContent =
+        skipped.length ? `Skipped (not connected): ${skipped.join(', ')}` : '';
 
     _rebuildCarts();
 }
 
+function _makeItemCard(idx, entry) {
+    const item = entry.item || {};
+    const cheapestApp = entry.cheapest_app;
+    const selectedPid = String(entry.selected_pid || '');
+    const count = Math.max(1, parseInt(item.count || 1));
+    const price = entry.cheapest_price || 0;
+
+    // Find selected product object
+    let prod = null;
+    if (cheapestApp) {
+        const storeProds = (entry.prices && entry.prices[cheapestApp]) || [];
+        prod = storeProds.find(p => String(p.product_id) === selectedPid) || storeProds[0] || null;
+    }
+
+    const card = document.createElement('div');
+    card.className = 'item-card';
+    card.id = `cart-row-${idx}`;
+
+    if (!cheapestApp || !prod) {
+        // No match row
+        card.innerHTML = `
+          <div class="no-match-row">
+            <span class="cart-name">${escHtml(item.name || '')}${item.qty ? ' <small>' + escHtml(item.qty) + '</small>' : ''} <span style="color:#555;font-size:11px;font-style:italic">— no match</span></span>
+            <span class="cart-actions">
+              <button class="btn-qty" onclick="changeQty(${idx})" title="Edit quantity and re-search"><svg class="icon"><use href="#i-pencil"/></svg></button>
+              <button class="btn-remove" onclick="removeItem(${idx})" title="Remove item"><svg class="icon"><use href="#i-x"/></svg></button>
+            </span>
+          </div>`;
+    } else {
+        const priceCell = count > 1
+            ? `₹${price.toFixed(0)} × ${count} = ₹${(price * count).toFixed(0)}`
+            : `₹${price.toFixed(0)}`;
+        const appLabel = _STORE_LABELS[cheapestApp] || cheapestApp;
+        card.innerHTML = `
+          <div class="cart-row-top">
+            <span class="cart-name">${escHtml(item.name || '')}${item.qty ? ' <small>' + escHtml(item.qty) + '</small>' : ''}</span>
+            <span class="cart-actions">
+              <span>${priceCell}</span>
+              <button class="btn-qty" onclick="openSwap(${idx})" title="Swap product"><svg class="icon"><use href="#i-swap"/></svg></button>
+              <button class="btn-qty" onclick="changeQty(${idx})" title="Edit quantity"><svg class="icon"><use href="#i-pencil"/></svg></button>
+              <button class="btn-remove" onclick="removeItem(${idx})" title="Remove item"><svg class="icon"><use href="#i-x"/></svg></button>
+            </span>
+          </div>
+          <div class="cart-row-bottom">
+            <span class="cart-desc">→ ${escHtml(prod.name || '')}${prod.unit ? ' · ' + escHtml(prod.unit) : ''} · <span style="color:#4ecdc4;font-size:10px;text-transform:uppercase;letter-spacing:0.4px">${escHtml(appLabel)}</span></span>
+            <span class="cart-stepper-cell">
+              <span class="count-step">
+                <button onclick="changeCount(${idx}, -1)" title="One fewer pack">−</button>
+                <span class="count-val">${count}</span>
+                <button onclick="changeCount(${idx}, 1)" title="One more pack">+</button>
+              </span>
+            </span>
+          </div>`;
+    }
+    return card;
+}
+
 function _rebuildCarts() {
+    if (!comparisonData) return;
     const carts = {};
     let grandTotal = 0;
-
     for (let i = 0; i < comparisonData.comparison.length; i++) {
         const entry = comparisonData.comparison[i];
         const app = entry.cheapest_app;
         if (!app || !entry.cheapest_price) continue;
         if (!carts[app]) carts[app] = { items: [], total: 0 };
-
-        // Find the selected product in the store's result list
-        const storeProds = entry.prices[app] || [];
-        const prod = storeProds.find(p => p.product_id === entry.selected_pid)
-                  || storeProds[0] || {};
-
+        const storeProds = (entry.prices && entry.prices[app]) || [];
+        const prod = storeProds.find(p => String(p.product_id) === String(entry.selected_pid)) || storeProds[0] || {};
         const count = Math.max(1, parseInt((entry.item && entry.item.count) || 1));
         const price = entry.cheapest_price;
-
         carts[app].items.push({
             ...(entry.item || {}),
             price,
@@ -1362,26 +1375,202 @@ function _rebuildCarts() {
         carts[app].total += price * count;
         grandTotal += price * count;
     }
-
     comparisonData.carts = carts;
     comparisonData.grand_total = grandTotal;
 
-    // Re-render summary section
-    document.getElementById('grand-total').textContent = '₹' + grandTotal.toFixed(0);
-    const cartList = document.getElementById('cart-list');
-    cartList.innerHTML = '';
-    for (const [storeName, cartData] of Object.entries(carts)) {
-        const storeLabel = _STORE_LABELS[storeName] || storeName;
-        const div = document.createElement('div');
-        div.className = 'cart-store';
-        let html = `<div class="cart-store-name">${escHtml(storeLabel)} — ₹${cartData.total.toFixed(0)}</div>`;
-        for (const itm of (cartData.items || [])) {
-            html += `<div class="cart-item-row"><span>${escHtml(itm.matched_name || itm.name || '')}</span><span class="cart-item-price">₹${(itm.price || 0).toFixed(0)}</span></div>`;
+    // Re-render summary card
+    if (grandTotal > 0) {
+        document.getElementById('grand-total').textContent = '₹' + grandTotal.toFixed(0);
+        const cartList = document.getElementById('cart-list');
+        cartList.innerHTML = '';
+        for (const [storeName, cartData] of Object.entries(carts)) {
+            const storeLabel = _STORE_LABELS[storeName] || storeName;
+            const div = document.createElement('div');
+            div.className = 'cart-store';
+            let html = `<div class="cart-store-name">${escHtml(storeLabel)} — ₹${cartData.total.toFixed(0)}</div>`;
+            for (const itm of (cartData.items || [])) {
+                html += `<div class="cart-item-row"><span>${escHtml(itm.matched_name || itm.name || '')}</span><span class="cart-item-price">₹${(itm.price || 0).toFixed(0)}</span></div>`;
+            }
+            div.innerHTML = html;
+            cartList.appendChild(div);
         }
-        div.innerHTML = html;
-        cartList.appendChild(div);
+        document.getElementById('summary-card').style.display = 'block';
+    } else {
+        document.getElementById('summary-card').style.display = 'none';
     }
-    document.getElementById('summary-card').style.display = grandTotal > 0 ? 'block' : 'none';
+}
+
+// ── Swap modal ───────────────────────────────────────────────────────────────
+
+function openSwap(compIndex) {
+    if (!comparisonData || compIndex < 0) return;
+    const entry = comparisonData.comparison[compIndex];
+    if (!entry) return;
+    _swapIndex = compIndex;
+
+    document.getElementById('swap-title').textContent =
+        `Swap "${entry.item.name}${entry.item.qty ? ' ' + entry.item.qty : ''}"`;
+
+    const currentApp = entry.cheapest_app || '';
+    const currentPid = String(entry.selected_pid || '');
+
+    // Flatten all products across all stores, compute price-per-unit for sorting
+    const rows = [];
+    for (const [app, products] of Object.entries(entry.prices || {})) {
+        for (const p of (products || [])) {
+            const price = p.sale_price || p.price || 0;
+            if (price <= 0) continue;
+            const ppu = _ppuRaw(p);
+            rows.push({ app, p, price, ppu: ppu == null ? Infinity : ppu });
+        }
+    }
+    rows.sort((a, b) => (a.ppu - b.ppu) || (a.price - b.price));
+
+    const listEl = document.getElementById('swap-list');
+    const subEl = document.getElementById('swap-sub');
+    if (!rows.length) {
+        subEl.textContent = 'No alternatives available.';
+        listEl.innerHTML = '';
+    } else {
+        const storeCount = new Set(rows.map(r => r.app)).size;
+        subEl.textContent = `${rows.length} option${rows.length === 1 ? '' : 's'} across ${storeCount} store${storeCount === 1 ? '' : 's'}, sorted by price per unit.`;
+        listEl.innerHTML = rows.map(r => {
+            const isCurrent = r.app === currentApp && String(r.p.product_id) === currentPid;
+            const cls = 'swap-row' + (isCurrent ? ' current' : '');
+            const tag = isCurrent ? '<span class="current-tag">current</span>' : '';
+            const ppuTxt = _ppuLabel(r.p);
+            const safePid = String(r.p.product_id || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+            const imgUrl = r.p.image_url || '';
+            const thumb = imgUrl
+                ? `<img class="swap-thumb" src="${escHtml(imgUrl)}" alt="" loading="lazy" onerror="this.outerHTML='<span class=\\'swap-thumb-fallback\\'></span>'">`
+                : `<span class="swap-thumb-fallback"></span>`;
+            const unit = r.p.unit ? ' · ' + r.p.unit : '';
+            return `<div class="${cls}" onclick="pickAlternative('${r.app}','${safePid}')">
+                ${thumb}
+                <div class="swap-meta">
+                    <span class="swap-app">${escHtml(r.app)}</span>${tag}
+                    <span class="swap-name">${escHtml(r.p.name || '')}<span class="swap-unit">${escHtml(unit)}</span></span>
+                </div>
+                <span class="swap-price">₹${r.price.toFixed(0)}${ppuTxt ? `<span class="ppu">${escHtml(ppuTxt)}</span>` : ''}</span>
+            </div>`;
+        }).join('');
+    }
+
+    document.getElementById('swap-modal').classList.add('open');
+    document.addEventListener('keydown', onSwapKey);
+}
+
+function closeSwap() {
+    document.getElementById('swap-modal').classList.remove('open');
+    document.removeEventListener('keydown', onSwapKey);
+    _swapIndex = -1;
+}
+
+function onSwapBackdrop(e) {
+    if (e.target === document.getElementById('swap-modal')) closeSwap();
+}
+
+function onSwapKey(e) { if (e.key === 'Escape') closeSwap(); }
+
+function pickAlternative(app, pid) {
+    if (_swapIndex < 0 || !comparisonData) { closeSwap(); return; }
+    const entry = comparisonData.comparison[_swapIndex];
+    if (!entry) { closeSwap(); return; }
+    const prod = ((entry.prices && entry.prices[app]) || [])
+        .find(p => String(p.product_id) === String(pid));
+    if (!prod) { closeSwap(); return; }
+    entry.cheapest_app = app;
+    entry.cheapest_price = prod.sale_price || prod.price || 0;
+    entry.selected_pid = prod.product_id;
+    delete entry.failed_reason;
+    delete entry.partial_added;
+    closeSwap();
+    renderResults(comparisonData);
+}
+
+// ── Per-item actions ─────────────────────────────────────────────────────────
+
+async function changeQty(compIndex) {
+    if (!comparisonData || compIndex < 0) return;
+    const entry = comparisonData.comparison[compIndex];
+    if (!entry) return;
+    const newQty = window.prompt(
+        `Edit quantity for "${entry.item.name}"\n(e.g. 500g · 2 kg · 1 L  — blank for default)`,
+        entry.item.qty || ''
+    );
+    if (newQty === null) return;
+
+    const row = document.getElementById(`cart-row-${compIndex}`);
+    if (row) row.classList.add('updating');
+    try {
+        const resp = await fetch('/api/compare/item', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ item: { name: entry.item.name, qty: newQty.trim() }, user_id: userId }),
+        });
+        const data = await resp.json();
+        if (data.error || !data.entry) {
+            showStatus('Re-search error: ' + (data.error || 'no entry returned'), 'error');
+            return;
+        }
+        data.entry.comparison_index = compIndex;
+        comparisonData.comparison[compIndex] = data.entry;
+        renderResults(comparisonData);
+    } catch (e) {
+        showStatus('Error: ' + e.message, 'error');
+    } finally {
+        if (row && row.isConnected) row.classList.remove('updating');
+    }
+}
+
+function removeItem(compIndex) {
+    if (!comparisonData || compIndex < 0) return;
+    const entry = comparisonData.comparison[compIndex];
+    if (!entry) return;
+    if (!window.confirm(`Remove "${entry.item.name}" from the comparison?`)) return;
+    comparisonData.comparison.splice(compIndex, 1);
+    renderResults(comparisonData);
+}
+
+function changeCount(compIndex, delta) {
+    if (!comparisonData || compIndex < 0) return;
+    const entry = comparisonData.comparison[compIndex];
+    if (!entry) return;
+    const cur = Math.max(1, parseInt(entry.item.count || 1));
+    const next = cur + delta;
+    if (next < 1) {
+        if (window.confirm(`Remove "${entry.item.name}"?`)) removeItem(compIndex);
+        return;
+    }
+    if (next > 99) return;
+    entry.item.count = next;
+    delete entry.partial_added;
+    delete entry.failed_reason;
+    renderResults(comparisonData);
+}
+
+// ── Price-per-unit helpers ───────────────────────────────────────────────────
+
+function _ppuRaw(p) {
+    const unit = (p.unit || '').toLowerCase().trim();
+    const price = p.sale_price || p.price || 0;
+    if (!unit || price <= 0) return null;
+    const m = unit.match(/(\d+(?:\.\d+)?)\s*(g|gm|gram|grams|kg|ml|l|ltr|litre|litres)/i);
+    if (!m) return null;
+    const qty = parseFloat(m[1]);
+    const u = m[2].toLowerCase();
+    let base = null;
+    if (u === 'g' || u === 'gm' || u === 'gram' || u === 'grams') base = qty;
+    else if (u === 'kg') base = qty * 1000;
+    else if (u === 'ml') base = qty;
+    else if (u === 'l' || u === 'ltr' || u === 'litre' || u === 'litres') base = qty * 1000;
+    if (!base || base <= 0) return null;
+    return (price * 100) / base;
+}
+
+function _ppuLabel(p) {
+    const raw = _ppuRaw(p);
+    return raw == null ? '' : `₹${raw.toFixed(2)}/100g`;
 }
 
 // ── Add to carts ──────────────────────────────────────────────────────────────
@@ -1456,6 +1645,7 @@ function clearAll() {
     document.getElementById('scan-msg').textContent = '';
     document.getElementById('scan-cancel').style.display = 'none';
     comparisonData = null;
+    closeSwap();
 }
 
 function escHtml(s) {

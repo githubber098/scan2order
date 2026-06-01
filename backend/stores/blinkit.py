@@ -1,14 +1,13 @@
 """stores/blinkit.py - Blinkit search + cart module.
 
 Search strategy (in order):
-  1. POST /v1/layout/search via httpx — fast (~200ms) but requires the
-     exact Cloudflare session cookies from a fresh page load; returns
-     "location not serviceable" without them. Succeeds when api_auth_key is
-     cached AND a fresh Cloudflare session is available.
-  2. __NEXT_DATA__ SSR — dead; kept as a stub.
-  3. Playwright response interception — reliable (~2.5s). Navigates to the
-     search page, intercepts the React app's own successful /v1/layout/search
-     response, and caches the derived auth_key for future Strategy 1 attempts.
+  1. POST /v1/layout/search via httpx — fast (~200ms). Requires api_auth_key
+     (cached from a previous successful call) plus valid session cookies.
+  2. __NEXT_DATA__ SSR fallback — GET /s/?q={query}, parse the embedded Next.js
+     JSON blob. Slower but no auth_key needed. Returns [] if the SSR JSON shape
+     changes or products aren't embedded in the page props.
+
+  Both strategies are httpx-only; no Playwright is used in the search path.
 
 Cart add via Blinkit's /v2/client/user_cart/ API.
 Auth cookie: gr_1_accessToken (stored via user_store.connect_store).
@@ -22,7 +21,7 @@ from urllib.parse import quote, unquote
 
 import httpx
 
-from storage.user_store import get_store_cookies, update_store_cookies
+from storage.user_store import get_store_cookies
 from stores._common import MOBILE_UA as _MOBILE_UA
 
 APP_NAME = "blinkit"
@@ -388,173 +387,9 @@ async def search_item_api(user_id: str, query: str) -> list[dict]:
         elapsed_ms = int((time.time() - t_start) * 1000)
         print(f"[blinkit] Strategy 2 (SSR): request failed: {e} ({elapsed_ms}ms)")
 
-    if products:
-        print(f"[blinkit] === API RESULT: {len(products)} products "
-              f"({int((time.time() - t_start)*1000)}ms) ===\n")
-        return products
-
-    # ── Strategy 3: Playwright DOM scraping ──────────────────────────────────
-    # Strategies 1 and 2 both rely on API endpoints that have changed.
-    # This strategy loads the real search page in a headless browser with the
-    # saved cookies, waits for React to render products, then scrapes the DOM.
-    # Also intercepts the network to log the correct search API URL so
-    # Strategy 1 can be fixed once we know the real endpoint.
-    print(f"[blinkit] SSR fallback empty → trying Playwright strategy")
-    try:
-        products, pw_auth_key = await _search_playwright(user_id, query, cookies)
-        print(f"[blinkit] Strategy 3 (Playwright): {len(products)} products "
-              f"({int((time.time() - t_start)*1000)}ms)")
-        # Cache the derived auth key so Strategy 1 succeeds on the next call.
-        if pw_auth_key:
-            update_store_cookies(user_id, APP_NAME, {"api_auth_key": pw_auth_key})
-            print(f"[blinkit] Cached derived auth key for future Strategy 1 use")
-    except Exception as e:
-        print(f"[blinkit] Strategy 3 failed: {e}")
-
     print(f"[blinkit] === API RESULT: {len(products)} products "
           f"({int((time.time() - t_start)*1000)}ms) ===\n")
     return products
-
-
-# ── Playwright search (Strategy 3) ───────────────────────────────────────────
-
-_PW_SEARCH_SCRIPT = r"""
-() => {
-    const results = [];
-    const cards = document.querySelectorAll('div[role="button"][tabindex="0"][id]');
-    cards.forEach(card => {
-        const id = card.id || '';
-        if (!/^\d+$/.test(id)) return;
-        const txt = (card.innerText || '').toLowerCase();
-        if (txt.includes('out of stock') || txt.includes('notify me') ||
-            txt.includes('sold out')) return;
-
-        const nameEl = card.querySelector('.tw-line-clamp-2');
-        const unitEl = card.querySelector('.tw-line-clamp-1');
-
-        let saleEl = null;
-        for (const el of card.querySelectorAll('div.tw-font-semibold')) {
-            const t = (el.textContent || '').trim();
-            if (!t.startsWith('₹')) continue;
-            let p = el, struck = false;
-            while (p && p !== card) {
-                if ((p.className || '').includes('line-through')) { struck=true; break; }
-                p = p.parentElement;
-            }
-            if (!struck) { saleEl = el; break; }
-        }
-        const mrpEl = card.querySelector('.tw-line-through');
-        const px = el => {
-            if (!el) return 0;
-            return parseFloat((el.textContent||'').replace(/[^\d.]/g,''))||0;
-        };
-        const sale = px(saleEl), mrp = px(mrpEl)||sale;
-        const name = nameEl ? (nameEl.textContent||'').trim() : '';
-        const unit = unitEl ? (unitEl.textContent||'').trim() : '';
-        if (name && sale > 0) {
-            results.push({
-                name: name.slice(0,120), price: mrp, sale_price: sale,
-                unit, image_url: '', product_id: id,
-                app: 'blinkit', app_name: 'Blinkit'
-            });
-        }
-    });
-    return results.slice(0, 8);
-}
-"""
-
-
-async def _search_playwright(
-    user_id: str, query: str, cookies: dict
-) -> tuple[list[dict], str]:
-    """Load Blinkit search page in headless Chromium, scrape rendered products.
-
-    Returns (products, derived_auth_key). derived_auth_key is the SHA256 key
-    captured from the /v2/accounts/auth_key/ response; empty string if not seen.
-    """
-    import auth_browser as _ab
-    pw = await _ab._get_playwright()
-
-    browser = await pw.chromium.launch(
-        headless=True,
-        args=["--no-sandbox", "--disable-dev-shm-usage",
-              "--disable-blink-features=AutomationControlled"],
-    )
-    lat = cookies.get("gr_1_lat") or cookies.get("lat") or cookies.get("dlat") or ""
-    captured: dict = {"auth_key": "", "products": []}
-    try:
-        ctx = await browser.new_context(
-            user_agent=_MOBILE_UA,
-            is_mobile=True, has_touch=True,
-            locale="en-IN", timezone_id="Asia/Kolkata",
-        )
-        pw_cookies = [
-            {"name": k, "value": v, "domain": "blinkit.com", "path": "/",
-             "httpOnly": False, "secure": True, "sameSite": "Lax"}
-            for k, v in cookies.items()
-            if k not in ("__cf_bm", "_cfuvid", "api_auth_key")
-        ]
-        await ctx.add_cookies(pw_cookies)
-
-        page = await ctx.new_page()
-
-        def on_request(req):
-            pass  # No request logging needed now that the strategy is stable
-
-        async def on_response(resp):
-            try:
-                u = resp.url
-                if not any(x in u for x in ("/v1/", "/v2/", "/v3/",
-                                             "/api/", "/search")):
-                    return
-                if "json" not in resp.headers.get("content-type", ""):
-                    return
-                body = await resp.json()
-                # Capture derived auth key for caching
-                if "/v2/accounts/auth_key/" in u and body.get("auth_key"):
-                    captured["auth_key"] = body["auth_key"]
-                # Capture the first successful layout/search response directly.
-                # The React app's own request succeeds where our standalone
-                # httpx/fetch calls do not; intercepting the response avoids
-                # replicating the exact session state the React app has.
-                if ("/v1/layout/search" in u and resp.status == 200
-                        and body.get("is_success") and not captured["products"]):
-                    try:
-                        captured["products"] = _parse_layout_search_response(body)
-                        print(f"[blinkit] Playwright captured "
-                              f"{len(captured['products'])} products from response")
-                    except Exception as pe:
-                        print(f"[blinkit] Playwright product parse error: {pe}")
-            except Exception:
-                pass
-
-        page.on("request", on_request)
-        page.on("response", on_response)
-
-        await page.goto(f"{BASE_URL}/s/?q={quote(query)}",
-                        wait_until="domcontentloaded", timeout=25000)
-
-        # Wait for the React app's layout/search response to be intercepted.
-        # It arrives within ~2s of DOMContentLoaded; no DOM scraping needed.
-        for _ in range(30):
-            if captured["products"]:
-                break
-            await page.wait_for_timeout(200)
-
-        if captured["products"]:
-            return captured["products"], captured["auth_key"]
-
-        # Fall back to DOM scraping if the response wasn't intercepted.
-        try:
-            await page.wait_for_selector(
-                'div[role="button"][tabindex="0"][id]', timeout=8000)
-        except Exception:
-            pass
-        await page.wait_for_timeout(1500)
-        products = await page.evaluate(_PW_SEARCH_SCRIPT)
-        return [p for p in products if p.get("product_id")], captured["auth_key"]
-    finally:
-        await browser.close()
 
 
 async def add_to_cart_api(user_id: str, product_id: str, count: int = 1) -> dict:
