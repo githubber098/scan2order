@@ -29,6 +29,7 @@ from pathlib import Path
 from fastapi import FastAPI, Request, UploadFile, File, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 import auth
 import auth_browser
@@ -43,6 +44,7 @@ BASE_DIR = Path(__file__).parent
 APP_VERSION = "1.0.0"
 _INDEX_HTML  = BASE_DIR / "templates" / "index.html"
 _LOGIN_HTML  = BASE_DIR / "templates" / "login.html"
+_404_HTML    = BASE_DIR / "templates" / "404.html"
 
 _SESSION_MAX_AGE = auth.SESSION_TTL   # 6 days
 
@@ -136,6 +138,16 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.exception_handler(StarletteHTTPException)
+async def _http_exception_handler(request: Request, exc: StarletteHTTPException):
+    """Serve the branded 404 page for unknown routes; pass other HTTP errors through."""
+    if exc.status_code == 404:
+        html = (_404_HTML.read_text(encoding="utf-8")
+                if _404_HTML.exists() else "<h1>404 Not Found</h1>")
+        return HTMLResponse(content=html, status_code=404)
+    return JSONResponse({"detail": exc.detail}, status_code=exc.status_code)
 
 
 # ── Multi-user progress tracking ────────────────────────────────────────────
