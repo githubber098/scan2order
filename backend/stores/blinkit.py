@@ -557,63 +557,167 @@ async def _search_playwright(
         await browser.close()
 
 
-async def add_to_cart_api(user_id: str, product_id: str, count: int = 1) -> dict:
-    """Add to Blinkit cart via internal v2 API.
+async def _cart_post_playwright(user_id: str, cart_items: list[dict]) -> dict:
+    """POST a desired cart state to Blinkit's /v5/carts from inside a Playwright
+    page (so the request carries fresh Cloudflare cookies — direct httpx is
+    blocked with 'location not serviceable', same as search).
 
-    Uses gr_1_accessToken for auth and lat/lng/merchant_id from stored cookies.
-    Returns {"success": True, "count_added": N} or {"success": False, "reason": str}.
+    /v5/carts is a SYNC endpoint: the posted items array becomes the cart. We
+    therefore send ALL Blinkit items in one call. Required headers discovered by
+    intercepting the web app: auth_key (derived SHA256), app_client=consumer_web,
+    lat, lon, device_id, app_version, web_app_version.
+
+    cart_items: [{"product_id": int, "quantity": int, "merchant_id": int}]
+    Returns {"success": bool, "reason"?: str}.
     """
     cookies = get_store_cookies(user_id, APP_NAME)
-    access_token = unquote(cookies.get("gr_1_accessToken", ""))
-    if not access_token:
+    lat = cookies.get("gr_1_lat") or cookies.get("lat") or ""
+    lon = cookies.get("gr_1_lon") or cookies.get("lng") or ""
+    device_id = cookies.get("gr_1_deviceId") or ""
+    cached_key = cookies.get("api_auth_key") or ""
+
+    import auth_browser as _ab
+    pw = await _ab._get_playwright()
+    browser = await pw.chromium.launch(
+        headless=True,
+        args=["--no-sandbox", "--disable-dev-shm-usage",
+              "--disable-blink-features=AutomationControlled"],
+    )
+    captured = {"auth_key": cached_key}
+    try:
+        ctx = await browser.new_context(
+            user_agent=_MOBILE_UA, is_mobile=True, has_touch=True,
+            locale="en-IN", timezone_id="Asia/Kolkata",
+        )
+        await ctx.add_cookies([
+            {"name": k, "value": v, "domain": "blinkit.com", "path": "/",
+             "httpOnly": False, "secure": True, "sameSite": "Lax"}
+            for k, v in cookies.items()
+            if k not in ("__cf_bm", "_cfuvid", "api_auth_key")
+        ])
+        page = await ctx.new_page()
+
+        async def on_response(resp):
+            if "/v2/accounts/auth_key/" in resp.url:
+                try:
+                    b = await resp.json()
+                    if b.get("auth_key"):
+                        captured["auth_key"] = b["auth_key"]
+                except Exception:
+                    pass
+        page.on("response", on_response)
+
+        # Load any Blinkit page so the session warms up and auth_key fires.
+        await page.goto(f"{BASE_URL}/", wait_until="domcontentloaded", timeout=25000)
+        for _ in range(25):
+            if captured["auth_key"]:
+                break
+            await page.wait_for_timeout(200)
+        if not captured["auth_key"]:
+            return {"success": False, "reason": "could not derive auth_key"}
+
+        result = await page.evaluate(
+            """async ({auth_key, lat, lon, device_id, items}) => {
+                const r = await fetch('/v5/carts', {
+                    method: 'POST', credentials: 'include',
+                    headers: {
+                        'auth_key': auth_key,
+                        'app_client': 'consumer_web',
+                        'lat': lat, 'lon': lon,
+                        'device_id': device_id,
+                        'app_version': '1008010008',
+                        'web_app_version': '1008010008',
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({items, promo_codes: ['']}),
+                });
+                let body = '';
+                try { body = (await r.text()).slice(0, 300); } catch (e) {}
+                return {status: r.status, body};
+            }""",
+            {"auth_key": captured["auth_key"], "lat": str(lat), "lon": str(lon),
+             "device_id": str(device_id), "items": cart_items},
+        )
+        # Cache the derived key for next time.
+        if captured["auth_key"] and captured["auth_key"] != cached_key:
+            update_store_cookies(user_id, APP_NAME, {"api_auth_key": captured["auth_key"]})
+
+        if result.get("status") == 200:
+            return {"success": True}
+        return {"success": False,
+                "reason": f"HTTP {result.get('status')}: {result.get('body','')[:120]}"}
+    finally:
+        await browser.close()
+
+
+async def add_all_to_cart_api(user_id: str, items: list[dict]) -> dict:
+    """Add all Blinkit items to the cart in one /v5/carts sync call.
+
+    items: [{product_id, count, merchant_id?}, ...] (the web-UI cart format).
+    Returns {"success": bool, "items": [{success, count_added}], "reason"?: str}.
+    Mirrors the Zepto add_all_to_cart_api shape so the server treats them alike.
+    """
+    if not items:
+        return {"success": True, "items": []}
+
+    cookies = get_store_cookies(user_id, APP_NAME)
+    if not cookies.get("gr_1_accessToken"):
         return {"success": False, "reason": "not logged in (no gr_1_accessToken)"}
 
-    # Location context — web relay saves gr_1_lat/gr_1_lon; mobile saves lat/lng.
-    lat = (cookies.get("gr_1_lat") or cookies.get("lat")
-           or cookies.get("dlat") or cookies.get("delivery_lat") or "")
-    lng = (cookies.get("gr_1_lon") or cookies.get("lng")
-           or cookies.get("dlng") or cookies.get("delivery_lng") or "")
-    merchant_id = cookies.get("merchant_id") or cookies.get("gr_1_merchantId") or ""
+    default_merchant = cookies.get("merchant_id") or cookies.get("gr_1_merchantId") or 0
 
-    print(f"\n[blinkit] === API ADD: pid={product_id} qty={count} ===")
+    print(f"\n[blinkit] === API ADD (batch): {len(items)} items ===")
     t_start = time.time()
 
-    _CF_COOKIES = {"__cf_bm", "_cfuvid"}
-    httpx_cookies = {k: v for k, v in cookies.items() if k not in _CF_COOKIES}
-    # Prefer cached derived auth key; fall back to raw token.
-    api_auth_key = cookies.get("api_auth_key") or access_token
-    headers = {**_API_HEADERS_BASE, "auth_key": api_auth_key}
-    if lat:
-        headers["lat"] = str(lat)
-    if lng:
-        headers["lng"] = str(lng)
-    if merchant_id:
-        headers["merchant_id"] = str(merchant_id)
+    cart_items = []
+    per_item_qty = []
+    for it in items:
+        pid = it.get("product_id")
+        try:
+            qty = max(1, min(99, int(it.get("count") or 1)))
+        except (TypeError, ValueError):
+            qty = 1
+        try:
+            entry = {"product_id": int(pid), "quantity": qty}
+        except (TypeError, ValueError):
+            per_item_qty.append((it, qty, False))
+            continue
+        mid = it.get("merchant_id") or default_merchant
+        try:
+            if mid:
+                entry["merchant_id"] = int(mid)
+        except (TypeError, ValueError):
+            pass
+        cart_items.append(entry)
+        per_item_qty.append((it, qty, True))
 
-    body = {
-        "items": [{"product_id": int(product_id), "quantity": count}],
-        "order_type": "blinkIt",
-    }
+    if not cart_items:
+        return {"success": False, "reason": "no valid product_ids"}
 
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.post(
-                f"{BASE_URL}/v2/client/user_cart/",
-                json=body, headers=headers,
-                cookies=httpx_cookies,
-            )
-        elapsed_ms = int((time.time() - t_start) * 1000)
+    res = await _cart_post_playwright(user_id, cart_items)
+    elapsed_ms = int((time.time() - t_start) * 1000)
+    ok = res.get("success", False)
+    print(f"[blinkit] === API ADD batch: {'OK' if ok else 'FAIL'} "
+          f"({len(cart_items)} items, {elapsed_ms}ms) "
+          f"{res.get('reason','')} ===")
 
-        if resp.status_code != 200:
-            print(f"[blinkit] API add HTTP {resp.status_code} ({elapsed_ms}ms)")
-            return {"success": False, "reason": f"HTTP {resp.status_code}"}
+    item_results = [
+        {"success": ok and valid, "count_added": qty if (ok and valid) else 0}
+        for (_it, qty, valid) in per_item_qty
+    ]
+    return {"success": ok, "items": item_results, "reason": res.get("reason")}
 
-        print(f"[blinkit] API add OK pid={product_id} ({elapsed_ms}ms)")
+
+async def add_to_cart_api(user_id: str, product_id: str, count: int = 1) -> dict:
+    """Single-item add — delegates to the batched /v5/carts sync call."""
+    merchant_id = (get_store_cookies(user_id, APP_NAME).get("merchant_id")
+                   or get_store_cookies(user_id, APP_NAME).get("gr_1_merchantId") or 0)
+    res = await add_all_to_cart_api(
+        user_id, [{"product_id": product_id, "count": count, "merchant_id": merchant_id}]
+    )
+    if res.get("success"):
         return {"success": True, "count_added": count}
-    except Exception as e:
-        elapsed_ms = int((time.time() - t_start) * 1000)
-        print(f"[blinkit] API add failed after {elapsed_ms}ms: {e}")
-        return {"success": False, "reason": f"exception: {e}"}
+    return {"success": False, "reason": res.get("reason", "add failed")}
 
 
 def checkout_url() -> str:

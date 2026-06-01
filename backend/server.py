@@ -1192,12 +1192,17 @@ async def api_cart_add_all(request: Request):
             valid_items.append(item)
 
         # Zepto: batched API
-        if store_name == "zepto" and valid_items:
-            _cart_progress[user_id]["current"] = "zepto: (batch add)"
+        # Zepto and Blinkit both expose a batched add_all_to_cart_api. Blinkit's
+        # /v5/carts is a SYNC endpoint (must send all items at once), so a
+        # per-item loop would overwrite each previous add — batching is required,
+        # not just an optimisation.
+        if store_name in ("zepto", "blinkit") and valid_items:
+            _cart_progress[user_id]["current"] = f"{store_name}: (batch add)"
+            store_mod = zepto if store_name == "zepto" else blinkit
             try:
-                batch = await zepto.add_all_to_cart_api(user_id, valid_items)
+                batch = await store_mod.add_all_to_cart_api(user_id, valid_items)
             except Exception as e:
-                print(f"[cart][zepto] batch raised: {e}")
+                print(f"[cart][{store_name}] batch raised: {e}")
                 batch = {"success": False}
 
             if batch.get("success"):
