@@ -1092,7 +1092,7 @@ async function ocrImage(event) {
     const status = document.getElementById('scan-msg');
     const cancelBtn = document.getElementById('scan-cancel');
 
-    status.innerHTML = '<span class="spinner"></span>Reading your list… handwriting can take up to a minute.';
+    status.innerHTML = '<span class="spinner"></span>Scanning your list…';
     cancelBtn.style.display = 'inline-block';
     _ocrAbort = new AbortController();
 
@@ -1113,7 +1113,9 @@ async function ocrImage(event) {
             status.textContent = 'No items found. Try a clearer, well-lit photo.';
             return;
         }
-        document.getElementById('grocery-list').value = items.join('\n');
+        const existing = document.getElementById('grocery-list').value.trim();
+        const newText = items.join('\n');
+        document.getElementById('grocery-list').value = existing ? existing + '\n' + newText : newText;
         status.textContent = `✓ Found ${items.length} items`;
     } catch (e) {
         if (e.name === 'AbortError') status.textContent = 'Scan cancelled.';

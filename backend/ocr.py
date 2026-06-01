@@ -97,8 +97,25 @@ def _is_header_line(line: str) -> bool:
     return low in _OCR_SECTION_HEADERS
 
 
+_COMPOUND_SPLIT_RE = re.compile(r"\s+[–—\-]\s+|\s+\+\s+")
+
+
+def _split_compound(line: str) -> list[str]:
+    """Split 'Spinach - Carrots' → ['Spinach', 'Carrots'].
+
+    Only splits on surrounded separators ( - or + with spaces on both sides)
+    to avoid chopping mid-word hyphens or quantity strings like '500g'.
+    """
+    parts = _COMPOUND_SPLIT_RE.split(line)
+    return [p.strip() for p in parts if p.strip()] if len(parts) > 1 else [line]
+
+
 def _lines_to_items(text: str) -> list[str]:
-    """Clean a block of text (one item per line) into a list of grocery items."""
+    """Clean a block of text (one item per line) into a list of grocery items.
+
+    Also splits compound lines like 'Spinach - Carrots' or 'Pasta + Pasta Sauce'
+    into individual items in case the model groups them despite the prompt.
+    """
     items = []
     for line in text.split("\n"):
         if not line.strip() or len(line.strip()) < 2:
@@ -108,7 +125,9 @@ def _lines_to_items(text: str) -> list[str]:
             continue
         if _is_header_line(cleaned):
             continue
-        items.append(cleaned)
+        for part in _split_compound(cleaned):
+            if len(part) >= 2:
+                items.append(part)
     return items
 
 
@@ -150,7 +169,10 @@ def _extract_tesseract(raw_bytes: bytes) -> dict:
 
 _VLM_PROMPT = (
     "This image is a grocery shopping list, possibly handwritten. "
-    "Transcribe every item, one per line, exactly as written. "
+    "Transcribe every item, ONE item per line. "
+    "IMPORTANT: if multiple items are grouped on one line separated by a dash ( - ), "
+    "hyphen, or plus ( + ), write each as its OWN separate line. "
+    "Examples: 'Spinach - Carrots' → two lines; 'Pasta + Pasta Sauce' → two lines. "
     "Keep quantities and units if present (e.g. '2 kg onions', 'Amul butter 100g'). "
     "Output ONLY the list items — no numbering, no bullet points, no headings, "
     "no commentary, no blank lines. If there is no list, output nothing."
