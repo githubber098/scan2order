@@ -97,6 +97,33 @@ function _parseItems(raw) {
   });
 }
 
+// ── Quantity multiplier (mirror of ranker._qty_multiplier) ─────────────
+// Parse "1kg" / "500 g" / "2 pcs" → {val in base unit, kind}.
+function _parseQty(s) {
+  if (!s) return null;
+  const m = String(s).replace(/,/g,'').match(/(\d+(?:\.\d+)?)\s*(kg|g|gm|grams?|ml|l|liters?|litres?|pcs?|pieces?|pack)\b/i);
+  if (!m) return null;
+  const v = parseFloat(m[1]); const u = m[2].toLowerCase();
+  if (u==='kg') return [v*1000,'mass'];
+  if (['g','gm','gram','grams'].includes(u)) return [v,'mass'];
+  if (['l','liter','litre','liters','litres'].includes(u)) return [v*1000,'volume'];
+  if (u==='ml') return [v,'volume'];
+  if (['pc','pcs','piece','pieces','pack'].includes(u)) return [v,'count'];
+  return null;
+}
+// Integer N such that N × product_unit == target, else null. No target → 1.
+function _qtyMultiplier(targetQtyStr, prod) {
+  if (!targetQtyStr) return 1;
+  const tq = _parseQty(targetQtyStr);
+  if (!tq) return 1;
+  const pq = _parseQty(prod.unit||'') || _parseQty(prod.name||'');
+  if (!pq) return null;
+  const [tv,tk]=tq, [pv,pk]=pq;
+  if (tk!==pk || pv<=0 || tv<=0 || pv>tv) return null;
+  const n = Math.round(tv/pv);
+  return (n>=1 && Math.abs(n*pv - tv) < 0.5) ? n : null;
+}
+
 // ── Savings (vs worst single store) ────────────────────────
 // Per item, find the most expensive store's effective price (price × qty_count
 // for the chosen unit), sum those, and subtract the optimised basket total.
@@ -223,16 +250,21 @@ function renderResults(data) {
       card.appendChild(na);
     } else {
       // Winner — show ×N badge if buying multiple units to reach target qty
+      const targetQty = (entry.item && entry.item.qty) || '';
       const winnerProds = (entry.prices||{})[entry.cheapest_app]||[];
       const winner = winnerProds.find(p=>p.product_id===entry.selected_pid)||winnerProds[0];
       const qtyCount = entry.qty_count || 1;
-      if (winner) card.appendChild(_makeSwapRow(i, winner, entry.cheapest_app, true, qtyCount));
-      // Shortlist
-      for (const sp of shortlist.slice(0,2)) card.appendChild(_makeSwapRow(i, sp, sp.app||sp.app_name, false));
+      if (winner) card.appendChild(_makeSwapRow(i, winner, entry.cheapest_app, true, qtyCount, targetQty));
+      // Shortlist — compute each item's own multiplier so a swap adds the
+      // correct number of units (e.g. swapping to a 250g item for a 1kg target
+      // must add 4, not 1).
+      const mkShort = sp => _makeSwapRow(i, sp, sp.app||sp.app_name, false,
+                                         _qtyMultiplier(targetQty, sp), targetQty);
+      for (const sp of shortlist.slice(0,2)) card.appendChild(mkShort(sp));
       if (shortlist.length > 2) {
         const moreCount = shortlist.length - 2;
         const moreWrap = document.createElement('div'); moreWrap.style.display='none';
-        for (const sp of shortlist.slice(2)) moreWrap.appendChild(_makeSwapRow(i, sp, sp.app||sp.app_name, false));
+        for (const sp of shortlist.slice(2)) moreWrap.appendChild(mkShort(sp));
         const moreBtn = document.createElement('button');
         moreBtn.className='btn ghost sm'; moreBtn.style.marginTop='4px';
         moreBtn.textContent=`▾ ${moreCount} more`;
@@ -251,23 +283,34 @@ function renderResults(data) {
   } else skip.style.display='none';
 }
 
-function _makeSwapRow(idx, prod, app, selected, qtyCount) {
+function _makeSwapRow(idx, prod, app, selected, qtyCount, targetQty) {
   const row = document.createElement('div');
-  row.className = 'srow'; row.style.cssText='padding:8px 0;cursor:pointer;border-radius:6px;' + (selected?'background:var(--accent-light, color-mix(in srgb,var(--accent) 10%,transparent));':'');
+  // qtyCount === null means this size can't tile the requested quantity in whole
+  // units — show it greyed-out and non-selectable so the user isn't misled.
+  const incompatible = qtyCount === null;
+  const n = incompatible ? 1 : (qtyCount || 1);
+  row.className = 'srow';
+  row.style.cssText = 'padding:8px 0;border-radius:6px;'
+    + (incompatible ? 'opacity:.45;cursor:not-allowed;' : 'cursor:pointer;')
+    + (selected ? 'background:var(--accent-light, color-mix(in srgb,var(--accent) 10%,transparent));' : '');
   row.dataset.app = app; row.dataset.pid = prod.product_id;
   const price = prod.sale_price || prod.price || 0;
-  const n = qtyCount || 1;
   const effPrice = price * n;
   const storeAbbr = _SL[app] || 'bb';
   const qtyLabel = n > 1 ? `<span style="font-size:11px;color:var(--muted);margin-left:4px">×${n}</span>` : '';
-  const effLabel = n > 1 ? `₹${Math.round(effPrice)}` : `₹${Math.round(price)}`;
+  const effLabel = incompatible ? `₹${Math.round(price)}` : `₹${Math.round(effPrice)}`;
+  const noteLabel = incompatible
+    ? `<span style="font-size:10.5px;color:var(--muted)"> · can't make ${_esc(targetQty||'')}</span>`
+    : '';
   const unitLabel = n > 1 ? `${_esc(prod.unit||'')} × ${n}` : _esc(prod.unit||'');
   row.innerHTML =
     `<div class="slogo ${storeAbbr}" style="flex-shrink:0">${storeAbbr==='bb'?'bb':storeAbbr==='bk'?'b':'Z'}</div>`+
     `<div style="flex:1;min-width:0"><div class="sname" style="font-size:13px">${_esc(prod.name||'')}${qtyLabel}${selected?'<span style="color:var(--ok);font-size:11px;margin-left:6px">✓ best</span>':''}</div>`+
-    `<div class="smeta">${_SN[app]||app}${unitLabel?' · '+unitLabel:''}</div></div>`+
+    `<div class="smeta">${_SN[app]||app}${unitLabel?' · '+unitLabel:''}${noteLabel}</div></div>`+
     `<div class="num" style="font-weight:800;font-size:15px;color:${selected?'var(--accent2)':'inherit'}">${effLabel}</div>`;
-  row.onclick = () => swapSelection(idx, app, prod.product_id, price, n);
+  if (!incompatible) {
+    row.onclick = () => swapSelection(idx, app, prod.product_id, price, n);
+  }
   return row;
 }
 
@@ -347,8 +390,16 @@ async function addAllToCarts() {
     });
     const data = await resp.json();
     for (const [store, r] of Object.entries(data.results||{})) {
+      // r.added / r.failed are arrays of items; sum units (count) actually added.
+      const addedItems = Array.isArray(r.added) ? r.added : [];
+      const failedItems = Array.isArray(r.failed) ? r.failed : [];
+      const unitsAdded = addedItems.reduce((s,it)=>s+(it.count_added||it.count||1),0);
+      const ok = addedItems.length > 0 && failedItems.length === 0;
+      const statusText = failedItems.length
+        ? `${addedItems.length} added, ${failedItems.length} failed`
+        : `${unitsAdded} item${unitsAdded===1?'':'s'} added`;
       const div=document.createElement('div'); div.className='card tight srow';
-      div.innerHTML=`<div class="slogo ${_SL[store]||'bb'}">${_SN[store]||store}</div><div style="flex:1"><div class="sname">${_SN[store]||store}</div><div class="smeta">${r.added||0} items added</div></div>${r.error?`<div class="dim" style="font-size:12px;color:var(--err)">${_esc(r.error)}</div>`:'<i data-ico="check" data-s="16" style="color:var(--ok)"></i>'}`;
+      div.innerHTML=`<div class="slogo ${_SL[store]||'bb'}">${_SL[store]==='bb'?'bb':_SL[store]==='bk'?'b':'Z'}</div><div style="flex:1"><div class="sname">${_SN[store]||store}</div><div class="smeta">${statusText}</div></div>${ok?'<i data-ico="check" data-s="16" style="color:var(--ok)"></i>':'<i data-ico="x" data-s="16" style="color:var(--err)"></i>'}`;
       res.appendChild(div);
     }
     if (window.s2o) window.s2o.paintIcons(res);
