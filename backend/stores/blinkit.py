@@ -1,13 +1,14 @@
 """stores/blinkit.py - Blinkit search + cart module.
 
-Search strategy (in order):
-  1. POST /v1/layout/search via httpx — fast (~200ms). Requires api_auth_key
-     (cached from a previous successful call) plus valid session cookies.
-  2. __NEXT_DATA__ SSR fallback — GET /s/?q={query}, parse the embedded Next.js
-     JSON blob. Slower but no auth_key needed. Returns [] if the SSR JSON shape
-     changes or products aren't embedded in the page props.
-
-  Both strategies are httpx-only; no Playwright is used in the search path.
+Search strategy (httpx-only, no Playwright):
+  1. POST /v1/layout/search — Blinkit's internal layout API. Before each
+     search a fresh auth_key is derived by calling GET /v2/accounts/auth_key/
+     with the stored session cookie (same call the React app makes on every
+     page load). Cookie values are URL-decoded before sending so httpx sends
+     them in the same format the browser would.
+  2. __NEXT_DATA__ SSR fallback — GET /s/?q={query}, parse the embedded
+     Next.js JSON blob. Rarely succeeds (Blinkit stripped most product data
+     from SSR), but kept as a last resort.
 
 Cart add via Blinkit's /v2/client/user_cart/ API.
 Auth cookie: gr_1_accessToken (stored via user_store.connect_store).
@@ -21,7 +22,7 @@ from urllib.parse import quote, unquote
 
 import httpx
 
-from storage.user_store import get_store_cookies
+from storage.user_store import get_store_cookies, update_store_cookies
 from stores._common import MOBILE_UA as _MOBILE_UA
 
 APP_NAME = "blinkit"
@@ -278,10 +279,13 @@ async def search_item_api(user_id: str, query: str) -> list[dict]:
     Returns [] on complete failure.
     """
     cookies = get_store_cookies(user_id, APP_NAME)
-    # Cookie values are stored URL-encoded (as the browser stored them).
-    # Do NOT decode them for the cookie jar — send them as-is.
-    # Only decode gr_1_accessToken when using it as the auth_key HEADER value.
-    access_token = unquote(cookies.get("gr_1_accessToken", ""))
+    # Cookie values are stored URL-encoded by Playwright. Decode them before
+    # sending via httpx — the server expects raw values (e.g. "v2::token",
+    # not "v2%3A%3Atoken"). CF cookies expire immediately so we skip them.
+    _CF_COOKIES = {"__cf_bm", "_cfuvid"}
+    httpx_cookies = {k: unquote(v) if isinstance(v, str) else v
+                     for k, v in cookies.items() if k not in _CF_COOKIES}
+    access_token = httpx_cookies.get("gr_1_accessToken", "")
     if not access_token:
         print(f"[blinkit] search_item_api: no gr_1_accessToken for user {user_id[:8]}")
         return []
@@ -296,23 +300,19 @@ async def search_item_api(user_id: str, query: str) -> list[dict]:
 
     print(f"[blinkit] location: lat={lat!r} lng={lng!r} merchant_id={merchant_id!r}")
 
-    # Cloudflare cookies (__cf_bm, _cfuvid) are session-specific and become
-    # stale immediately after the auth session ends. Sending stale CF cookies
-    # causes Blinkit to reject the request; omit them so CF issues a fresh one.
-    _CF_COOKIES = {"__cf_bm", "_cfuvid"}
-    httpx_cookies = {k: v for k, v in cookies.items() if k not in _CF_COOKIES}
-
     # ── Strategy 1: POST /v1/layout/search ───────────────────────────────────
     products: list[dict] = []
     try:
-        # Use a cached derived key if Playwright captured one on a previous run.
-        # Otherwise derive it fresh from /v2/accounts/auth_key/.
-        cached_key = cookies.get("api_auth_key", "")
-        if cached_key:
-            api_auth_key = cached_key
-            print(f"[blinkit] Using cached derived auth key prefix={api_auth_key[:12]!r}")
+        # Always derive a fresh auth key from /v2/accounts/auth_key/ — this is
+        # the same call Blinkit's React app makes on every page load, so it's
+        # reliable without Playwright. Fall back to a cached key only if the
+        # endpoint is unreachable.
+        api_auth_key = await _get_auth_key(access_token, httpx_cookies)
+        if not api_auth_key or api_auth_key == access_token:
+            api_auth_key = cookies.get("api_auth_key") or access_token
         else:
-            api_auth_key = await _get_auth_key(access_token, httpx_cookies)
+            # Cache so add_to_cart can reuse without another round-trip.
+            update_store_cookies(user_id, APP_NAME, {"api_auth_key": api_auth_key})
         is_derived = (api_auth_key != access_token)
         print(f"[blinkit] auth_key derived={is_derived} "
               f"key_prefix={api_auth_key[:12]!r}")

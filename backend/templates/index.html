@@ -1310,12 +1310,17 @@ function _makeItemCard(idx, entry) {
     card.className = 'item-card';
     card.id = `cart-row-${idx}`;
 
+    // Are there any products from any store, even if none was auto-selected?
+    const hasAnyProducts = Object.values(entry.prices || {})
+        .some(prods => Array.isArray(prods) && prods.length > 0);
+
     if (!cheapestApp || !prod) {
-        // No match row
+        // No match row — still show swap if products exist so user can pick manually
         card.innerHTML = `
           <div class="no-match-row">
             <span class="cart-name">${escHtml(item.name || '')}${item.qty ? ' <small>' + escHtml(item.qty) + '</small>' : ''} <span style="color:#555;font-size:11px;font-style:italic">— no match</span></span>
             <span class="cart-actions">
+              ${hasAnyProducts ? `<button class="btn-qty" onclick="openSwap(${idx})" title="Pick a product"><svg class="icon"><use href="#i-swap"/></svg></button>` : ''}
               <button class="btn-qty" onclick="changeQty(${idx})" title="Edit quantity and re-search"><svg class="icon"><use href="#i-pencil"/></svg></button>
               <button class="btn-remove" onclick="removeItem(${idx})" title="Remove item"><svg class="icon"><use href="#i-x"/></svg></button>
             </span>
