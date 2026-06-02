@@ -29,6 +29,9 @@ APP_NAME = "blinkit"
 DISPLAY_NAME = "Blinkit"
 BASE_URL = "https://blinkit.com"
 
+# TEMP DIAGNOSTIC flag — dump the first product's atc_action once per process.
+_ATC_DUMPED = False
+
 # Headers used for the direct JSON search API and for cart operations.
 # auth_key is added per-call once we have the token.
 _API_HEADERS_BASE = {
@@ -230,6 +233,17 @@ def _parse_layout_search_response(data: dict) -> list[dict]:
                      .get("cart_item") or {})
         if not cart_item:
             continue
+        # ── TEMP DIAGNOSTIC: dump the full atc_action of the first product so
+        # we can see the real cart-add endpoint/payload Blinkit's app uses.
+        global _ATC_DUMPED
+        if not _ATC_DUMPED:
+            _ATC_DUMPED = True
+            try:
+                print(f"[blinkit][DIAG] first atc_action = "
+                      f"{json.dumps(d.get('atc_action'))[:1500]}")
+                print(f"[blinkit][DIAG] snippet data keys = {list(d.keys())}")
+            except Exception as _e:
+                print(f"[blinkit][DIAG] dump failed: {_e}")
         product_id = str(cart_item.get("product_id") or "")
         if not product_id:
             continue

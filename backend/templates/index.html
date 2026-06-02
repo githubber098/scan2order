@@ -226,11 +226,15 @@
             border-radius: 12px; padding: 16px; margin-top: 16px;
         }
         .grand-total { font-size: 20px; font-weight: 700; color: #4ecdc4; }
-        .cart-list { margin-top: 10px; }
-        .cart-store { margin-bottom: 12px; }
-        .cart-store-name { font-size: 12px; color: #888; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px; }
-        .cart-item-row { display: flex; justify-content: space-between; font-size: 13px; padding: 3px 0; color: #ccc; }
-        .cart-item-price { color: #888; }
+        .cart-list { margin-top: 12px; }
+        /* Per-app subtotal rows in the summary card */
+        .app-total-row {
+            display: flex; justify-content: space-between; align-items: center;
+            padding: 9px 0; border-top: 1px solid #2a2a40; font-size: 14px;
+        }
+        .app-total-name { color: #ddd; display: flex; align-items: baseline; gap: 8px; }
+        .app-total-count { font-size: 11px; color: #667; }
+        .app-total-price { color: #4ecdc4; font-weight: 700; }
         .add-to-carts-btn { margin-top: 12px; }
 
         .cart-result {
@@ -1383,21 +1387,22 @@ function _rebuildCarts() {
     comparisonData.carts = carts;
     comparisonData.grand_total = grandTotal;
 
-    // Re-render summary card
+    // Re-render summary card: per-app totals only (one line per store), not
+    // a wall of item names. Each row = store label · item count · subtotal.
     if (grandTotal > 0) {
         document.getElementById('grand-total').textContent = '₹' + grandTotal.toFixed(0);
         const cartList = document.getElementById('cart-list');
         cartList.innerHTML = '';
         for (const [storeName, cartData] of Object.entries(carts)) {
             const storeLabel = _STORE_LABELS[storeName] || storeName;
-            const div = document.createElement('div');
-            div.className = 'cart-store';
-            let html = `<div class="cart-store-name">${escHtml(storeLabel)} — ₹${cartData.total.toFixed(0)}</div>`;
-            for (const itm of (cartData.items || [])) {
-                html += `<div class="cart-item-row"><span>${escHtml(itm.matched_name || itm.name || '')}</span><span class="cart-item-price">₹${(itm.price || 0).toFixed(0)}</span></div>`;
-            }
-            div.innerHTML = html;
-            cartList.appendChild(div);
+            const n = (cartData.items || []).length;
+            const row = document.createElement('div');
+            row.className = 'app-total-row';
+            row.innerHTML =
+                `<span class="app-total-name">${escHtml(storeLabel)}` +
+                `<span class="app-total-count">${n} item${n === 1 ? '' : 's'}</span></span>` +
+                `<span class="app-total-price">₹${cartData.total.toFixed(0)}</span>`;
+            cartList.appendChild(row);
         }
         document.getElementById('summary-card').style.display = 'block';
     } else {
