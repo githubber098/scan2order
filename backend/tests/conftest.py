@@ -236,10 +236,21 @@ def mock_stores(monkeypatch):
     async def _bl_cart(user_id, product_id, count=1):
         return {"success": True, "count_added": count}
 
+    async def _bl_cart_all(user_id, items):
+        # Blinkit now batches via /v5/carts (add_all_to_cart_api).
+        return {
+            "success": True,
+            "items": [{"success": True,
+                       "count_added": i.get("count", i.get("quantity", 1))}
+                      for i in items],
+        }
+
     m.bl_search = AsyncMock(side_effect=_bl_search)
     m.bl_cart = AsyncMock(side_effect=_bl_cart)
+    m.bl_cart_all = AsyncMock(side_effect=_bl_cart_all)
     monkeypatch.setattr(blinkit, "search_item_api", m.bl_search)
     monkeypatch.setattr(blinkit, "add_to_cart_api", m.bl_cart)
+    monkeypatch.setattr(blinkit, "add_all_to_cart_api", m.bl_cart_all)
 
     # --- Zepto ---
     async def _z_search(user_id, query):

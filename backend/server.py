@@ -41,7 +41,7 @@ from storage import user_store
 from stores import bigbasket, blinkit, zepto
 
 BASE_DIR = Path(__file__).parent
-APP_VERSION = "1.0.6-probe"
+APP_VERSION = "1.0.7"
 _INDEX_HTML  = BASE_DIR / "templates" / "index.html"
 _LOGIN_HTML  = BASE_DIR / "templates" / "login.html"
 _404_HTML    = BASE_DIR / "templates" / "404.html"
@@ -866,11 +866,37 @@ async def mobile_order(request: Request):
     added = []
     failed = []
 
+    # Blinkit's /v5/carts replaces the whole cart, so all Blinkit items must be
+    # sent together. Batch them up front, then skip Blinkit in the per-item loop.
+    blinkit_items = [it for it in items
+                     if (it.get("app") or it.get("store") or "").lower() == "blinkit"
+                     and it.get("prod_id")]
+    if blinkit_items:
+        try:
+            bk = await blinkit.add_all_to_cart_api(user_id, [
+                {"product_id": str(it.get("prod_id")), "count": max(1, int(it.get("qty") or 1))}
+                for it in blinkit_items
+            ])
+        except Exception as e:
+            print(f"[order][blinkit] batch raised: {e}")
+            bk = {"success": False, "reason": str(e)}
+        bk_items = bk.get("items") or []
+        for i, it in enumerate(blinkit_items):
+            qty = max(1, int(it.get("qty") or 1))
+            ok = bk.get("success") and (bk_items[i].get("success") if i < len(bk_items) else True)
+            if ok:
+                added.append({**it, "count_added": qty})
+            else:
+                failed.append({**it, "reason": bk.get("reason", "blinkit cart add failed")})
+
     for item in items:
         prod_id = str(item.get("prod_id") or "")
         fc_id = item.get("fc_id")
         qty = max(1, int(item.get("qty") or 1))
         store = (item.get("app") or item.get("store") or "bigbasket").lower()
+
+        if store == "blinkit":
+            continue  # already handled in the batch above
 
         if not prod_id:
             failed.append({**item, "reason": "missing prod_id"})
@@ -882,9 +908,6 @@ async def mobile_order(request: Request):
                     user_id, prod_id, count=qty, fc_id=fc_id
                 )
                 cart_url = bigbasket.checkout_url()
-            elif store == "blinkit":
-                result = await blinkit.add_to_cart_api(user_id, prod_id, count=qty)
-                cart_url = blinkit.checkout_url()
             elif store == "zepto":
                 result = await zepto.add_all_to_cart_api(
                     user_id, [{"product_id": prod_id, "count": qty}]
@@ -1122,13 +1145,17 @@ async def api_cart_add_all(request: Request):
                 continue
             valid_items.append(item)
 
-        # Zepto: batched API
-        if store_name == "zepto" and valid_items:
-            _cart_progress[user_id]["current"] = "zepto: (batch add)"
+        # Blinkit + Zepto: batched APIs (Blinkit's /v5/carts REPLACES the whole
+        # cart, so it MUST be sent as one request, not per item).
+        if store_name in ("zepto", "blinkit") and valid_items:
+            _cart_progress[user_id]["current"] = f"{store_name}: (batch add)"
             try:
-                batch = await zepto.add_all_to_cart_api(user_id, valid_items)
+                if store_name == "zepto":
+                    batch = await zepto.add_all_to_cart_api(user_id, valid_items)
+                else:
+                    batch = await blinkit.add_all_to_cart_api(user_id, valid_items)
             except Exception as e:
-                print(f"[cart][zepto] batch raised: {e}")
+                print(f"[cart][{store_name}] batch raised: {e}")
                 batch = {"success": False}
 
             if batch.get("success"):
@@ -1213,18 +1240,6 @@ async def api_cart_progress(user_id: str):
 
 _LOG_FILE = BASE_DIR.parent / "data" / "server.log"
 _MAX_LOG_BYTES = 10 * 1024 * 1024  # only read the last 10 MB to stay fast
-
-
-@app.get("/api/debug/blinkit-cart-probe")
-async def debug_blinkit_cart_probe(key: str = "", user_id: str = "", q: str = "tomato"):
-    """TEMP: probe Blinkit cart endpoints. Protected by LOG_API_KEY."""
-    api_key = os.getenv("LOG_API_KEY", "")
-    if not api_key or key != api_key:
-        return Response(status_code=403)
-    uid = _require_user_id(user_id)
-    if not uid:
-        return {"error": "missing user_id"}
-    return await blinkit.probe_cart(uid, q)
 
 
 @app.get("/api/logs")

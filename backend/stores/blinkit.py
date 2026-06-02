@@ -428,167 +428,108 @@ async def search_item_api(user_id: str, query: str) -> list[dict]:
     return products
 
 
-async def add_to_cart_api(user_id: str, product_id: str, count: int = 1) -> dict:
-    """Add to Blinkit cart via internal v2 API.
+async def add_all_to_cart_api(user_id: str, items: list[dict]) -> dict:
+    """Add ALL items to the Blinkit cart in ONE request to POST /v5/carts.
 
-    Uses gr_1_accessToken for auth and lat/lng/merchant_id from stored cookies.
-    Returns {"success": True, "count_added": N} or {"success": False, "reason": str}.
+    Blinkit's web cart is synced wholesale: the client sends its entire cart
+    as {"items":[{"product_id","quantity"}...],"promo_codes":[""]} and the
+    server replaces the cart with it. (The old per-item /v2/client/user_cart/
+    endpoint was removed — it now 404s with Kong "no Route matched".)
+
+    Because /v5/carts REPLACES the cart, every Blinkit item must go in a single
+    call — never loop this per item, or each call wipes the previous one.
+
+    Returns {"success": bool, "items": [{"success", "count_added"}...]} aligned
+    with the input order, or {"success": False, "reason": str}.
     """
+    if not items:
+        return {"success": True, "items": []}
+
     cookies = get_store_cookies(user_id, APP_NAME)
-    access_token = unquote(cookies.get("gr_1_accessToken", ""))
+    _CF_COOKIES = {"__cf_bm", "_cfuvid"}
+    httpx_cookies = {k: unquote(v) if isinstance(v, str) else v
+                     for k, v in cookies.items() if k not in _CF_COOKIES}
+    access_token = httpx_cookies.get("gr_1_accessToken", "")
     if not access_token:
         return {"success": False, "reason": "not logged in (no gr_1_accessToken)"}
 
-    # Location context — web relay saves gr_1_lat/gr_1_lon; mobile saves lat/lng.
-    lat = (cookies.get("gr_1_lat") or cookies.get("lat")
-           or cookies.get("dlat") or cookies.get("delivery_lat") or "")
-    lng = (cookies.get("gr_1_lon") or cookies.get("lng")
-           or cookies.get("dlng") or cookies.get("delivery_lng") or "")
-    merchant_id = cookies.get("merchant_id") or cookies.get("gr_1_merchantId") or ""
+    lat = cookies.get("gr_1_lat") or cookies.get("lat") or cookies.get("dlat") or ""
+    lng = cookies.get("gr_1_lon") or cookies.get("lng") or cookies.get("dlng") or ""
+    device_id = (cookies.get("gr_1_deviceId") or cookies.get("device_id")
+                 or cookies.get("deviceId") or "")
+    api_auth_key = cookies.get("api_auth_key") or access_token
 
-    print(f"\n[blinkit] === API ADD: pid={product_id} qty={count} ===")
+    # Build the cart payload (product_id as string + integer quantity), keeping
+    # the per-item order so the caller can map results back.
+    cart_items, order = [], []
+    for it in items:
+        pid = str(it.get("product_id") or "")
+        if not pid:
+            continue
+        try:
+            qty = max(1, min(99, int(it.get("count") or it.get("quantity") or 1)))
+        except (TypeError, ValueError):
+            qty = 1
+        cart_items.append({"product_id": pid, "quantity": qty})
+        order.append(qty)
+    if not cart_items:
+        return {"success": False, "reason": "no valid items"}
+
+    print(f"\n[blinkit] === API ADD (batch /v5/carts): {len(cart_items)} items ===")
     t_start = time.time()
-
-    _CF_COOKIES = {"__cf_bm", "_cfuvid"}
-    httpx_cookies = {k: v for k, v in cookies.items() if k not in _CF_COOKIES}
-    # Prefer cached derived auth key; fall back to raw token.
-    api_auth_key = cookies.get("api_auth_key") or access_token
-    headers = {**_API_HEADERS_BASE, "auth_key": api_auth_key}
-    if lat:
-        headers["lat"] = str(lat)
-    if lng:
-        headers["lng"] = str(lng)
-    if merchant_id:
-        headers["merchant_id"] = str(merchant_id)
-
-    body = {
-        "items": [{"product_id": int(product_id), "quantity": count}],
-        "order_type": "blinkIt",
-    }
-
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.post(
-                f"{BASE_URL}/v2/client/user_cart/",
-                json=body, headers=headers,
-            )
-        elapsed_ms = int((time.time() - t_start) * 1000)
-
-        if resp.status_code != 200:
-            print(f"[blinkit] API add HTTP {resp.status_code} ({elapsed_ms}ms)")
-            return {"success": False, "reason": f"HTTP {resp.status_code}"}
-
-        print(f"[blinkit] API add OK pid={product_id} ({elapsed_ms}ms)")
-        return {"success": True, "count_added": count}
-    except Exception as e:
-        elapsed_ms = int((time.time() - t_start) * 1000)
-        print(f"[blinkit] API add failed after {elapsed_ms}ms: {e}")
-        return {"success": False, "reason": f"exception: {e}"}
-
-
-def checkout_url() -> str:
-    return f"{BASE_URL}/cart"
-
-
-# ── TEMP: cart-endpoint discovery probe ──────────────────────────────────────
-async def probe_cart(user_id: str, query: str = "tomato") -> dict:
-    """Discover Blinkit's real cart-add endpoint by trying candidates.
-
-    Re-searches *query* to obtain a real, fresh cart_item (the exact object
-    Blinkit's app would add), then POSTs it to a list of candidate cart
-    endpoints using the same auth/location headers the working search uses.
-    Returns each endpoint's status + response snippet so we can identify the
-    real one. Temporary diagnostic — removed once the endpoint is known.
-    """
-    cookies = get_store_cookies(user_id, APP_NAME)
-    _CF = {"__cf_bm", "_cfuvid"}
-    httpx_cookies = {k: unquote(v) if isinstance(v, str) else v
-                     for k, v in cookies.items() if k not in _CF}
-    access_token = httpx_cookies.get("gr_1_accessToken", "")
-    if not access_token:
-        return {"error": "no gr_1_accessToken for user"}
-    lat = cookies.get("gr_1_lat") or cookies.get("lat") or ""
-    lng = cookies.get("gr_1_lon") or cookies.get("lng") or ""
-    merchant_id = cookies.get("merchant_id") or cookies.get("gr_1_merchantId") or ""
-    api_auth_key = cookies.get("api_auth_key") or access_token
 
     headers = {
         **_API_HEADERS_BASE,
         "app_client": "consumer_web",
         "access_token": access_token,
         "auth_key": api_auth_key,
+        "platform": "mobile_web",
+        "qd_sdk_request": "true",
+        "x-age-consent-granted": "false",
         "Origin": BASE_URL,
-        "Referer": f"{BASE_URL}/s/?q={quote(query)}",
+        "Referer": f"{BASE_URL}/cart",
     }
     if lat:
         headers["lat"] = str(lat)
     if lng:
         headers["lon"] = str(lng)
+    if device_id:
+        headers["device_id"] = str(device_id)
 
-    # 1) Search to capture a real cart_item.
-    cart_item = None
-    search_status = None
-    async with httpx.AsyncClient(timeout=12.0) as client:
-        r = await client.post(
-            f"{BASE_URL}/v1/layout/search?q={quote(query)}&search_type=type_to_search",
-            json={"previous_search_query": query, "applied_filters": None,
-                  "postback_meta": {}, "processed_rails": {},
-                  "monet_assets": [], "similar_entities": None, "sort": ""},
-            headers=headers, cookies=httpx_cookies,
-        )
-        search_status = r.status_code
-        try:
-            snippets = (r.json().get("response") or {}).get("snippets") or []
-            for s in snippets:
-                ci = (((s.get("data") or {}).get("atc_action") or {})
-                      .get("add_to_cart", {}).get("cart_item"))
-                if ci:
-                    cart_item = ci
-                    break
-        except Exception as e:
-            return {"error": f"search parse failed: {e}", "search_status": search_status}
-    if not cart_item:
-        return {"error": "no cart_item from search", "search_status": search_status}
+    body = {"items": cart_items, "promo_codes": [""]}
 
-    pid = cart_item.get("product_id")
-    device_id = (cookies.get("gr_1_deviceId") or cookies.get("device_id")
-                 or cookies.get("deviceId") or "")
-    CART = f"{BASE_URL}/v1/layout/cart"
-    body_items = {"items": [cart_item]}
-    body_cartitems = {"cart_items": [cart_item], "merchant_id": merchant_id}
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.post(f"{BASE_URL}/v5/carts", json=body,
+                                     headers=headers, cookies=httpx_cookies)
+        elapsed_ms = int((time.time() - t_start) * 1000)
+        if resp.status_code != 200:
+            print(f"[blinkit] /v5/carts HTTP {resp.status_code} ({elapsed_ms}ms) "
+                  f"body={resp.text[:200]!r}")
+            return {"success": False,
+                    "reason": f"HTTP {resp.status_code}: {resp.text[:120]}"}
+        print(f"[blinkit] /v5/carts OK: {len(cart_items)} items ({elapsed_ms}ms)")
+        return {"success": True,
+                "items": [{"success": True, "count_added": q} for q in order]}
+    except Exception as e:
+        elapsed_ms = int((time.time() - t_start) * 1000)
+        print(f"[blinkit] /v5/carts failed after {elapsed_ms}ms: {e}")
+        return {"success": False, "reason": f"exception: {e}"}
 
-    # Same 500 for every body shape ⇒ failure is pre-body. Vary HEADERS instead.
-    # (label, extra_headers, body, path_override)
-    h_merchant = {"merchant_id": str(merchant_id)}
-    h_device = {"device_id": device_id, "deviceid": device_id}
-    h_all = {"merchant_id": str(merchant_id), "device_id": device_id,
-             "deviceid": device_id, "session_uuid": "probe-session",
-             "merchant_type": "express", "eta_identifier": "express"}
-    candidates = [
-        ("base", {}, body_items, None),
-        ("+merchant_hdr", h_merchant, body_items, None),
-        ("+device_hdr", h_device, body_items, None),
-        ("+all_hdrs", h_all, body_items, None),
-        ("+all_hdrs cart_items", h_all, body_cartitems, None),
-        ("trailing_slash +all", h_all, body_items, f"{BASE_URL}/v1/layout/cart/"),
-        ("layout_envelope +all", h_all,
-         {"postback_meta": {}, "processed_rails": {}, "monet_assets": [],
-          "cart_items": [cart_item], "merchant_id": merchant_id, "type": "cart"}, None),
-    ]
-    results = [{"note": f"device_id_present={bool(device_id)}"}]
-    async with httpx.AsyncClient(timeout=10.0) as client:
-        for label, extra, body, path_override in candidates:
-            url = path_override or CART
-            hh = {**headers, **{k: v for k, v in extra.items() if v}}
-            try:
-                rr = await client.post(url, json=body, headers=hh, cookies=httpx_cookies)
-                results.append({"label": label, "status": rr.status_code,
-                                "body": rr.text[:400]})
-            except Exception as e:
-                results.append({"label": label, "error": str(e)[:120]})
-    return {
-        "search_status": search_status,
-        "product_id": pid,
-        "cart_item": cart_item,
-        "results": results,
-    }
+
+async def add_to_cart_api(user_id: str, product_id: str, count: int = 1) -> dict:
+    """Single-item convenience wrapper around the batch /v5/carts call.
+
+    NOTE: /v5/carts REPLACES the whole cart, so calling this in a loop will
+    leave only the last item. Callers adding multiple Blinkit items must use
+    add_all_to_cart_api() with the full list instead.
+    """
+    r = await add_all_to_cart_api(user_id, [{"product_id": product_id, "count": count}])
+    if r.get("success"):
+        return {"success": True, "count_added": count}
+    return {"success": False, "reason": r.get("reason", "unknown")}
+
+
+def checkout_url() -> str:
+    return f"{BASE_URL}/cart"
+
