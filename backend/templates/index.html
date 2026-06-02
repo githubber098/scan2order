@@ -85,6 +85,20 @@
         .dot-yellow { background: #e8a52a; animation: dotPulse 1.6s ease-in-out infinite; }
         @keyframes dotPulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.45; } }
 
+        /* Inline stale-session note under the store list (page-load indicator) */
+        .store-health-note {
+            margin-top: 10px; padding: 9px 12px; font-size: 12px; line-height: 1.55;
+            background: #2a1a0a; border: 1px solid #5a3a1a; border-left: 3px solid #e8a52a;
+            border-radius: 8px; color: #e8b860;
+        }
+        .store-health-note b { color: #ffd591; }
+        .health-reconnect {
+            margin-left: 4px; padding: 2px 10px; background: none;
+            border: 1px solid #e8a52a; color: #e8a52a; border-radius: 6px;
+            font-size: 11px; font-weight: 600; cursor: pointer; font-family: inherit;
+        }
+        .health-reconnect:hover { background: rgba(232,165,42,0.12); }
+
         /* OCR scan box */
         .scan-section { margin-bottom: 16px; }
         .scan-label {
@@ -489,6 +503,7 @@
                         onclick="openBrowserAuth('zepto')">Connect</button>
             </div>
         </div>
+        <div id="store-health-note" class="store-health-note" style="display:none"></div>
     </div>
 
     <!-- OCR scan -->
@@ -635,9 +650,17 @@ async function refreshStoreStatus() {
     try {
         const resp = await fetch(`/api/auth/status/${encodeURIComponent(userId)}`);
         const data = await resp.json();
+        const cs = data.connected_stores || {};
         const stores = {};
         for (const s of ['bigbasket', 'blinkit', 'zepto']) {
-            stores[s] = !!(data.connected_stores && data.connected_stores[s]);
+            const info = cs[s];
+            stores[s] = {
+                connected: !!info,
+                // Absent "healthy" (older payloads) defaults to true so we never
+                // false-alarm; only an explicit healthy:false flags a problem.
+                healthy: info ? (info.healthy !== false) : false,
+                reason: (info && info.reason) || '',
+            };
         }
         updateStoreDots(stores);
     } catch (e) { /* silent */ }
@@ -645,13 +668,37 @@ async function refreshStoreStatus() {
 
 function updateStoreDots(stores) {
     const storeNames = { bigbasket: 'BigBasket', blinkit: 'Blinkit', zepto: 'Zepto' };
-    for (const [store, connected] of Object.entries(stores)) {
+    const problems = [];
+    for (const [store, st] of Object.entries(stores)) {
+        const connected = st.connected;
+        const healthy = st.healthy;
         const dot = document.getElementById('dot-' + store);
         const btn = document.getElementById('btn-' + store);
-        if (dot) dot.className = 'dot ' + (connected ? 'dot-green' : 'dot-red');
+        if (dot) {
+            // green = healthy & connected, yellow = connected but stale, red = not connected
+            dot.className = 'dot ' + (connected ? (healthy ? 'dot-green' : 'dot-yellow') : 'dot-red');
+        }
         if (btn) {
             btn.textContent = connected ? 'Reconnect' : 'Connect';
-            btn.classList.toggle('connected', connected);
+            btn.classList.toggle('connected', connected && healthy);
+        }
+        if (connected && !healthy) {
+            problems.push({ store, label: storeNames[store] || store,
+                            reason: st.reason || 'Session expired — please reconnect.' });
+        }
+    }
+    // Render a compact note under the store list naming each stale store.
+    const note = document.getElementById('store-health-note');
+    if (note) {
+        if (problems.length) {
+            note.innerHTML = problems.map(p =>
+                `⚠ <b>${escHtml(p.label)}</b>: ${escHtml(p.reason)} ` +
+                `<button class="health-reconnect" onclick="openBrowserAuth('${p.store}')">Reconnect</button>`
+            ).join('<br>');
+            note.style.display = 'block';
+        } else {
+            note.style.display = 'none';
+            note.innerHTML = '';
         }
     }
 }

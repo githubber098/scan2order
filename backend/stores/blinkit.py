@@ -59,6 +59,27 @@ def is_session_valid(user_id: str) -> bool:
     return bool(cookies.get("gr_1_accessToken"))
 
 
+def session_health(user_id: str) -> dict:
+    """Static health probe (no network call) for the page-load status indicator.
+
+    Returns {"ok": bool, "reason": str}. Blinkit expiry can't be detected
+    without an API call, so a present access token is treated as healthy here;
+    actual expiry is caught after a compare (the store returns zero products,
+    which triggers the stale-session warning in the UI). We do require the
+    delivery-location cookies, since without them every search is "location
+    not serviceable".
+    """
+    cookies = get_store_cookies(user_id, APP_NAME)
+    if not cookies.get("gr_1_accessToken"):
+        return {"ok": False, "reason": "Session expired — reconnect Blinkit."}
+    has_loc = (cookies.get("gr_1_lat") or cookies.get("lat")) and \
+              (cookies.get("gr_1_lon") or cookies.get("lng"))
+    if not has_loc:
+        return {"ok": False,
+                "reason": "No delivery location — reconnect Blinkit with an address."}
+    return {"ok": True, "reason": ""}
+
+
 def _extract_next_data(html: str) -> dict | None:
     """Extract and parse the __NEXT_DATA__ JSON from Blinkit's SSR HTML."""
     m = re.search(

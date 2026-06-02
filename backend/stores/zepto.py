@@ -66,6 +66,23 @@ def is_session_valid(user_id: str) -> bool:
     return has_token
 
 
+def session_health(user_id: str) -> dict:
+    """Static health probe (no network call) for the page-load status indicator.
+
+    Returns {"ok": bool, "reason": str}. A Zepto session is only USABLE when it
+    has both auth tokens AND a store_id; without store_id every search returns
+    an empty layout, so we flag it as needing a reconnect even though the user
+    is technically "logged in".
+    """
+    sess = _get_zepto_session(user_id)
+    if not (sess.get("xsrf_token") and sess.get("device_id")):
+        return {"ok": False, "reason": "Session expired — reconnect Zepto."}
+    if not sess.get("store_id"):
+        return {"ok": False,
+                "reason": "No delivery store — reconnect Zepto with a saved address."}
+    return {"ok": True, "reason": ""}
+
+
 def _hunt_store_id(local_storage: dict, raw_cookies: dict) -> str:
     """Recursively search every stored JSON blob for a 'storeId' value.
 

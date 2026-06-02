@@ -41,7 +41,7 @@ from storage import user_store
 from stores import bigbasket, blinkit, zepto
 
 BASE_DIR = Path(__file__).parent
-APP_VERSION = "1.0.2"
+APP_VERSION = "1.0.3"
 _INDEX_HTML  = BASE_DIR / "templates" / "index.html"
 _LOGIN_HTML  = BASE_DIR / "templates" / "login.html"
 _404_HTML    = BASE_DIR / "templates" / "404.html"
@@ -460,11 +460,21 @@ async def api_auth_status(user_id: str):
     if not uid:
         return {"error": "missing user_id"}
     stores_data = user_store.get_user_stores(uid)
-    connected = {
-        store: {"connected": True}
-        for store in _STORE_DISPLAY
-        if stores_data.get(store, {}).get("connected")
-    }
+    _health_fns = {"blinkit": blinkit.session_health, "zepto": zepto.session_health}
+    connected = {}
+    for store in _STORE_DISPLAY:
+        if not stores_data.get(store, {}).get("connected"):
+            continue
+        entry = {"connected": True, "healthy": True, "reason": ""}
+        fn = _health_fns.get(store)
+        if fn:
+            try:
+                h = fn(uid)
+                entry["healthy"] = bool(h.get("ok"))
+                entry["reason"] = h.get("reason", "")
+            except Exception:
+                pass
+        connected[store] = entry
     return {"user_id": uid, "connected_stores": connected}
 
 
