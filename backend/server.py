@@ -47,6 +47,27 @@ _TEMPLATES_DIR = BASE_DIR / "templates"
 _STATIC_DIR    = BASE_DIR / "static"
 templates = Jinja2Templates(directory=str(_TEMPLATES_DIR))
 
+
+def _asset_version() -> str:
+    """Cache-busting token for static assets, derived from the newest mtime of
+    app.js / theme.css. Changes on every deploy that touches them, so browsers
+    fetch the new file instead of a stale cached copy."""
+    try:
+        mtimes = [
+            (_STATIC_DIR / name).stat().st_mtime
+            for name in ("app.js", "theme.css")
+            if (_STATIC_DIR / name).exists()
+        ]
+        if mtimes:
+            return str(int(max(mtimes)))
+    except Exception:
+        pass
+    return APP_VERSION
+
+
+# Exposed to every template as {{ asset_v }} so asset URLs can be versioned.
+templates.env.globals["asset_v"] = _asset_version()
+
 _SESSION_MAX_AGE = auth.SESSION_TTL   # 6 days
 
 

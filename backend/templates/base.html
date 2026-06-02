@@ -5,8 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
 <title>scan2order · {% block title %}{% endblock %}</title>
 <link rel="icon" type="image/svg+xml" href="/static/favicon.svg" />
-<link rel="stylesheet" href="/static/theme.css" />
-<script defer src="/static/app.js"></script>
+<link rel="stylesheet" href="/static/theme.css?v={{ asset_v }}" />
+<script defer src="/static/app.js?v={{ asset_v }}"></script>
 {% block head %}{% endblock %}
 </head>
 <body data-page="{{ page }}">
