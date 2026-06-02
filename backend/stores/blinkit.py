@@ -488,3 +488,102 @@ async def add_to_cart_api(user_id: str, product_id: str, count: int = 1) -> dict
 
 def checkout_url() -> str:
     return f"{BASE_URL}/cart"
+
+
+# ── TEMP: cart-endpoint discovery probe ──────────────────────────────────────
+async def probe_cart(user_id: str, query: str = "tomato") -> dict:
+    """Discover Blinkit's real cart-add endpoint by trying candidates.
+
+    Re-searches *query* to obtain a real, fresh cart_item (the exact object
+    Blinkit's app would add), then POSTs it to a list of candidate cart
+    endpoints using the same auth/location headers the working search uses.
+    Returns each endpoint's status + response snippet so we can identify the
+    real one. Temporary diagnostic — removed once the endpoint is known.
+    """
+    cookies = get_store_cookies(user_id, APP_NAME)
+    _CF = {"__cf_bm", "_cfuvid"}
+    httpx_cookies = {k: unquote(v) if isinstance(v, str) else v
+                     for k, v in cookies.items() if k not in _CF}
+    access_token = httpx_cookies.get("gr_1_accessToken", "")
+    if not access_token:
+        return {"error": "no gr_1_accessToken for user"}
+    lat = cookies.get("gr_1_lat") or cookies.get("lat") or ""
+    lng = cookies.get("gr_1_lon") or cookies.get("lng") or ""
+    merchant_id = cookies.get("merchant_id") or cookies.get("gr_1_merchantId") or ""
+    api_auth_key = cookies.get("api_auth_key") or access_token
+
+    headers = {
+        **_API_HEADERS_BASE,
+        "app_client": "consumer_web",
+        "access_token": access_token,
+        "auth_key": api_auth_key,
+        "Origin": BASE_URL,
+        "Referer": f"{BASE_URL}/s/?q={quote(query)}",
+    }
+    if lat:
+        headers["lat"] = str(lat)
+    if lng:
+        headers["lon"] = str(lng)
+
+    # 1) Search to capture a real cart_item.
+    cart_item = None
+    search_status = None
+    async with httpx.AsyncClient(timeout=12.0) as client:
+        r = await client.post(
+            f"{BASE_URL}/v1/layout/search?q={quote(query)}&search_type=type_to_search",
+            json={"previous_search_query": query, "applied_filters": None,
+                  "postback_meta": {}, "processed_rails": {},
+                  "monet_assets": [], "similar_entities": None, "sort": ""},
+            headers=headers, cookies=httpx_cookies,
+        )
+        search_status = r.status_code
+        try:
+            snippets = (r.json().get("response") or {}).get("snippets") or []
+            for s in snippets:
+                ci = (((s.get("data") or {}).get("atc_action") or {})
+                      .get("add_to_cart", {}).get("cart_item"))
+                if ci:
+                    cart_item = ci
+                    break
+        except Exception as e:
+            return {"error": f"search parse failed: {e}", "search_status": search_status}
+    if not cart_item:
+        return {"error": "no cart_item from search", "search_status": search_status}
+
+    pid = cart_item.get("product_id")
+    body_items = {"items": [cart_item]}
+    body_cartitems = {"cart_items": [cart_item], "merchant_id": merchant_id}
+    body_old = {"items": [{"product_id": pid, "quantity": 1}], "order_type": "blinkIt"}
+
+    # (method, path, body) candidates — paths within blinkit.com.
+    candidates = [
+        ("/v2/client/user_cart/", body_old),
+        ("/v2/client/cart/", body_items),
+        ("/v1/client/cart/", body_items),
+        ("/v1/cart/changes", body_cartitems),
+        ("/v2/cart/changes", body_cartitems),
+        ("/v1/cart", body_items),
+        ("/v2/cart", body_items),
+        ("/v1/cart/update", body_items),
+        ("/v2/cart/update", body_items),
+        ("/v1/cart/add", body_items),
+        ("/v2/cart/add", body_items),
+        ("/v1/layout/cart", body_items),
+        ("/v1/cart/items", body_items),
+    ]
+    results = []
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        for path, body in candidates:
+            try:
+                rr = await client.post(f"{BASE_URL}{path}", json=body,
+                                       headers=headers, cookies=httpx_cookies)
+                results.append({"path": path, "status": rr.status_code,
+                                "body": rr.text[:180]})
+            except Exception as e:
+                results.append({"path": path, "error": str(e)[:120]})
+    return {
+        "search_status": search_status,
+        "product_id": pid,
+        "cart_item_keys": list(cart_item.keys()),
+        "results": results,
+    }

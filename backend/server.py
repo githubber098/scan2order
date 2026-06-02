@@ -41,7 +41,7 @@ from storage import user_store
 from stores import bigbasket, blinkit, zepto
 
 BASE_DIR = Path(__file__).parent
-APP_VERSION = "1.0.3"
+APP_VERSION = "1.0.4-probe"
 _INDEX_HTML  = BASE_DIR / "templates" / "index.html"
 _LOGIN_HTML  = BASE_DIR / "templates" / "login.html"
 _404_HTML    = BASE_DIR / "templates" / "404.html"
@@ -1213,6 +1213,18 @@ async def api_cart_progress(user_id: str):
 
 _LOG_FILE = BASE_DIR.parent / "data" / "server.log"
 _MAX_LOG_BYTES = 10 * 1024 * 1024  # only read the last 10 MB to stay fast
+
+
+@app.get("/api/debug/blinkit-cart-probe")
+async def debug_blinkit_cart_probe(key: str = "", user_id: str = "", q: str = "tomato"):
+    """TEMP: probe Blinkit cart endpoints. Protected by LOG_API_KEY."""
+    api_key = os.getenv("LOG_API_KEY", "")
+    if not api_key or key != api_key:
+        return Response(status_code=403)
+    uid = _require_user_id(user_id)
+    if not uid:
+        return {"error": "missing user_id"}
+    return await blinkit.probe_cart(uid, q)
 
 
 @app.get("/api/logs")
