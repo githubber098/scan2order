@@ -187,6 +187,20 @@ def _require_user_id(user_id: str | None) -> str | None:
 
 # ── Health & version ─────────────────────────────────────────────────────────
 
+@app.get("/favicon.ico")
+async def favicon():
+    """Serve the SVG favicon for the browser's default /favicon.ico request.
+
+    Pages also declare <link rel="icon" href="/static/favicon.svg">, but the
+    browser still probes /favicon.ico — answering here avoids 404 noise.
+    """
+    fav = _STATIC_DIR / "favicon.svg"
+    if fav.exists():
+        return Response(content=fav.read_bytes(), media_type="image/svg+xml",
+                        headers={"Cache-Control": "public, max-age=86400"})
+    return Response(status_code=404)
+
+
 @app.get("/health")
 async def health():
     return {"status": "ok", "version": APP_VERSION}
@@ -592,7 +606,13 @@ async def browser_auth_start(store: str, request: Request):
     The client should poll /screenshot for display, forward events via /event,
     and poll /check until {done: true} to know when cookies are saved.
     """
-    body = await request.json()
+    # Tolerate an empty / missing / malformed body — a bare POST must not 500.
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    if not isinstance(body, dict):
+        body = {}
     user_id = _require_user_id(body.get("user_id")) or str(uuid.uuid4())
     # geolocation forwarded from the user's real browser so store location
     # prompts ("Use my location") resolve correctly inside Playwright.
@@ -987,7 +1007,7 @@ async def api_search(request: Request):
 
     available = _get_available_stores(user_id)
     if not available:
-        return {"error": "No stores connected."}
+        return {"error": "No stores connected. Connect Blinkit or Zepto from the Profile page (in the sidebar)."}
 
     from stores import bigbasket as bb, blinkit as bl, zepto as z
     _search_fns = {"bigbasket": bb.search_item_api,
@@ -1046,7 +1066,7 @@ async def api_compare(request: Request):
 
     available = _get_available_stores(user_id)
     if not available:
-        return {"error": "No stores connected. Link your stores via the mobile app."}
+        return {"error": "No stores connected. Connect Blinkit or Zepto from the Profile page (in the sidebar)."}
 
     skipped = [s for s in _STORE_DISPLAY if s not in available]
     print(f"\n[compare] {len(items)} items across {available} "
@@ -1146,7 +1166,7 @@ async def api_compare_item(request: Request):
 
     available = _get_available_stores(user_id)
     if not available:
-        return {"error": "No stores connected."}
+        return {"error": "No stores connected. Connect Blinkit or Zepto from the Profile page (in the sidebar)."}
 
     entry = await ranker.compare_one_item(item, user_id, available)
     return {"entry": entry}

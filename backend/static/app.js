@@ -242,6 +242,20 @@
     }
   }
 
+  // Ask the browser for GPS so the store's location prompt resolves inside the
+  // headless session. Resolves to null (never rejects) so connect proceeds even
+  // when permission is denied or unavailable.
+  function _getGeolocation() {
+    return new Promise((resolve) => {
+      if (!navigator.geolocation) return resolve(null);
+      navigator.geolocation.getCurrentPosition(
+        (pos) => resolve({ latitude: pos.coords.latitude, longitude: pos.coords.longitude }),
+        () => resolve(null),
+        { timeout: 5000, maximumAge: 600000 }
+      );
+    });
+  }
+
   // PUBLIC: called by Connect buttons across the app.
   window.connectStore = async function (store, btn) {
     _connectingStore = store;
@@ -250,7 +264,15 @@
 
     const token = ++_browserStartToken;
     try {
-      const r = await fetch(`/api/auth/browser/start/${store}`, { method:"POST" });
+      const geolocation = await _getGeolocation();
+      if (token !== _browserStartToken) return; // aborted during the GPS prompt
+      // Always send a JSON body — the endpoint calls request.json(); an empty
+      // POST body would 500 with a plain-text "Internal Server Error".
+      const r = await fetch(`/api/auth/browser/start/${store}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ geolocation }),
+      });
       const d = await r.json();
       if (token !== _browserStartToken) return; // aborted
       if (d.error) { alert(d.error); if (btn) { btn.disabled=false; btn.textContent="Connect"; } return; }
