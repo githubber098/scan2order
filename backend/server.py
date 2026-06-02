@@ -41,7 +41,7 @@ from storage import user_store
 from stores import bigbasket, blinkit, zepto
 
 BASE_DIR = Path(__file__).parent
-APP_VERSION = "1.0.7"
+APP_VERSION = "1.0.8"
 _INDEX_HTML  = BASE_DIR / "templates" / "index.html"
 _LOGIN_HTML  = BASE_DIR / "templates" / "login.html"
 _404_HTML    = BASE_DIR / "templates" / "404.html"
@@ -1177,7 +1177,18 @@ async def api_cart_add_all(request: Request):
                     _cart_progress[user_id]["done"] = done_count
                 return
 
-        # Per-item path: BB, Blinkit, or fallback for Zepto
+            # Blinkit's /v5/carts is all-or-nothing AND replaces the cart, so on
+            # batch failure do NOT retry per item (that would clobber). Mark all
+            # failed and stop here. (Zepto may fall through to its per-item path.)
+            if store_name == "blinkit":
+                reason = batch.get("reason", "cart add failed")
+                for item in valid_items:
+                    app_results["failed"].append({**item, "failed_reason": reason})
+                    done_count += 1
+                    _cart_progress[user_id]["done"] = done_count
+                return
+
+        # Per-item path: BB, or fallback for Zepto
         for item in valid_items:
             _cart_progress[user_id]["current"] = (
                 f"{store_name}: {item.get('name', '')}".strip()

@@ -18,6 +18,7 @@ Location: gr_1_lat/gr_1_lon cookies + merchant_id (captured during auth).
 import re
 import json
 import time
+import uuid
 from urllib.parse import quote, unquote
 
 import httpx
@@ -486,6 +487,14 @@ async def add_all_to_cart_api(user_id: str, items: list[dict]) -> dict:
         "platform": "mobile_web",
         "qd_sdk_request": "true",
         "x-age-consent-granted": "false",
+        # The cart upstream (assembly-consumer/v4/carts) hard-validates these
+        # version headers — without app_version it 400s with
+        # "Key: 'writeCartDataHeaders.AppVersion'". Values captured from a live
+        # blinkit.com web session; update if Blinkit bumps its web build.
+        "app_version": "52434333",
+        "rn_bundle_version": "1009003012",
+        "web_app_version": "1008010016",
+        "session_uuid": str(uuid.uuid4()),
         "Origin": BASE_URL,
         "Referer": f"{BASE_URL}/cart",
     }
