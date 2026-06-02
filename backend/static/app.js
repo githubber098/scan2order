@@ -51,24 +51,36 @@
   function qp(k) { return new URLSearchParams(location.search).get(k); }
 
   function currentTheme() {
-    // Priority: ?theme= (preview canvas) > server-injected data-theme > localStorage > 'fresh'
+    // ?theme= is used only by the design-preview canvas.
     const q = qp("theme");
     if (q && THEMES.includes(q)) return q;
-    // Server injects data-theme on <html> from user.theme — no flash, no race.
-    const srv = document.documentElement.getAttribute("data-theme");
-    if (srv && THEMES.includes(srv) && srv !== "fresh") return srv;
-    try { const s = localStorage.getItem("s2o-theme"); if (s && THEMES.includes(s)) return s; } catch (_) {}
-    return srv || "fresh";
+    // Authenticated pages: the per-user theme the server injects is the single
+    // source of truth. It MUST win over any value a previous user left behind,
+    // otherwise the theme leaks across logout / account switch. We deliberately
+    // do NOT read localStorage here for that reason.
+    const su = window._SERVER_USER;
+    if (su && su.theme && THEMES.includes(su.theme)) return su.theme;
+    if (su) {
+      const srv = document.documentElement.getAttribute("data-theme");
+      return (srv && THEMES.includes(srv)) ? srv : "fresh";
+    }
+    // Unauthenticated (login / onboarding) or no server user: default theme.
+    return "fresh";
   }
 
   function applyTheme(t) {
+    // Apply for the current page only. Persistence is per-account on the server
+    // (saveTheme → POST /api/profile/theme); we intentionally do not mirror to
+    // localStorage so a logged-out browser never carries a stale theme.
     document.documentElement.setAttribute("data-theme", t);
-    try { localStorage.setItem("s2o-theme", t); } catch (_) {}
   }
 
   function saveTheme(t) {
     applyTheme(t);
-    // Persist to server so theme follows the user across devices.
+    // Keep the in-page server-user object in sync so currentTheme() stays
+    // correct without a reload.
+    if (window._SERVER_USER) window._SERVER_USER.theme = t;
+    // Persist to the account so the theme follows the user across devices.
     fetch("/api/profile/theme", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -95,6 +107,10 @@
 
   /* ---- logout ---------------------------------------------------------- */
   window.logout = async function () {
+    // Reset to the default theme on the way out so the login page (and any next
+    // account) never inherits this user's look.
+    try { localStorage.removeItem("s2o-theme"); } catch (_) {}
+    document.documentElement.setAttribute("data-theme", "fresh");
     await fetch("/api/auth/logout", { method: "POST" }).catch(() => {});
     window.location.href = "/login";
   };
