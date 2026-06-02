@@ -5,8 +5,7 @@ The Zepto API gateway requires two SHA-256 hashes per request:
   - x-timezone header (despite the misleading name, it's a hash of the signature)
 
 Algorithm cracked from JS modules 23621 and 53133, verified against three
-captured requests (see _temp_zepto_sign_test.py at the project root for
-the verification script).
+captured requests.
 
 Stdlib hashlib only - no third-party deps.
 """
