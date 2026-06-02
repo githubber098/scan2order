@@ -44,6 +44,8 @@ CREATE TABLE IF NOT EXISTS users (
     user_id    TEXT PRIMARY KEY,
     phone      TEXT,
     email      TEXT,
+    name       TEXT,
+    theme      TEXT NOT NULL DEFAULT 'fresh',
     created_at REAL NOT NULL,
     last_login REAL
 );
@@ -55,6 +57,16 @@ CREATE TABLE IF NOT EXISTS otp_codes (
     expires_at REAL NOT NULL,
     used       INTEGER NOT NULL DEFAULT 0,
     created_at REAL NOT NULL
+);
+CREATE TABLE IF NOT EXISTS comparisons (
+    id          TEXT PRIMARY KEY,
+    user_id     TEXT NOT NULL,
+    created_at  REAL NOT NULL,
+    query_text  TEXT NOT NULL,
+    items_json  TEXT NOT NULL,
+    grand_total REAL NOT NULL DEFAULT 0,
+    savings     REAL NOT NULL DEFAULT 0,
+    stores_json TEXT NOT NULL DEFAULT '[]'
 );
 """
 

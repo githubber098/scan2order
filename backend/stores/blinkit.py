@@ -1,16 +1,18 @@
 """stores/blinkit.py - Blinkit search + cart module.
 
-Search strategy (httpx-only, no Playwright):
-  1. POST /v1/layout/search — Blinkit's internal layout API. Before each
-     search a fresh auth_key is derived by calling GET /v2/accounts/auth_key/
-     with the stored session cookie (same call the React app makes on every
-     page load). Cookie values are URL-decoded before sending so httpx sends
-     them in the same format the browser would.
-  2. __NEXT_DATA__ SSR fallback — GET /s/?q={query}, parse the embedded
-     Next.js JSON blob. Rarely succeeds (Blinkit stripped most product data
-     from SSR), but kept as a last resort.
+Search strategy (in order):
+  1. POST /v1/layout/search via httpx — fast (~200ms). Needs BOTH lat+lon
+     headers, decoded access_token, cached api_auth_key, app_client=
+     consumer_web. Returns "location not serviceable" if either coordinate
+     is missing.
+  2. __NEXT_DATA__ SSR fallback — GET /s/?q={query}, parse embedded Next.js
+     JSON. Rarely succeeds (Blinkit stripped most product data from SSR).
+  3. Playwright response interception — reliable (~2.5s). Navigates to the
+     search page, intercepts the React app's own /v1/layout/search response,
+     and caches the derived auth_key for future Strategy 1 attempts.
 
-Cart add via Blinkit's /v2/client/user_cart/ API.
+Cart: POST /v5/carts via httpx (replaces entire cart in one batch).
+Playwright fallback if httpx cart fails (sends via fetch() in page context).
 Auth cookie: gr_1_accessToken (stored via user_store.connect_store).
 Location: gr_1_lat/gr_1_lon cookies + merchant_id (captured during auth).
 """
@@ -285,6 +287,217 @@ def _parse_layout_search_response(data: dict) -> list[dict]:
     return products
 
 
+_PW_SEARCH_SCRIPT = r"""
+() => {
+    const results = [];
+    const cards = document.querySelectorAll('div[role="button"][tabindex="0"][id]');
+    cards.forEach(card => {
+        const id = card.id || '';
+        if (!/^\d+$/.test(id)) return;
+        const txt = (card.innerText || '').toLowerCase();
+        if (txt.includes('out of stock') || txt.includes('notify me') ||
+            txt.includes('sold out')) return;
+
+        const nameEl = card.querySelector('.tw-line-clamp-2');
+        const unitEl = card.querySelector('.tw-line-clamp-1');
+
+        let saleEl = null;
+        for (const el of card.querySelectorAll('div.tw-font-semibold')) {
+            const t = (el.textContent || '').trim();
+            if (!t.startsWith('₹')) continue;
+            let p = el, struck = false;
+            while (p && p !== card) {
+                if ((p.className || '').includes('line-through')) { struck=true; break; }
+                p = p.parentElement;
+            }
+            if (!struck) { saleEl = el; break; }
+        }
+        const mrpEl = card.querySelector('.tw-line-through');
+        const px = el => {
+            if (!el) return 0;
+            return parseFloat((el.textContent||'').replace(/[^\d.]/g,''))||0;
+        };
+        const sale = px(saleEl), mrp = px(mrpEl)||sale;
+        const name = nameEl ? (nameEl.textContent||'').trim() : '';
+        const unit = unitEl ? (unitEl.textContent||'').trim() : '';
+        if (name && sale > 0) {
+            results.push({
+                name: name.slice(0,120), price: mrp, sale_price: sale,
+                unit, image_url: '', product_id: id,
+                app: 'blinkit', app_name: 'Blinkit'
+            });
+        }
+    });
+    return results.slice(0, 8);
+}
+"""
+
+
+async def _search_playwright(
+    user_id: str, query: str, cookies: dict
+) -> tuple[list[dict], str]:
+    """Load Blinkit search page in headless Chromium, scrape rendered products.
+
+    Returns (products, derived_auth_key). derived_auth_key is the SHA256 key
+    captured from the /v2/accounts/auth_key/ response; empty string if not seen.
+    """
+    import auth_browser as _ab
+    pw = await _ab._get_playwright()
+
+    browser = await pw.chromium.launch(
+        headless=True,
+        args=["--no-sandbox", "--disable-dev-shm-usage",
+              "--disable-blink-features=AutomationControlled"],
+    )
+    captured: dict = {"auth_key": "", "products": []}
+    try:
+        ctx = await browser.new_context(
+            user_agent=_MOBILE_UA,
+            is_mobile=True, has_touch=True,
+            locale="en-IN", timezone_id="Asia/Kolkata",
+        )
+        pw_cookies = [
+            {"name": k, "value": v, "domain": "blinkit.com", "path": "/",
+             "httpOnly": False, "secure": True, "sameSite": "Lax"}
+            for k, v in cookies.items()
+            if k not in ("__cf_bm", "_cfuvid", "api_auth_key")
+        ]
+        await ctx.add_cookies(pw_cookies)
+
+        page = await ctx.new_page()
+
+        async def on_response(resp):
+            try:
+                u = resp.url
+                if not any(x in u for x in ("/v1/", "/v2/", "/v3/",
+                                             "/api/", "/search")):
+                    return
+                if "json" not in resp.headers.get("content-type", ""):
+                    return
+                body = await resp.json()
+                if "/v2/accounts/auth_key/" in u and body.get("auth_key"):
+                    captured["auth_key"] = body["auth_key"]
+                if ("/v1/layout/search" in u and resp.status == 200
+                        and body.get("is_success") and not captured["products"]):
+                    try:
+                        captured["products"] = _parse_layout_search_response(body)
+                        print(f"[blinkit] Playwright captured "
+                              f"{len(captured['products'])} products from response")
+                    except Exception as pe:
+                        print(f"[blinkit] Playwright product parse error: {pe}")
+            except Exception:
+                pass
+
+        page.on("response", on_response)
+
+        await page.goto(f"{BASE_URL}/s/?q={quote(query)}",
+                        wait_until="domcontentloaded", timeout=25000)
+
+        for _ in range(30):
+            if captured["products"]:
+                break
+            await page.wait_for_timeout(200)
+
+        if captured["products"]:
+            return captured["products"], captured["auth_key"]
+
+        try:
+            await page.wait_for_selector(
+                'div[role="button"][tabindex="0"][id]', timeout=8000)
+        except Exception:
+            pass
+        await page.wait_for_timeout(1500)
+        products = await page.evaluate(_PW_SEARCH_SCRIPT)
+        return [p for p in products if p.get("product_id")], captured["auth_key"]
+    finally:
+        await browser.close()
+
+
+async def _cart_post_playwright(user_id: str, cart_items: list[dict]) -> dict:
+    """POST a desired cart state to Blinkit's /v5/carts from inside a Playwright
+    page (so the request carries fresh Cloudflare cookies).
+
+    /v5/carts is a SYNC endpoint: the posted items array becomes the cart.
+    Returns {"success": bool, "reason"?: str}.
+    """
+    cookies = get_store_cookies(user_id, APP_NAME)
+    lat = cookies.get("gr_1_lat") or cookies.get("lat") or ""
+    lon = cookies.get("gr_1_lon") or cookies.get("lng") or ""
+    device_id = cookies.get("gr_1_deviceId") or ""
+    cached_key = cookies.get("api_auth_key") or ""
+
+    import auth_browser as _ab
+    pw = await _ab._get_playwright()
+    browser = await pw.chromium.launch(
+        headless=True,
+        args=["--no-sandbox", "--disable-dev-shm-usage",
+              "--disable-blink-features=AutomationControlled"],
+    )
+    captured = {"auth_key": cached_key}
+    try:
+        ctx = await browser.new_context(
+            user_agent=_MOBILE_UA, is_mobile=True, has_touch=True,
+            locale="en-IN", timezone_id="Asia/Kolkata",
+        )
+        await ctx.add_cookies([
+            {"name": k, "value": v, "domain": "blinkit.com", "path": "/",
+             "httpOnly": False, "secure": True, "sameSite": "Lax"}
+            for k, v in cookies.items()
+            if k not in ("__cf_bm", "_cfuvid", "api_auth_key")
+        ])
+        page = await ctx.new_page()
+
+        async def on_response(resp):
+            if "/v2/accounts/auth_key/" in resp.url:
+                try:
+                    b = await resp.json()
+                    if b.get("auth_key"):
+                        captured["auth_key"] = b["auth_key"]
+                except Exception:
+                    pass
+        page.on("response", on_response)
+
+        await page.goto(f"{BASE_URL}/", wait_until="domcontentloaded", timeout=25000)
+        for _ in range(25):
+            if captured["auth_key"]:
+                break
+            await page.wait_for_timeout(200)
+        if not captured["auth_key"]:
+            return {"success": False, "reason": "could not derive auth_key"}
+
+        result = await page.evaluate(
+            """async ({auth_key, lat, lon, device_id, items}) => {
+                const r = await fetch('/v5/carts', {
+                    method: 'POST', credentials: 'include',
+                    headers: {
+                        'auth_key': auth_key,
+                        'app_client': 'consumer_web',
+                        'lat': lat, 'lon': lon,
+                        'device_id': device_id,
+                        'app_version': '1008010008',
+                        'web_app_version': '1008010008',
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({items, promo_codes: ['']}),
+                });
+                let body = '';
+                try { body = (await r.text()).slice(0, 300); } catch (e) {}
+                return {status: r.status, body};
+            }""",
+            {"auth_key": captured["auth_key"], "lat": str(lat), "lon": str(lon),
+             "device_id": str(device_id), "items": cart_items},
+        )
+        if captured["auth_key"] and captured["auth_key"] != cached_key:
+            update_store_cookies(user_id, APP_NAME, {"api_auth_key": captured["auth_key"]})
+
+        if result.get("status") == 200:
+            return {"success": True}
+        return {"success": False,
+                "reason": f"HTTP {result.get('status')}: {result.get('body','')[:120]}"}
+    finally:
+        await browser.close()
+
+
 async def search_item_api(user_id: str, query: str) -> list[dict]:
     """Search Blinkit for *query*.
 
@@ -424,6 +637,23 @@ async def search_item_api(user_id: str, query: str) -> list[dict]:
         elapsed_ms = int((time.time() - t_start) * 1000)
         print(f"[blinkit] Strategy 2 (SSR): request failed: {e} ({elapsed_ms}ms)")
 
+    if products:
+        print(f"[blinkit] === API RESULT: {len(products)} products "
+              f"({int((time.time() - t_start)*1000)}ms) ===\n")
+        return products
+
+    # ── Strategy 3: Playwright response interception ─────────────────────────
+    print(f"[blinkit] SSR fallback empty → trying Playwright strategy")
+    try:
+        products, pw_auth_key = await _search_playwright(user_id, query, cookies)
+        print(f"[blinkit] Strategy 3 (Playwright): {len(products)} products "
+              f"({int((time.time() - t_start)*1000)}ms)")
+        if pw_auth_key:
+            update_store_cookies(user_id, APP_NAME, {"api_auth_key": pw_auth_key})
+            print(f"[blinkit] Cached derived auth key for future Strategy 1 use")
+    except Exception as e:
+        print(f"[blinkit] Strategy 3 failed: {e}")
+
     print(f"[blinkit] === API RESULT: {len(products)} products "
           f"({int((time.time() - t_start)*1000)}ms) ===\n")
     return products
@@ -507,23 +737,42 @@ async def add_all_to_cart_api(user_id: str, items: list[dict]) -> dict:
 
     body = {"items": cart_items, "promo_codes": [""]}
 
+    httpx_ok = False
     try:
         async with httpx.AsyncClient(timeout=15.0) as client:
             resp = await client.post(f"{BASE_URL}/v5/carts", json=body,
                                      headers=headers, cookies=httpx_cookies)
         elapsed_ms = int((time.time() - t_start) * 1000)
-        if resp.status_code != 200:
+        if resp.status_code == 200:
+            print(f"[blinkit] /v5/carts OK: {len(cart_items)} items ({elapsed_ms}ms)")
+            httpx_ok = True
+        else:
             print(f"[blinkit] /v5/carts HTTP {resp.status_code} ({elapsed_ms}ms) "
-                  f"body={resp.text[:200]!r}")
-            return {"success": False,
-                    "reason": f"HTTP {resp.status_code}: {resp.text[:120]}"}
-        print(f"[blinkit] /v5/carts OK: {len(cart_items)} items ({elapsed_ms}ms)")
-        return {"success": True,
-                "items": [{"success": True, "count_added": q} for q in order]}
+                  f"body={resp.text[:200]!r} → trying Playwright fallback")
     except Exception as e:
         elapsed_ms = int((time.time() - t_start) * 1000)
-        print(f"[blinkit] /v5/carts failed after {elapsed_ms}ms: {e}")
-        return {"success": False, "reason": f"exception: {e}"}
+        print(f"[blinkit] /v5/carts failed after {elapsed_ms}ms: {e} → trying Playwright fallback")
+
+    if httpx_ok:
+        return {"success": True,
+                "items": [{"success": True, "count_added": q} for q in order]}
+
+    # Playwright fallback: fetch() inside a page context carries fresh CF cookies.
+    try:
+        pw_cart_items = [{"product_id": ci["product_id"], "quantity": ci["quantity"]}
+                         for ci in cart_items]
+        res = await _cart_post_playwright(user_id, pw_cart_items)
+        elapsed_ms = int((time.time() - t_start) * 1000)
+        ok = res.get("success", False)
+        print(f"[blinkit] Playwright cart: {'OK' if ok else 'FAIL'} "
+              f"({len(pw_cart_items)} items, {elapsed_ms}ms) {res.get('reason', '')}")
+        return {"success": ok,
+                "items": [{"success": ok, "count_added": q if ok else 0} for q in order],
+                **({"reason": res.get("reason")} if not ok else {})}
+    except Exception as e:
+        elapsed_ms = int((time.time() - t_start) * 1000)
+        print(f"[blinkit] Playwright cart fallback failed after {elapsed_ms}ms: {e}")
+        return {"success": False, "reason": f"all methods failed: {e}"}
 
 
 async def add_to_cart_api(user_id: str, product_id: str, count: int = 1) -> dict:

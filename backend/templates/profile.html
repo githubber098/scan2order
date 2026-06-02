@@ -1,0 +1,285 @@
+{% extends "base.html" %}
+{% set page = "profile" %}
+{% block title %}Profile{% endblock %}
+
+{% block content %}
+<h1 class="h1">Profile</h1>
+
+<!-- account avatar + editable name -->
+<section class="card srow" style="align-items:flex-start;gap:14px">
+  <div id="avatar-circle" style="width:54px;height:54px;border-radius:50%;background:var(--accent-grad);color:var(--accent-ink);display:flex;align-items:center;justify-content:center;font-family:var(--font-head);font-weight:800;font-size:23px;flex-shrink:0;transition:background .3s">{{ (user.name or user.phone or user.email or 'U')[0] | upper }}</div>
+  <div style="flex:1">
+    <div id="name-display" class="row" style="gap:8px;align-items:center">
+      <span class="h2" id="name-text">{{ user.name or 'You' }}</span>
+      <button onclick="startEditName()" style="background:none;border:none;cursor:pointer;color:var(--muted);display:flex;padding:2px" title="Edit name"><i data-ico="edit" data-s="15"></i></button>
+    </div>
+    <div id="name-edit" style="display:none">
+      <input class="input" id="name-edit-input" type="text" placeholder="Your name" style="margin-bottom:8px" />
+      <div class="row" style="gap:8px">
+        <button class="btn sm" onclick="saveEditName()">Save</button>
+        <button class="btn ghost sm" onclick="cancelEditName()">Cancel</button>
+      </div>
+      <div id="name-edit-msg" class="dim" style="font-size:12px;margin-top:4px;min-height:1em"></div>
+    </div>
+    <div class="smeta num">{{ user.phone or user.email or '' }}</div>
+  </div>
+</section>
+
+<!-- sign-in methods -->
+<div class="sectiontitle">Sign-in methods</div>
+<section class="card tight stack" style="gap:0">
+  <!-- phone -->
+  <div class="row" style="padding:8px 2px">
+    <i data-ico="phone" data-s="18" class="muted"></i>
+    {% if user.phone %}
+      <span class="num" style="flex:1;font-size:14px">{{ user.phone }}</span>
+      <i data-ico="check" data-s="17" data-w="3" style="color:var(--ok)"></i>
+    {% else %}
+      <span class="dim" style="flex:1;font-size:14px">No phone added</span>
+      <button class="btn ghost sm" onclick="startAddMethod('phone')">Add</button>
+    {% endif %}
+  </div>
+  <div class="hr"></div>
+  <!-- email -->
+  <div class="row" style="padding:8px 2px">
+    <i data-ico="mail" data-s="18" class="muted"></i>
+    {% if user.email %}
+      <span class="num" style="flex:1;font-size:14px">{{ user.email }}</span>
+      <i data-ico="check" data-s="17" data-w="3" style="color:var(--ok)"></i>
+    {% else %}
+      <span class="dim" style="flex:1;font-size:14px">No email added</span>
+      <button class="btn ghost sm" onclick="startAddMethod('email')">Add</button>
+    {% endif %}
+  </div>
+</section>
+
+<!-- add-method inline form (hidden until Add is clicked) -->
+<section class="card tight stack" id="add-method-card" style="display:none">
+  <div id="add-method-step1">
+    <div class="label" id="add-method-label" style="margin-bottom:8px">Add email</div>
+    <input class="input" id="add-method-input" type="email" inputmode="email" placeholder="you@example.com" />
+    <button class="btn" style="margin-top:10px" onclick="sendAddMethodCode()">Send code</button>
+  </div>
+  <div id="add-method-step2" style="display:none">
+    <div class="label" style="margin-bottom:8px">Enter the 6-digit code</div>
+    <input class="input" id="add-method-code" type="text" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]*" placeholder="000000" maxlength="6" />
+    <button class="btn" style="margin-top:10px" onclick="verifyAddMethodCode()">Verify</button>
+  </div>
+  <div id="add-method-msg" class="dim" style="font-size:12.5px"></div>
+</section>
+
+<!-- store connections -->
+<div class="sectiontitle">Store connections</div>
+<section class="card tight stack" style="gap:0" id="store-section">
+  <!-- Zepto -->
+  <div class="srow" data-store="zepto" style="padding:11px 2px">
+    <div class="slogo zp">Z</div>
+    <div style="flex:1"><div class="sname">Zepto</div><div class="smeta">{{ 'Connected' if stores.zepto else 'Not connected' }}</div></div>
+    <div class="row" style="gap:6px">
+      {% if stores.zepto %}<span class="pill-tag ok"><i data-ico="check" data-s="13" data-w="3"></i>Connected</span>{% endif %}
+      <button class="btn {% if not stores.zepto %}sm{% else %}ghost sm{% endif %}" onclick="connectStore('zepto', this)">
+        <i data-ico="plug" data-s="15"></i>{{ 'Reconnect' if stores.zepto else 'Connect' }}
+      </button>
+    </div>
+  </div>
+  <div class="hr"></div>
+  <!-- Blinkit -->
+  <div class="srow" data-store="blinkit" style="padding:11px 2px">
+    <div class="slogo bk">b</div>
+    <div style="flex:1"><div class="sname">Blinkit</div><div class="smeta">{{ 'Connected' if stores.blinkit else 'Not connected' }}</div></div>
+    <div class="row" style="gap:6px">
+      {% if stores.blinkit %}<span class="pill-tag ok"><i data-ico="check" data-s="13" data-w="3"></i>Connected</span>{% endif %}
+      <button class="btn {% if not stores.blinkit %}sm{% else %}ghost sm{% endif %}" onclick="connectStore('blinkit', this)">
+        <i data-ico="plug" data-s="15"></i>{{ 'Reconnect' if stores.blinkit else 'Connect' }}
+      </button>
+    </div>
+  </div>
+  <div class="hr"></div>
+  <!-- BigBasket (mobile only) -->
+  <div class="srow" style="padding:11px 2px">
+    <div class="slogo bb">bb</div>
+    <div style="flex:1"><div class="sname">BigBasket</div><div class="smeta">Mobile app only</div></div>
+    <span class="pill-tag"><i data-ico="phone" data-s="12"></i>Mobile</span>
+  </div>
+</section>
+<p class="dim" style="font-size:11.5px;margin-top:-6px">BigBasket login works only in the mobile app — connect it there once and it syncs here.</p>
+
+<!-- appearance / theme switcher -->
+<div class="sectiontitle"><span class="row" style="gap:7px;display:inline-flex"><i data-ico="paint" data-s="15"></i>Appearance</span></div>
+<section class="card stack">
+  <p class="lead" style="margin-top:-2px">Pick a look. Saves to your account and follows you across devices.</p>
+  <div class="swatches">
+    <button class="swatch" data-theme-pick="fresh">
+      <div class="swatch-pv" style="background:#fbf3e3"><span style="width:14px;height:14px;border-radius:50%;background:#1ea24c"></span><span style="width:14px;height:14px;border-radius:50%;background:#ff7a4d"></span></div>
+      <div class="swatch-name">Fresh Market</div><div class="swatch-sub">Default · bright &amp; playful</div>
+      <span class="tick"><i data-ico="check" data-s="12" data-w="3"></i></span>
+    </button>
+    <button class="swatch" data-theme-pick="night">
+      <div class="swatch-pv" style="background:#0e1712"><span style="width:14px;height:14px;border-radius:50%;background:#3ed47e"></span><span style="width:14px;height:14px;border-radius:50%;background:#ff8a5c"></span></div>
+      <div class="swatch-name">Fresh Night</div><div class="swatch-sub">Dark &amp; produce-green</div>
+      <span class="tick"><i data-ico="check" data-s="12" data-w="3"></i></span>
+    </button>
+    <button class="swatch" data-theme-pick="aurora">
+      <div class="swatch-pv" style="background:#070713"><span style="width:14px;height:14px;border-radius:50%;background:#67e8d6"></span><span style="width:14px;height:14px;border-radius:50%;background:#a78bfa"></span></div>
+      <div class="swatch-name">Aurora</div><div class="swatch-sub">Glassy &amp; glowing</div>
+      <span class="tick"><i data-ico="check" data-s="12" data-w="3"></i></span>
+    </button>
+    <button class="swatch" data-theme-pick="mono">
+      <div class="swatch-pv" style="background:#0c0d0c;font-family:monospace;color:#4ecdc4;font-size:18px;align-items:center">▌_</div>
+      <div class="swatch-name">Mono Receipt</div><div class="swatch-sub">Terminal &amp; tabular</div>
+      <span class="tick"><i data-ico="check" data-s="12" data-w="3"></i></span>
+    </button>
+    <button class="swatch" data-theme-pick="light">
+      <div class="swatch-pv" style="background:#f6f5f1"><span style="width:14px;height:14px;border-radius:50%;background:#13b5a6"></span><span style="width:14px;height:14px;border-radius:50%;background:#e7e3da"></span></div>
+      <div class="swatch-name">Daylight</div><div class="swatch-sub">Clean &amp; calm</div>
+      <span class="tick"><i data-ico="check" data-s="12" data-w="3"></i></span>
+    </button>
+    <button class="swatch" data-theme-pick="brutal">
+      <div class="swatch-pv" style="background:#f4f1e6;border:2px solid #15140f"><span style="width:14px;height:14px;background:#13d9bf;border:2px solid #15140f"></span><span style="width:14px;height:14px;background:#ff5da2;border:2px solid #15140f"></span></div>
+      <div class="swatch-name">Neo-Brutalist</div><div class="swatch-sub">Bold &amp; chunky</div>
+      <span class="tick"><i data-ico="check" data-s="12" data-w="3"></i></span>
+    </button>
+  </div>
+</section>
+
+<!-- account actions -->
+<div class="sectiontitle">Account</div>
+<section class="card tight stack" style="gap:0">
+  <button class="row" style="padding:11px 2px;background:none;border:none;cursor:pointer;color:var(--text);font-size:14px;width:100%;text-align:left" onclick="logout()">
+    <i data-ico="signout" data-s="18" class="muted"></i>Sign out
+  </button>
+  <div class="hr"></div>
+  <button class="row" style="padding:11px 2px;background:none;border:none;cursor:pointer;color:var(--err);font-size:14px;width:100%;text-align:left" onclick="confirmDeleteData()">
+    <i data-ico="trash" data-s="17" style="color:var(--err)"></i>Disconnect all stores
+  </button>
+  <div class="hr"></div>
+  <button class="row" style="padding:11px 2px;background:none;border:none;cursor:pointer;color:var(--err);font-size:14px;width:100%;text-align:left" onclick="confirmDeleteAccount()">
+    <i data-ico="trash" data-s="17" style="color:var(--err)"></i>Delete account
+  </button>
+</section>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+/* After connect modal closes, refresh the store rows on this page. */
+function refreshStoreRows() { window.location.reload(); }
+
+/* Avatar color based on name initial (deterministic). */
+const _AVATAR_COLORS = [
+  'linear-gradient(135deg,#1ea24c,#2db56a)',
+  'linear-gradient(135deg,#7d24d6,#9b59d6)',
+  'linear-gradient(135deg,#e8692a,#f5a623)',
+  'linear-gradient(135deg,#0d9de4,#13b5a6)',
+  'linear-gradient(135deg,#e83c82,#ff6db0)',
+  'linear-gradient(135deg,#c0392b,#e74c3c)',
+];
+function _avatarColor(letter) {
+  const idx = (letter || 'U').toUpperCase().charCodeAt(0) % _AVATAR_COLORS.length;
+  return _AVATAR_COLORS[idx];
+}
+function _updateAvatar(name) {
+  const el = document.getElementById('avatar-circle');
+  const letter = (name || '{{ user.phone or user.email or "U" }}')[0].toUpperCase();
+  if (el) { el.textContent = letter; el.style.background = _avatarColor(letter); }
+}
+// Apply color on load
+document.addEventListener('DOMContentLoaded', () => {
+  _updateAvatar(document.getElementById('name-text')?.textContent || '');
+});
+
+/* Inline name edit. */
+function startEditName() {
+  const cur = document.getElementById('name-text').textContent.trim();
+  document.getElementById('name-edit-input').value = cur === 'You' ? '' : cur;
+  document.getElementById('name-display').style.display = 'none';
+  document.getElementById('name-edit').style.display = '';
+  document.getElementById('name-edit-input').focus();
+}
+function cancelEditName() {
+  document.getElementById('name-display').style.display = '';
+  document.getElementById('name-edit').style.display = 'none';
+}
+async function saveEditName() {
+  const val = document.getElementById('name-edit-input').value.trim();
+  const msg = document.getElementById('name-edit-msg');
+  if (!val) { msg.textContent = 'Name cannot be empty.'; return; }
+  msg.textContent = 'Saving…';
+  try {
+    const r = await fetch('/api/auth/name', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ name: val }),
+    });
+    const d = await r.json();
+    if (d.error) { msg.textContent = d.error; return; }
+    document.getElementById('name-text').textContent = val;
+    _updateAvatar(val);
+    cancelEditName();
+  } catch(e) { msg.textContent = 'Error: ' + e.message; }
+}
+
+/* Add second auth method (phone or email). */
+let _addChannel = null;
+function startAddMethod(channel) {
+  _addChannel = channel;
+  document.getElementById('add-method-card').style.display = '';
+  document.getElementById('add-method-label').textContent = 'Add ' + channel;
+  const inp = document.getElementById('add-method-input');
+  inp.type = channel === 'phone' ? 'tel' : 'email';
+  inp.placeholder = channel === 'phone' ? '+91 9876543210' : 'you@example.com';
+  inp.value = '';
+  document.getElementById('add-method-step1').style.display = '';
+  document.getElementById('add-method-step2').style.display = 'none';
+  document.getElementById('add-method-msg').textContent = '';
+  inp.focus();
+}
+async function sendAddMethodCode() {
+  const val = document.getElementById('add-method-input').value.trim();
+  const msg = document.getElementById('add-method-msg');
+  msg.textContent = 'Sending…';
+  try {
+    const r = await fetch('/api/auth/method/send-otp', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ channel: _addChannel, value: val }),
+    });
+    const d = await r.json();
+    if (d.error) { msg.textContent = d.error; return; }
+    document.getElementById('add-method-step1').style.display = 'none';
+    document.getElementById('add-method-step2').style.display = '';
+    if (d.dev_code) {
+      document.getElementById('add-method-code').value = d.dev_code;
+      msg.textContent = 'Dev code auto-filled: ' + d.dev_code;
+    } else {
+      msg.textContent = 'Code sent.';
+    }
+    document.getElementById('add-method-code').focus();
+  } catch(e) { msg.textContent = 'Error: ' + e.message; }
+}
+async function verifyAddMethodCode() {
+  const code = document.getElementById('add-method-code').value.trim();
+  const val  = document.getElementById('add-method-input').value.trim();
+  const msg  = document.getElementById('add-method-msg');
+  msg.textContent = 'Verifying…';
+  try {
+    const r = await fetch('/api/auth/method/verify', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ channel: _addChannel, value: val, code }),
+    });
+    const d = await r.json();
+    if (d.error) { msg.textContent = d.error; return; }
+    msg.textContent = '✓ Connected! Refreshing…';
+    setTimeout(() => window.location.reload(), 800);
+  } catch(e) { msg.textContent = 'Error: ' + e.message; }
+}
+
+async function confirmDeleteData() {
+  if (!confirm('Disconnect all stores? You will need to reconnect them.')) return;
+  await fetch('/api/auth/disconnect-all', { method:'POST' });
+  window.location.reload();
+}
+async function confirmDeleteAccount() {
+  if (!confirm('Delete your account and all data? This cannot be undone.')) return;
+  await fetch('/api/auth/delete', { method:'POST' });
+  window.location.href = '/login';
+}
+</script>
+{% endblock %}

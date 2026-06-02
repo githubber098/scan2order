@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="fresh">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+<title>scan2order · Welcome</title>
+<link rel="icon" type="image/svg+xml" href="/static/favicon.svg" />
+<link rel="stylesheet" href="/static/theme.css?v={{ asset_v }}" />
+<script defer src="/static/app.js?v={{ asset_v }}"></script>
+<style>
+  .ob-wrap { min-height:100vh; display:flex; align-items:center; justify-content:center; padding:24px; }
+  .ob-card  { width:100%; max-width:420px; }
+  .auroraglow { position:fixed; border-radius:50%; filter:blur(60px); opacity:.45; pointer-events:none; z-index:0; }
+</style>
+</head>
+<body data-page="onboarding">
+<script>window._SERVER_USER_ID = {{ user_id | tojson }};</script>
+
+<!-- decorative glows (theme-aware, same as login) -->
+<div class="auroraglow" style="width:260px;height:260px;top:-60px;left:-50px;background:var(--accent)"></div>
+<div class="auroraglow" style="width:200px;height:200px;bottom:-40px;right:-30px;background:var(--accent2)"></div>
+
+<div class="ob-wrap">
+  <div class="ob-card" style="position:relative;z-index:1">
+
+    <!-- wordmark -->
+    <div class="center" style="margin-bottom:28px">
+      <div class="wm lg" style="margin:0 auto">scan2order</div>
+    </div>
+
+    <!-- theme picker — show all 6 so the user picks their look first -->
+    <div class="card stack" style="margin-bottom:20px">
+      <div class="h2" style="margin-bottom:4px">Pick your look</div>
+      <p class="lead" style="margin-top:0;margin-bottom:14px">Choose a theme — you can always change it later in Profile.</p>
+      <div class="swatches">
+        <button class="swatch" data-theme-pick="fresh">
+          <div class="swatch-pv" style="background:#fbf3e3"><span style="width:14px;height:14px;border-radius:50%;background:#1ea24c"></span><span style="width:14px;height:14px;border-radius:50%;background:#ff7a4d"></span></div>
+          <div class="swatch-name">Fresh Market</div><div class="swatch-sub">Bright &amp; playful</div>
+          <span class="tick"><i data-ico="check" data-s="12" data-w="3"></i></span>
+        </button>
+        <button class="swatch" data-theme-pick="night">
+          <div class="swatch-pv" style="background:#0e1712"><span style="width:14px;height:14px;border-radius:50%;background:#3ed47e"></span><span style="width:14px;height:14px;border-radius:50%;background:#ff8a5c"></span></div>
+          <div class="swatch-name">Fresh Night</div><div class="swatch-sub">Dark &amp; produce-green</div>
+          <span class="tick"><i data-ico="check" data-s="12" data-w="3"></i></span>
+        </button>
+        <button class="swatch" data-theme-pick="aurora">
+          <div class="swatch-pv" style="background:#070713"><span style="width:14px;height:14px;border-radius:50%;background:#67e8d6"></span><span style="width:14px;height:14px;border-radius:50%;background:#a78bfa"></span></div>
+          <div class="swatch-name">Aurora</div><div class="swatch-sub">Glassy &amp; glowing</div>
+          <span class="tick"><i data-ico="check" data-s="12" data-w="3"></i></span>
+        </button>
+        <button class="swatch" data-theme-pick="mono">
+          <div class="swatch-pv" style="background:#0c0d0c;font-family:monospace;color:#4ecdc4;font-size:18px;align-items:center">▌_</div>
+          <div class="swatch-name">Mono Receipt</div><div class="swatch-sub">Terminal &amp; tabular</div>
+          <span class="tick"><i data-ico="check" data-s="12" data-w="3"></i></span>
+        </button>
+        <button class="swatch" data-theme-pick="light">
+          <div class="swatch-pv" style="background:#f6f5f1"><span style="width:14px;height:14px;border-radius:50%;background:#13b5a6"></span><span style="width:14px;height:14px;border-radius:50%;background:#e7e3da"></span></div>
+          <div class="swatch-name">Daylight</div><div class="swatch-sub">Clean &amp; calm</div>
+          <span class="tick"><i data-ico="check" data-s="12" data-w="3"></i></span>
+        </button>
+        <button class="swatch" data-theme-pick="brutal">
+          <div class="swatch-pv" style="background:#f4f1e6;border:2px solid #15140f"><span style="width:14px;height:14px;background:#13d9bf;border:2px solid #15140f"></span><span style="width:14px;height:14px;background:#ff5da2;border:2px solid #15140f"></span></div>
+          <div class="swatch-name">Neo-Brutalist</div><div class="swatch-sub">Bold &amp; chunky</div>
+          <span class="tick"><i data-ico="check" data-s="12" data-w="3"></i></span>
+        </button>
+      </div>
+    </div>
+
+    <!-- name -->
+    <div class="card stack">
+      <div class="h2" style="margin-bottom:4px">What should we call you?</div>
+      <p class="lead" style="margin-top:0;margin-bottom:14px">Just a first name is fine.</p>
+      <input class="input" id="name-input" type="text" placeholder="e.g. Raghav" autocomplete="given-name" autofocus />
+      <div id="ob-msg" class="dim" style="font-size:12.5px;min-height:1em"></div>
+      <button class="btn" onclick="saveName()">Get started <i data-ico="arrow" data-s="17"></i></button>
+    </div>
+
+  </div>
+</div>
+
+<script>
+  async function saveName() {
+    const name = document.getElementById('name-input').value.trim();
+    const msg = document.getElementById('ob-msg');
+    if (!name) { msg.textContent = 'Please enter your name.'; return; }
+    msg.textContent = 'Saving…';
+
+    // Save chosen theme
+    const theme = document.documentElement.getAttribute('data-theme') || 'fresh';
+    try {
+      await fetch('/api/profile/theme', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ theme }),
+      });
+    } catch(_){}
+
+    // Save name
+    try {
+      const r = await fetch('/api/auth/name', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ name }),
+      });
+      const d = await r.json();
+      if (d.error) { msg.textContent = d.error; return; }
+      window.location.href = '/';
+    } catch(e) { msg.textContent = 'Error: ' + e.message; }
+  }
+
+  // Allow Enter key to submit
+  document.addEventListener('DOMContentLoaded', () => {
+    document.getElementById('name-input').addEventListener('keydown', e => {
+      if (e.key === 'Enter') saveName();
+    });
+  });
+</script>
+</body>
+</html>

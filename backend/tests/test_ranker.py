@@ -18,11 +18,106 @@ from ranker import (
     _parse_qty,
     _price_per_unit,
     _qty_distance,
+    _qty_multiplier,
+    _effective_price,
     _is_reasonable_size,
     filter_by_query_relevance,
     selected_product,
     build_carts_from_comparison,
 )
+
+
+# ── _qty_multiplier (weight-aware whole-unit matching) ──────────────────────────
+
+class TestQtyMultiplier:
+    def test_250g_for_1kg_is_4(self):
+        assert _qty_multiplier("1kg", {"unit": "250 g"}) == 4
+
+    def test_500g_for_1kg_is_2(self):
+        assert _qty_multiplier("1kg", {"unit": "500 g"}) == 2
+
+    def test_exact_match_is_1(self):
+        assert _qty_multiplier("1kg", {"unit": "1 kg"}) == 1
+
+    def test_non_integer_multiple_excluded(self):
+        # 300g cannot tile 1kg in whole units
+        assert _qty_multiplier("1kg", {"unit": "300 g"}) is None
+
+    def test_oversize_unit_excluded(self):
+        assert _qty_multiplier("1kg", {"unit": "2 kg"}) is None
+
+    def test_product_without_size_excluded_when_target_given(self):
+        assert _qty_multiplier("1kg", {"name": "Tomato"}) is None
+
+    def test_no_target_returns_1(self):
+        assert _qty_multiplier("", {"unit": "500 g"}) == 1
+
+    def test_unit_kind_mismatch_excluded(self):
+        # target is mass, product is volume
+        assert _qty_multiplier("1kg", {"unit": "500 ml"}) is None
+
+    def test_effective_price_multiplies(self):
+        # 250g @ ₹10 → 4 units → ₹40
+        assert _effective_price("1kg", {"unit": "250 g", "sale_price": 10}) == 40
+        # 500g @ ₹18 → 2 units → ₹36 (cheaper, should win)
+        assert _effective_price("1kg", {"unit": "500 g", "sale_price": 18}) == 36
+
+    def test_effective_price_excluded_is_inf(self):
+        assert _effective_price("1kg", {"unit": "300 g", "sale_price": 5}) == float("inf")
+
+
+# ── compare_one_item weight-aware cross-store selection ─────────────────────────
+
+class TestCompareOneItemWeight:
+    """Regression: a non-tiling small pack at one store must NOT beat a
+    legitimately-tiling product at another store just because its raw single-
+    unit price is lower (the "Milk 1L → 180ml pack ₹14 vs 2×500ml ₹48" bug)."""
+
+    def _run(self, item, store_products, monkeypatch):
+        import ranker
+        from stores import blinkit, zepto
+        monkeypatch.delenv("OLLAMA_HOST", raising=False)
+
+        async def _mk(products):
+            async def _search(user_id, query):
+                return list(products)
+            return _search
+
+        async def go():
+            zepto.search_item_api = await _mk(store_products.get("zepto", []))
+            blinkit.search_item_api = await _mk(store_products.get("blinkit", []))
+            return await ranker.compare_one_item(item, "u1", ["zepto", "blinkit"])
+
+        return asyncio.run(go())
+
+    def test_tiling_product_beats_cheaper_nontiling_pack(self, monkeypatch):
+        store_products = {
+            # Zepto: a 180ml pack at ₹14 — cannot tile 1L in whole units
+            "zepto": [{"name": "Toned Milk Pouch", "unit": "180 ml",
+                       "sale_price": 14, "price": 14, "product_id": "z-180"}],
+            # Blinkit: a 500ml carton at ₹24 — 2× makes exactly 1L → ₹48
+            "blinkit": [{"name": "Toned Milk", "unit": "500 ml",
+                         "sale_price": 24, "price": 24, "product_id": "b-500"}],
+        }
+        entry = self._run({"name": "Milk", "qty": "1L"}, store_products, monkeypatch)
+        assert entry["cheapest_app"] == "blinkit"
+        assert entry["selected_pid"] == "b-500"
+        assert entry["qty_count"] == 2
+        assert entry["cheapest_effective_price"] == 48
+
+    def test_cheapest_tiling_option_wins(self, monkeypatch):
+        store_products = {
+            # 250g × 4 = 1kg → ₹40
+            "zepto": [{"name": "Tomato", "unit": "250 g",
+                       "sale_price": 10, "price": 10, "product_id": "z-250"}],
+            # 500g × 2 = 1kg → ₹36 (cheaper effective) → should win
+            "blinkit": [{"name": "Tomato", "unit": "500 g",
+                         "sale_price": 18, "price": 18, "product_id": "b-500"}],
+        }
+        entry = self._run({"name": "Tomato", "qty": "1kg"}, store_products, monkeypatch)
+        assert entry["cheapest_app"] == "blinkit"
+        assert entry["qty_count"] == 2
+        assert entry["cheapest_effective_price"] == 36
 
 
 # ── _parse_qty ────────────────────────────────────────────────────────────────

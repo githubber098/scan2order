@@ -1,378 +1,146 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="fresh">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>scan2order: sign in</title>
-    <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-            background: #0a0a1a;
-            color: #e0e0e0;
-            min-height: 100vh;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            padding: 20px;
-        }
-
-        .container { width: 100%; max-width: 380px; }
-
-        .logo { text-align: center; margin-bottom: 32px; }
-        .logo h1 {
-            font-size: 26px;
-            background: linear-gradient(135deg, #4ecdc4, #2db5ad);
-            background-clip: text;
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
-        }
-        .logo p { color: #556; font-size: 13px; margin-top: 4px; }
-
-        .card {
-            background: #111122;
-            border: 1px solid #222;
-            border-radius: 14px;
-            padding: 26px 24px;
-        }
-
-        /* Channel toggle (Phone / Email) */
-        .toggle {
-            display: flex;
-            background: #0a0a1a;
-            border: 1px solid #222;
-            border-radius: 11px;
-            padding: 4px;
-            margin-bottom: 22px;
-        }
-        .toggle button {
-            flex: 1;
-            padding: 9px;
-            border: none;
-            border-radius: 8px;
-            background: none;
-            color: #667;
-            font-size: 14px;
-            font-weight: 600;
-            cursor: pointer;
-            transition: background 0.15s, color 0.15s;
-            font-family: inherit;
-        }
-        .toggle button.active {
-            background: linear-gradient(135deg, #4ecdc4, #2db5ad);
-            color: #001;
-        }
-
-        .step-label { font-size: 13px; color: #4ecdc4; font-weight: 600; margin-bottom: 6px; }
-        .step-title { font-size: 18px; font-weight: 700; color: #eee; margin-bottom: 6px; }
-        .step-sub { font-size: 13px; color: #667; margin-bottom: 20px; line-height: 1.5; }
-        .step-sub span { color: #4ecdc4; }
-
-        .field { margin-bottom: 14px; }
-        .field label {
-            display: block; font-size: 11px; color: #888; margin-bottom: 6px;
-            text-transform: uppercase; letter-spacing: 0.5px;
-        }
-        .field input {
-            width: 100%; padding: 12px 14px; background: #0a0a1a;
-            border: 1px solid #333; border-radius: 10px; color: #eee;
-            font-size: 16px; font-family: inherit; transition: border-color 0.15s;
-        }
-        .field input:focus { outline: none; border-color: #4ecdc4; }
-        .field input::placeholder { color: #444; }
-
-        /* Phone input with +91 prefix */
-        .phone-wrap {
-            display: flex; background: #0a0a1a; border: 1px solid #333;
-            border-radius: 10px; overflow: hidden; transition: border-color 0.15s;
-        }
-        .phone-wrap:focus-within { border-color: #4ecdc4; }
-        .phone-prefix {
-            padding: 12px 12px 12px 14px; color: #4ecdc4; font-size: 15px;
-            font-weight: 600; border-right: 1px solid #222; white-space: nowrap; user-select: none;
-        }
-        .phone-wrap input {
-            flex: 1; padding: 12px 14px; background: transparent; border: none;
-            color: #eee; font-size: 16px; font-family: inherit; letter-spacing: 1px;
-        }
-        .phone-wrap input:focus { outline: none; }
-        .phone-wrap input::placeholder { color: #444; letter-spacing: 0; }
-
-        .otp-input {
-            width: 100%; padding: 14px; background: #0a0a1a; border: 1px solid #333;
-            border-radius: 10px; color: #eee; font-size: 28px; font-weight: 700;
-            font-family: 'SF Mono', 'Fira Code', monospace; letter-spacing: 10px;
-            text-align: center; transition: border-color 0.15s;
-        }
-        .otp-input:focus { outline: none; border-color: #4ecdc4; }
-        .otp-input::placeholder { font-size: 18px; letter-spacing: 4px; color: #333; }
-
-        .btn-primary {
-            width: 100%; padding: 14px; margin-top: 4px; border: none;
-            border-radius: 12px; font-size: 15px; font-weight: 600; cursor: pointer;
-            background: linear-gradient(135deg, #4ecdc4, #2db5ad); color: #001;
-            transition: opacity 0.15s; font-family: inherit;
-        }
-        .btn-primary:disabled { opacity: 0.45; cursor: not-allowed; }
-
-        .btn-ghost {
-            width: 100%; padding: 11px; margin-top: 8px; border: 1px solid #333;
-            border-radius: 12px; font-size: 13px; font-weight: 500; cursor: pointer;
-            background: transparent; color: #778; transition: color 0.15s, border-color 0.15s;
-            font-family: inherit;
-        }
-        .btn-ghost:hover:not(:disabled) { color: #aaa; border-color: #444; }
-        .btn-ghost:disabled { opacity: 0.4; cursor: not-allowed; }
-
-        .error-msg {
-            display: none; margin-top: 12px; padding: 10px 14px; background: #1a0808;
-            border-left: 3px solid #e24b4a; border-radius: 6px; font-size: 13px; color: #e24b4a;
-        }
-        .error-msg.visible { display: block; }
-
-        .countdown { text-align: center; font-size: 12px; color: #556; margin-top: 14px; }
-        .countdown span { color: #4ecdc4; font-weight: 600; }
-
-        .hidden { display: none; }
-    </style>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+<title>scan2order · Sign in</title>
+<link rel="icon" type="image/svg+xml" href="/static/favicon.svg" />
+<link rel="stylesheet" href="/static/theme.css?v={{ asset_v }}" />
+<script defer src="/static/app.js?v={{ asset_v }}"></script>
+<style>
+  .login-wrap{ min-height:100vh; display:flex; align-items:center; justify-content:center; padding:24px; }
+  .login-card{ width:100%; max-width:400px; }
+  .auroraglow{ position:fixed; border-radius:50%; filter:blur(60px); opacity:.5; pointer-events:none; z-index:0; }
+</style>
 </head>
-<body>
-<div class="container">
-    <div class="logo">
-        <h1>scan2order</h1>
-        <p>grocery price comparison across BigBasket, Blinkit &amp; Zepto</p>
-    </div>
+<body data-page="login">
+  <div class="auroraglow" style="width:300px;height:300px;top:-80px;left:-60px;background:var(--accent)"></div>
+  <div class="login-wrap">
+    <div class="login-card" style="position:relative;z-index:1">
+      <div class="center" style="margin-bottom:24px">
+        <div class="wm lg" style="margin:0 auto">scan2order</div>
+        <div class="tag">grocery price comparison · BigBasket, Blinkit &amp; Zepto</div>
+      </div>
 
-    <div class="card">
-
-        <!-- Step 1: choose channel + enter contact -->
+      <div class="card" style="padding:22px">
+        <!-- step 1: contact -->
         <div id="step-contact">
-            <div class="toggle">
-                <button id="ch-phone" class="active" onclick="switchChannel('phone')">📱 Phone</button>
-                <button id="ch-email" onclick="switchChannel('email')">✉️ Email</button>
+          <div class="seg" style="margin-bottom:20px">
+            <button class="on" id="tab-phone" onclick="selectMethod('phone')"><span class="row" style="gap:6px;justify-content:center"><i data-ico="phone" data-s="15"></i>Phone</span></button>
+            <button id="tab-email" onclick="selectMethod('email')"><span class="row" style="gap:6px;justify-content:center"><i data-ico="mail" data-s="15"></i>Email</span></button>
+          </div>
+          <h1 class="h2" style="margin-bottom:4px">Sign in or sign up</h1>
+          <p class="lead" style="margin-bottom:18px">We'll send you a one-time code.</p>
+
+          <div id="field-phone">
+            <label class="label">Phone number</label>
+            <div class="row" style="gap:0;border:1px solid var(--card-br);border-radius:var(--radius-sm);overflow:hidden;background:var(--input-bg)">
+              <span style="padding:13px 12px;color:var(--accent2);font-weight:700;border-right:1px solid var(--card-br)">+91</span>
+              <input class="input" id="input-phone" type="tel" inputmode="numeric" placeholder="98765 43210" style="border:none;border-radius:0;letter-spacing:.5px" />
             </div>
+          </div>
 
-            <div class="step-title">Sign in or sign up</div>
-            <div class="step-sub" id="contact-sub">We'll text you a one-time code.</div>
+          <div id="field-email" style="display:none">
+            <label class="label">Email address</label>
+            <input class="input" id="input-email" type="email" inputmode="email" placeholder="you@example.com" autocomplete="email" />
+          </div>
 
-            <!-- Phone field -->
-            <div class="field" id="field-phone">
-                <label for="phone-input">Phone number</label>
-                <div class="phone-wrap">
-                    <span class="phone-prefix">+91</span>
-                    <input type="tel" id="phone-input" placeholder="98765 43210"
-                           maxlength="10" inputmode="numeric" autocomplete="tel-national">
-                </div>
-            </div>
-
-            <!-- Email field -->
-            <div class="field hidden" id="field-email">
-                <label for="email-input">Email address</label>
-                <input type="email" id="email-input" placeholder="you@example.com"
-                       autocomplete="email">
-            </div>
-
-            <button class="btn-primary" id="send-btn" onclick="handleSendOtp()">Send code</button>
-            <div class="error-msg" id="contact-error"></div>
+          <div id="login-msg1" class="dim" style="font-size:12.5px;margin-top:8px;min-height:1em"></div>
+          <button class="btn" style="margin-top:12px" onclick="sendCode()">Send code</button>
         </div>
 
-        <!-- Step 2: enter OTP -->
-        <div id="step-otp" class="hidden">
-            <div class="step-title">Enter the code</div>
-            <div class="step-sub">Sent to <span id="otp-target-display"></span></div>
-
-            <div class="field">
-                <label for="otp-input">6-digit code</label>
-                <input type="text" id="otp-input" class="otp-input" placeholder="——————"
-                       maxlength="6" inputmode="numeric" autocomplete="one-time-code">
-            </div>
-
-            <button class="btn-primary" id="verify-btn" onclick="handleVerifyOtp()">Verify</button>
-            <button class="btn-ghost" id="back-btn" onclick="resetToStep1()">← Use a different phone/email</button>
-            <div class="error-msg" id="otp-error"></div>
-            <div class="countdown" id="countdown-wrap">
-                <span id="countdown-text"></span>
-                <button class="btn-ghost hidden" id="resend-btn" onclick="handleResend()">Resend code</button>
-            </div>
+        <!-- step 2: code -->
+        <div id="step-code" style="display:none">
+          <button onclick="backToContact()" style="background:none;border:none;color:var(--muted);font-size:13px;padding:0;margin-bottom:16px;cursor:pointer" class="row">
+            <span style="display:inline-flex;transform:scaleX(-1)"><i data-ico="chevron" data-s="15"></i></span>Back
+          </button>
+          <h1 class="h1" style="margin-bottom:6px">Enter the code</h1>
+          <p class="lead" style="margin-bottom:20px">Sent to <span class="num" id="sent-to" style="color:var(--accent2);font-weight:600"></span></p>
+          <input class="input" id="input-code" type="text" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]*" placeholder="000000" maxlength="6" style="font-size:22px;letter-spacing:4px;text-align:center" />
+          <div id="login-msg2" class="dim" style="font-size:12.5px;margin-top:8px;min-height:1em"></div>
+          <button class="btn" style="margin-top:12px" onclick="verifyCode()">Verify</button>
+          <div class="center muted" id="resend-row" style="margin-top:14px;font-size:12.5px;display:none">
+            <button onclick="sendCode(true)" style="background:none;border:none;color:var(--accent2);cursor:pointer;font-size:12.5px">Resend code</button>
+          </div>
         </div>
+      </div>
 
+      <p class="center dim" style="font-size:11.5px;margin-top:18px">By continuing you agree to our Terms &amp; Privacy</p>
     </div>
-</div>
+  </div>
 
-<script>
-let _channel = 'phone';   // 'phone' | 'email'
-let _target  = '';        // normalised value sent to the server
-let _resendTimer = null;
+  <script>
+    let _channel = 'phone';
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
-
-function showError(id, msg) {
-    const el = document.getElementById(id);
-    el.textContent = msg;
-    el.classList.add('visible');
-}
-function hideError(id) { document.getElementById(id).classList.remove('visible'); }
-
-function normalisePhone(raw) {
-    const d = raw.replace(/\D/g, '');
-    if (d.length === 10 && /^[6-9]/.test(d)) return '+91' + d;
-    if (d.length === 11 && d.startsWith('0') && /^[6-9]/.test(d.slice(1))) return '+91' + d.slice(1);
-    if (d.length === 12 && d.startsWith('91')) return '+' + d;
-    return null;
-}
-function normaliseEmail(raw) {
-    const s = raw.trim().toLowerCase();
-    return /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(s) ? s : null;
-}
-
-// ── Channel toggle ──────────────────────────────────────────────────────────
-
-function switchChannel(ch) {
-    _channel = ch;
-    const isPhone = ch === 'phone';
-    document.getElementById('ch-phone').classList.toggle('active', isPhone);
-    document.getElementById('ch-email').classList.toggle('active', !isPhone);
-    document.getElementById('field-phone').classList.toggle('hidden', !isPhone);
-    document.getElementById('field-email').classList.toggle('hidden', isPhone);
-    document.getElementById('contact-sub').textContent =
-        isPhone ? "We'll text you a one-time code." : "We'll email you a one-time code.";
-    hideError('contact-error');
-    (isPhone ? document.getElementById('phone-input')
-             : document.getElementById('email-input')).focus();
-}
-
-// ── Step 1: send OTP ──────────────────────────────────────────────────────────
-
-async function handleSendOtp() {
-    hideError('contact-error');
-    let target;
-    if (_channel === 'phone') {
-        target = normalisePhone(document.getElementById('phone-input').value);
-        if (!target) return showError('contact-error', 'Enter a valid 10-digit Indian mobile number.');
-    } else {
-        target = normaliseEmail(document.getElementById('email-input').value);
-        if (!target) return showError('contact-error', 'Enter a valid email address.');
+    function selectMethod(m) {
+      _channel = m;
+      const phone = m === 'phone';
+      document.getElementById('tab-phone').classList.toggle('on', phone);
+      document.getElementById('tab-email').classList.toggle('on', !phone);
+      document.getElementById('field-phone').style.display = phone ? '' : 'none';
+      document.getElementById('field-email').style.display = phone ? 'none' : '';
     }
-    _target = target;
 
-    const btn = document.getElementById('send-btn');
-    btn.disabled = true; btn.textContent = 'Sending…';
-    try {
-        const resp = await fetch('/api/auth/send-otp', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ channel: _channel, value: target }),
+    function _getValue() {
+      if (_channel === 'phone') {
+        const raw = document.getElementById('input-phone').value.replace(/\D/g,'');
+        if (raw.length === 10 && /^[6-9]/.test(raw)) return '+91' + raw;
+        if (raw.length === 12 && raw.startsWith('91')) return '+' + raw;
+        return null;
+      }
+      const v = document.getElementById('input-email').value.trim();
+      return /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(v) ? v : null;
+    }
+
+    function backToContact() {
+      document.getElementById('step-code').style.display = 'none';
+      document.getElementById('step-contact').style.display = '';
+    }
+
+    async function sendCode(resend) {
+      const val = _getValue();
+      const msg = document.getElementById('login-msg1');
+      if (!val) { msg.textContent = _channel==='phone' ? 'Enter a valid 10-digit Indian phone number.' : 'Enter a valid email address.'; return; }
+      msg.textContent = 'Sending…';
+      try {
+        const r = await fetch('/api/auth/send-otp', {
+          method:'POST', headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({ channel: _channel, value: val }),
         });
-        const data = await resp.json();
-        if (!data.success) return showError('contact-error', data.error || 'Failed to send code.');
-        showStep2();
-    } catch {
-        showError('contact-error', 'Network error. Please try again.');
-    } finally {
-        btn.disabled = false; btn.textContent = 'Send code';
-    }
-}
-
-function showStep2() {
-    document.getElementById('step-contact').classList.add('hidden');
-    document.getElementById('step-otp').classList.remove('hidden');
-    let display = _target;
-    if (_channel === 'phone') display = _target.replace(/^\+91/, '+91 ').replace(/(\d{5})(\d{5})$/, '$1 $2');
-    document.getElementById('otp-target-display').textContent = display;
-    document.getElementById('otp-input').value = '';
-    document.getElementById('otp-input').focus();
-    startResendTimer();
-}
-
-function resetToStep1() {
-    document.getElementById('step-otp').classList.add('hidden');
-    document.getElementById('step-contact').classList.remove('hidden');
-    hideError('otp-error');
-    if (_resendTimer) clearInterval(_resendTimer);
-}
-
-// ── Step 2: verify OTP ────────────────────────────────────────────────────────
-
-document.addEventListener('DOMContentLoaded', () => {
-    document.getElementById('otp-input').addEventListener('input', (e) => {
-        e.target.value = e.target.value.replace(/\D/g, '').slice(0, 6);
-        if (e.target.value.length === 6) handleVerifyOtp();
-    });
-    document.getElementById('phone-input').addEventListener('input', (e) => {
-        e.target.value = e.target.value.replace(/\D/g, '').slice(0, 10);
-    });
-    document.getElementById('phone-input').addEventListener('keydown', (e) => { if (e.key === 'Enter') handleSendOtp(); });
-    document.getElementById('email-input').addEventListener('keydown', (e) => { if (e.key === 'Enter') handleSendOtp(); });
-});
-
-async function handleVerifyOtp() {
-    hideError('otp-error');
-    const code = document.getElementById('otp-input').value.trim();
-    if (code.length !== 6) return showError('otp-error', 'Enter the 6-digit code.');
-
-    const btn = document.getElementById('verify-btn');
-    btn.disabled = true; btn.textContent = 'Verifying…';
-    try {
-        const resp = await fetch('/api/auth/verify-otp', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ channel: _channel, value: _target, code }),
-        });
-        const data = await resp.json();
-        if (!data.success) {
-            showError('otp-error', data.error || 'Invalid code.');
-            document.getElementById('otp-input').value = '';
-            document.getElementById('otp-input').focus();
-            return;
-        }
-        window.location.href = '/';
-    } catch {
-        showError('otp-error', 'Network error. Please try again.');
-    } finally {
-        btn.disabled = false; btn.textContent = 'Verify';
-    }
-}
-
-// ── Resend countdown ──────────────────────────────────────────────────────────
-
-function startResendTimer() {
-    const resendBtn = document.getElementById('resend-btn');
-    const txt = document.getElementById('countdown-text');
-    resendBtn.classList.add('hidden');
-    let s = 60;
-    txt.textContent = `Resend available in ${s}s`;
-    if (_resendTimer) clearInterval(_resendTimer);
-    _resendTimer = setInterval(() => {
-        s--;
-        if (s <= 0) {
-            clearInterval(_resendTimer);
-            txt.textContent = '';
-            resendBtn.classList.remove('hidden');
+        const d = await r.json();
+        if (d.error) { msg.textContent = d.error; return; }
+        document.getElementById('sent-to').textContent = val;
+        document.getElementById('step-contact').style.display = 'none';
+        document.getElementById('step-code').style.display = '';
+        // Dev mode: server echoes the code when no SMTP/SMS is configured.
+        if (d.dev_code) {
+          document.getElementById('input-code').value = d.dev_code;
+          document.getElementById('login-msg2').textContent = 'Dev code auto-filled: ' + d.dev_code;
         } else {
-            txt.textContent = `Resend available in ${s}s`;
+          document.getElementById('login-msg2').textContent = resend ? 'New code sent.' : '';
         }
-    }, 1000);
-}
-
-async function handleResend() {
-    hideError('otp-error');
-    const btn = document.getElementById('resend-btn');
-    btn.disabled = true; btn.textContent = 'Sending…';
-    try {
-        const resp = await fetch('/api/auth/send-otp', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ channel: _channel, value: _target }),
-        });
-        const data = await resp.json();
-        if (!data.success) { showError('otp-error', data.error || 'Failed to resend.'); }
-        else { startResendTimer(); }
-    } catch {
-        showError('otp-error', 'Network error. Please try again.');
-    } finally {
-        btn.disabled = false; btn.textContent = 'Resend code';
+        document.getElementById('input-code').value = '';
+        document.getElementById('input-code').focus();
+        setTimeout(() => { document.getElementById('resend-row').style.display=''; }, 20000);
+      } catch(e) { msg.textContent = 'Error: ' + e.message; }
     }
-}
-</script>
+
+    async function verifyCode() {
+      const val = _getValue();
+      const code = document.getElementById('input-code').value.trim();
+      const msg = document.getElementById('login-msg2');
+      if (!code || code.length < 4) { msg.textContent = 'Enter the 6-digit code.'; return; }
+      msg.textContent = 'Verifying…';
+      try {
+        const r = await fetch('/api/auth/verify-otp', {
+          method:'POST', headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({ channel: _channel, value: val, code }),
+        });
+        const d = await r.json();
+        if (d.error) { msg.textContent = d.error; return; }
+        window.location.href = d.redirect || '/';
+      } catch(e) { msg.textContent = 'Error: ' + e.message; }
+    }
+  </script>
 </body>
 </html>

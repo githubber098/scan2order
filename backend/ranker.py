@@ -93,6 +93,56 @@ def _is_reasonable_size(product: dict, query_qty: str) -> bool:
     return pval <= base
 
 
+def _qty_multiplier(target_qty_str: str, product: dict) -> int | None:
+    """Return N such that N × product_qty == target_qty (integer ≥ 1), or None.
+
+    None means the product cannot be combined in whole-unit multiples to reach
+    exactly the requested weight/volume, so it should be filtered out when a
+    target is explicitly specified.
+
+    Returns 1 (no-op) when target_qty_str is empty/unparseable so products
+    without a size specification are kept in the running.
+    """
+    if not target_qty_str:
+        return 1  # no target → order 1 unit, no filtering
+
+    tq = _parse_qty(target_qty_str)
+    if tq is None:
+        return 1  # unparseable target → don't filter
+
+    pq = _product_qty(product)
+    if pq is None:
+        return None  # target given but product has no size → exclude
+
+    t_val, t_kind = tq
+    p_val, p_kind = pq
+
+    if t_kind != p_kind or p_val <= 0 or t_val <= 0:
+        return None
+
+    if p_val > t_val:
+        return None  # single unit already exceeds target
+
+    # t_val / p_val must be a positive integer (≤ tiny floating-point error)
+    ratio = t_val / p_val
+    n = int(round(ratio))
+    if n >= 1 and abs(n * p_val - t_val) < 0.5:
+        return n
+    return None
+
+
+def _effective_price(target_qty_str: str, product: dict) -> float:
+    """Total cost to reach the target quantity using this product.
+
+    Returns product.price × N where N = _qty_multiplier().
+    Falls back to the raw product price when no qty multiplier applies.
+    """
+    n = _qty_multiplier(target_qty_str, product)
+    if n is None:
+        return float("inf")  # excluded product
+    return _product_price(product) * n
+
+
 def _qty_distance(query_qty: str, product: dict) -> float:
     pq = _parse_qty(query_qty)
     if pq is None:
@@ -323,8 +373,11 @@ async def compare_one_item(item: dict, user_id: str,
         "zepto": zepto.search_item_api,
     }
 
-    search_query = f"{item.get('name', '')} {item.get('qty', '')}".strip()
-    print(f"[compare-one] Searching: '{search_query}'")
+    qty_str = (item.get("qty") or "").strip()
+    # Search WITHOUT the quantity — the stores' text search is more reliable
+    # without it, and quantity filtering/multiplication happens post-search.
+    search_query = item.get("name", "").strip() or f"{item.get('name', '')} {qty_str}".strip()
+    print(f"[compare-one] Searching: '{search_query}' (target qty: '{qty_str}')")
 
     app_results: dict = {}
 
@@ -343,12 +396,23 @@ async def compare_one_item(item: dict, user_id: str,
 
     cheapest_app = None
     cheapest_price = float("inf")
-    cheapest_dist = float("inf")
     cheapest_ppu = float("inf")
+    cheapest_eff = float("inf")   # effective price (price × qty_count)
     selected_pid = None
     selected_name = None
+    selected_qty_count = 1        # how many units to order
     relevant_count = {}
-    qty_str = (item.get("qty") or "").strip()
+
+    # Target amount in base units (g / ml / count) — used to normalise the
+    # relaxed fallback so a tiny pack can't masquerade as cheaper than a
+    # legitimately-tiling product at another store.
+    _tq = _parse_qty(qty_str) if qty_str else None
+    target_amount = _tq[0] if _tq else 0
+
+    # Two separate accumulators. The tiling candidate (whole-unit multiple of
+    # the requested quantity) ALWAYS wins over a relaxed fallback, no matter the
+    # raw price — buying 1×180ml is not a substitute for 1L.
+    best_fb = None  # (eff, ppu, price, app, pid, name, n) — relaxed fallback
 
     for app_name, products in app_results.items():
         if not products:
@@ -368,23 +432,61 @@ async def compare_one_item(item: dict, user_id: str,
         if not sized:
             continue
 
-        sized.sort(key=lambda p: (
-            _qty_distance(qty_str, p),
-            _price_per_unit(p),
-            _product_price(p),
-        ))
-        best = sized[0]
-        price = _product_price(best)
-        dist = _qty_distance(qty_str, best)
-        ppu = _price_per_unit(best)
+        if qty_str:
+            # PRIMARY: only products whose unit size tiles the target exactly.
+            qty_valid = [(p, _qty_multiplier(qty_str, p)) for p in sized]
+            filtered = [(p, n) for p, n in qty_valid if n is not None]
+            if filtered:
+                filtered.sort(key=lambda pn: (
+                    _product_price(pn[0]) * pn[1],
+                    _price_per_unit(pn[0]),
+                ))
+                best, best_n = filtered[0]
+                eff_price = _product_price(best) * best_n
+                if _product_price(best) > 0 and eff_price < cheapest_eff:
+                    cheapest_eff = eff_price
+                    cheapest_ppu = _price_per_unit(best)
+                    cheapest_price = _product_price(best)
+                    cheapest_app = app_name
+                    selected_pid = best.get("product_id")
+                    selected_name = best.get("name")
+                    selected_qty_count = best_n
 
-        if price > 0 and (dist, ppu, price) < (cheapest_dist, cheapest_ppu, cheapest_price):
-            cheapest_dist = dist
-            cheapest_ppu = ppu
-            cheapest_price = price
+            # RELAXED FALLBACK: no exact-tiling product at this store. Score by
+            # the cost to obtain the target quantity at this product's per-unit
+            # rate (ppu × target) so it's comparable across stores. Only used if
+            # NO store has a tiling product at all.
+            else:
+                sized.sort(key=lambda p: (
+                    _qty_distance(qty_str, p), _price_per_unit(p), _product_price(p),
+                ))
+                fb = sized[0]
+                fb_price = _product_price(fb)
+                fb_ppu = _price_per_unit(fb)
+                fb_eff = (fb_ppu * target_amount
+                          if (fb_ppu < float("inf") and target_amount) else fb_price)
+                if fb_price > 0 and (best_fb is None or fb_eff < best_fb[0]):
+                    best_fb = (fb_eff, fb_ppu, fb_price, app_name,
+                               fb.get("product_id"), fb.get("name"), 1)
+            continue
+
+        # No target quantity — rank purely by per-unit price.
+        sized.sort(key=lambda p: (_price_per_unit(p), _product_price(p)))
+        best = sized[0]
+        eff_price = _product_price(best)
+        if _product_price(best) > 0 and eff_price < cheapest_eff:
+            cheapest_eff = eff_price
+            cheapest_ppu = _price_per_unit(best)
+            cheapest_price = _product_price(best)
             cheapest_app = app_name
             selected_pid = best.get("product_id")
             selected_name = best.get("name")
+            selected_qty_count = 1
+
+    # Use the relaxed fallback only when no store had an exact-tiling product.
+    if cheapest_app is None and best_fb is not None:
+        (cheapest_eff, cheapest_ppu, cheapest_price,
+         cheapest_app, selected_pid, selected_name, selected_qty_count) = best_fb
 
     # No algorithmic winner — try Ollama as a fallback
     if not cheapest_app and os.getenv("OLLAMA_HOST") and app_results:
@@ -400,6 +502,8 @@ async def compare_one_item(item: dict, user_id: str,
                 cheapest_price = _product_price(best)
                 selected_pid = best.get("product_id")
                 selected_name = best.get("name")
+                selected_qty_count = _qty_multiplier(qty_str, best) or 1
+                cheapest_eff = cheapest_price * selected_qty_count
                 print(f"[compare-one]   -> ollama picked: {cheapest_app} '{(selected_name or '')[:50]}'")
 
     rel_summary = ", ".join(
@@ -417,14 +521,15 @@ async def compare_one_item(item: dict, user_id: str,
         "search_query": search_query,
         "prices": app_results,
         "cheapest_app": cheapest_app,
+        # cheapest_price = per-unit price of the selected product
+        # cheapest_effective_price = total cost to meet the requested quantity
         "cheapest_price": cheapest_price if cheapest_app else None,
+        "cheapest_effective_price": cheapest_eff if cheapest_app else None,
         "selected_pid": selected_pid,
+        # qty_count: number of units to add to cart (>1 when multiplying to
+        # reach target weight, e.g. 4× 250g to make 1kg).
+        "qty_count": selected_qty_count,
         # Up to 15 ranked alternatives for the swap UI.
-        # Tier 1: passed relevance + size filter (best alternatives).
-        # Tier 2: passed relevance only.  Winner excluded.
-        # Clients display winner + shortlist[0:2] = 3 choices; "see more"
-        # reveals the rest.  Client swaps by updating selected_pid/cheapest_app
-        # locally before submitting the cart.
         "shortlist": build_shortlist(
             app_results, search_query, qty_str,
             winner_pid=selected_pid, winner_app=cheapest_app,
@@ -449,7 +554,12 @@ def selected_product(entry: dict) -> dict:
 
 
 def build_carts_from_comparison(comparison: list) -> dict:
-    """Group a comparison list into {store: {items, total}} carts."""
+    """Group a comparison list into {store: {items, total}} carts.
+
+    count = qty_count (units to buy to reach the target weight) × any explicit
+    per-line count the user set. total uses unit_price × count so weight
+    multipliers (e.g. 4× 250g for 1kg) are reflected in the basket total.
+    """
     carts: dict = {}
     for i, entry in enumerate(comparison):
         app = entry.get("cheapest_app")
@@ -459,14 +569,19 @@ def build_carts_from_comparison(comparison: list) -> dict:
             carts[app] = {"items": [], "total": 0}
         prod = selected_product(entry)
         try:
-            count = max(1, int(entry.get("item", {}).get("count") or 1))
+            user_count = max(1, int(entry.get("item", {}).get("count") or 1))
         except (TypeError, ValueError):
-            count = 1
+            user_count = 1
+        qty_count = max(1, int(entry.get("qty_count") or 1))
+        count = qty_count * user_count
         unit_price = entry["cheapest_price"] or 0
         carts[app]["items"].append({
             **entry["item"],
             "price": unit_price,
+            "count": count,
             "product_id": prod.get("product_id"),
+            "store_product_id": prod.get("store_product_id", ""),
+            "fc_id": prod.get("fc_id", ""),
             "search_query": entry["search_query"],
             "matched_name": prod.get("name", ""),
             "matched_unit": prod.get("unit", ""),

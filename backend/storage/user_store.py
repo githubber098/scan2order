@@ -164,6 +164,8 @@ _SQLITE_DDL = """
         user_id    TEXT PRIMARY KEY,
         phone      TEXT,
         email      TEXT,
+        name       TEXT,
+        theme      TEXT NOT NULL DEFAULT 'fresh',
         created_at REAL NOT NULL,
         last_login REAL
     );
@@ -175,6 +177,16 @@ _SQLITE_DDL = """
         expires_at REAL NOT NULL,
         used       INTEGER NOT NULL DEFAULT 0,
         created_at REAL NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS comparisons (
+        id          TEXT PRIMARY KEY,
+        user_id     TEXT NOT NULL,
+        created_at  REAL NOT NULL,
+        query_text  TEXT NOT NULL,
+        items_json  TEXT NOT NULL,
+        grand_total REAL NOT NULL DEFAULT 0,
+        savings     REAL NOT NULL DEFAULT 0,
+        stores_json TEXT NOT NULL DEFAULT '[]'
     )
 """
 
@@ -198,9 +210,22 @@ _MYSQL_DDL = """
         user_id    VARCHAR(255) NOT NULL,
         phone      VARCHAR(20)  UNIQUE,
         email      VARCHAR(255) UNIQUE,
+        name       VARCHAR(255),
+        theme      VARCHAR(32)  NOT NULL DEFAULT 'fresh',
         created_at DOUBLE       NOT NULL,
         last_login DOUBLE,
         PRIMARY KEY (user_id)
+    );
+    CREATE TABLE IF NOT EXISTS comparisons (
+        id          VARCHAR(255) NOT NULL,
+        user_id     VARCHAR(255) NOT NULL,
+        created_at  DOUBLE       NOT NULL,
+        query_text  TEXT         NOT NULL,
+        items_json  TEXT         NOT NULL,
+        grand_total DOUBLE       NOT NULL DEFAULT 0,
+        savings     DOUBLE       NOT NULL DEFAULT 0,
+        stores_json TEXT         NOT NULL DEFAULT '[]',
+        PRIMARY KEY (id)
     );
     CREATE TABLE IF NOT EXISTS otp_codes (
         target     VARCHAR(255) NOT NULL,
@@ -394,6 +419,22 @@ def _migrate(conn, is_mysql: bool) -> None:
             conn.commit()
         except Exception:
             pass
+
+    # Add name + theme columns if missing (safe with IF NOT EXISTS not available
+    # for ALTER; catch the already-exists error instead).
+    if _table_exists(conn, "users"):
+        for col, default in [("name", None), ("theme", "'fresh'")]:
+            if not _col_exists(conn, "users", col):
+                try:
+                    defpart = f" DEFAULT {default}" if default else ""
+                    if is_mysql:
+                        conn.execute(f"ALTER TABLE users ADD COLUMN {col} VARCHAR(255){defpart}")
+                    else:
+                        conn.execute(f"ALTER TABLE users ADD COLUMN {col} TEXT{defpart}")
+                    conn.commit()
+                    print(f"[user_store] migrated: added {col} column to users")
+                except Exception as e:
+                    print(f"[user_store] {col}-add skipped: {e}")
 
 
 # ── Connection initialisation ──────────────────────────────────────────────────
@@ -644,11 +685,18 @@ def attach_contact(user_id: str, channel: str, value: str) -> tuple[bool, str | 
 
 def get_user_by_id(user_id: str) -> dict | None:
     row = _conn.execute(
-        "SELECT user_id, phone, email FROM users WHERE user_id=?", (user_id,)
+        "SELECT user_id, phone, email, name, theme FROM users WHERE user_id=?",
+        (user_id,),
     ).fetchone()
     if not row:
         return None
-    return {"user_id": row["user_id"], "phone": row["phone"], "email": row["email"]}
+    return {
+        "user_id": row["user_id"],
+        "phone": row["phone"],
+        "email": row["email"],
+        "name": row["name"],
+        "theme": row["theme"] or "fresh",
+    }
 
 
 def update_last_login(user_id: str) -> None:
@@ -718,3 +766,79 @@ def verify_and_consume_otp(target: str, code: str) -> bool:
         _conn.execute("UPDATE otp_codes SET used=1 WHERE target=?", (target,))
         _conn.commit()
         return True
+
+
+# ── Name & theme ──────────────────────────────────────────────────────────────
+
+def set_user_name(user_id: str, name: str) -> None:
+    """Persist a display name for the user (max 80 chars)."""
+    with _lock:
+        _conn.execute(
+            "UPDATE users SET name=? WHERE user_id=?",
+            (name[:80].strip(), user_id),
+        )
+        _conn.commit()
+
+
+def set_user_theme(user_id: str, theme: str) -> None:
+    """Persist the user's preferred UI theme."""
+    _VALID = {"fresh", "night", "aurora", "mono", "light", "brutal"}
+    if theme not in _VALID:
+        return
+    with _lock:
+        _conn.execute(
+            "UPDATE users SET theme=? WHERE user_id=?",
+            (theme, user_id),
+        )
+        _conn.commit()
+
+
+# ── Comparison history ────────────────────────────────────────────────────────
+
+def save_comparison(
+    user_id: str,
+    query_text: str,
+    items: list,
+    grand_total: float,
+    savings: float,
+    stores: list,
+) -> str:
+    """Persist a completed comparison run and return its id."""
+    cid = str(uuid.uuid4())
+    now = time.time()
+    with _lock:
+        _conn.execute(
+            "INSERT INTO comparisons (id, user_id, created_at, query_text, items_json,"
+            " grand_total, savings, stores_json) VALUES (?,?,?,?,?,?,?,?)",
+            (cid, user_id, now, query_text[:2000],
+             json.dumps(items), grand_total, savings, json.dumps(stores)),
+        )
+        _conn.commit()
+    return cid
+
+
+def get_history(user_id: str, limit: int = 50) -> list[dict]:
+    """Return the last *limit* comparisons for the user, newest first."""
+    rows = _conn.execute(
+        "SELECT id, created_at, query_text, items_json, grand_total, savings, stores_json"
+        " FROM comparisons WHERE user_id=?"
+        " ORDER BY created_at DESC LIMIT ?",
+        (user_id, limit),
+    ).fetchall()
+    result = []
+    for r in rows:
+        items = json.loads(r["items_json"] or "[]")
+        stores = json.loads(r["stores_json"] or "[]")
+        title = items[0].get("name", "Order") if items else "Order"
+        if len(items) > 1:
+            title += f" + {len(items)-1} more"
+        result.append({
+            "id": r["id"],
+            "date": r["created_at"],
+            "title": title,
+            "items": items,
+            "total": r["grand_total"],
+            "saved": r["savings"],
+            "stores": stores,
+        })
+    return result

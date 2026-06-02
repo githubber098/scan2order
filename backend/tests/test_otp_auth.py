@@ -315,6 +315,28 @@ class TestUserStoreContacts:
         u = user_store.get_user_by_id(uid)
         assert u["phone"] == "+919999999999" and u["email"] == "x@y.com"
 
+    def test_name_and_theme_round_trip(self, clean_db):
+        """Regression: get_user_by_id must return name + theme (not just
+        phone/email), and set_user_name/set_user_theme must persist them."""
+        from storage import user_store
+        uid = user_store.get_or_create_user("email", "n@t.com")
+        # defaults
+        u = user_store.get_user_by_id(uid)
+        assert u["name"] is None
+        assert u["theme"] == "fresh"
+        # set + read back
+        user_store.set_user_name(uid, "Raghav")
+        user_store.set_user_theme(uid, "aurora")
+        u = user_store.get_user_by_id(uid)
+        assert u["name"] == "Raghav"
+        assert u["theme"] == "aurora"
+
+    def test_set_invalid_theme_ignored(self, clean_db):
+        from storage import user_store
+        uid = user_store.get_or_create_user("email", "n2@t.com")
+        user_store.set_user_theme(uid, "not-a-real-theme")
+        assert user_store.get_user_by_id(uid)["theme"] == "fresh"
+
     def test_attach_contact_merges_other_account(self, clean_db):
         from storage import user_store
         other = user_store.get_or_create_user("email", "x@y.com")
