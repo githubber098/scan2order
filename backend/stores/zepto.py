@@ -173,21 +173,6 @@ def _get_zepto_session(user_id: str) -> dict:
             store_ids = found
             print(f"[zepto] store_id recovered from stored blobs: {store_id}")
 
-    # ── TEMP DIAGNOSTIC: show what's actually in the stored Zepto session so
-    # we can find where (if anywhere) a usable storeId lives.
-    try:
-        print(f"[zepto][DIAG] cookie keys = {sorted(raw_cookies.keys())}")
-        print(f"[zepto][DIAG] localStorage keys = {sorted(local_storage.keys())}")
-        print(f"[zepto][DIAG] serviceability raw = {serviceability[:400]!r}")
-        for _k in ("userAddresses", "user-position", "userPosition",
-                   "selectedAddress", "header-store"):
-            _v = local_storage.get(_k)
-            if _v:
-                print(f"[zepto][DIAG] localStorage[{_k}] = {str(_v)[:500]}")
-        print(f"[zepto][DIAG] resolved store_id = {store_id!r}")
-    except Exception as _e:
-        print(f"[zepto][DIAG] dump failed: {_e}")
-
     return {
         "cookies": raw_cookies,
         "local_storage": local_storage,

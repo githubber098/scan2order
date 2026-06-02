@@ -246,6 +246,22 @@
 
         .skipped-notice { color: #888; font-size: 12px; margin-top: 6px; font-style: italic; }
 
+        /* Stale-session warning shown above results when a connected store
+           returns nothing (likely expired tokens / missing delivery store). */
+        .store-warning {
+            background: #2a1a0a; border: 1px solid #5a3a1a; border-left: 3px solid #e8a52a;
+            border-radius: 10px; padding: 12px 14px; margin-bottom: 14px;
+            font-size: 13px; color: #e8b860; line-height: 1.5;
+        }
+        .store-warning b { color: #ffd591; }
+        .store-warning .sw-reconnect {
+            display: inline-block; margin-top: 8px; padding: 5px 14px;
+            background: none; border: 1px solid #e8a52a; color: #e8a52a;
+            border-radius: 8px; font-size: 12px; font-weight: 600; cursor: pointer;
+            font-family: inherit;
+        }
+        .store-warning .sw-reconnect:hover { background: rgba(232,165,42,0.12); }
+
         /* Browser auth modal — near full-screen, mobile-sized browser pane */
         .browser-modal {
             display: none; position: fixed; inset: 0;
@@ -516,6 +532,7 @@ Atta 5kg
 
     <div id="results-section" class="results-section" style="display:none">
         <h2>Results</h2>
+        <div id="store-warning" class="store-warning" style="display:none"></div>
         <div id="item-cards"></div>
 
         <div class="summary-card" id="summary-card" style="display:none">
@@ -1293,7 +1310,33 @@ function renderResults(data) {
     document.getElementById('skipped-notice').textContent =
         skipped.length ? `Skipped (not connected): ${skipped.join(', ')}` : '';
 
+    _renderStoreWarning(comparison, skipped);
     _rebuildCarts();
+}
+
+// A connected store that returned ZERO products across EVERY item almost
+// always means its saved session went stale (expired tokens, or — for Zepto —
+// a missing delivery store_id), not that the catalogue is genuinely empty.
+// Surface a clear "session expired, reconnect" message so the user isn't left
+// wondering why everything defaulted to one store.
+function _renderStoreWarning(comparison, skipped) {
+    const warnEl = document.getElementById('store-warning');
+    const RELAY_STORES = ['blinkit', 'zepto'];   // bigbasket is mobile-only
+    const connected = RELAY_STORES.filter(s => !(skipped || []).includes(s));
+    const dead = [];
+    for (const s of connected) {
+        const hasAny = comparison.some(e => ((e.prices && e.prices[s]) || []).length > 0);
+        if (!hasAny && comparison.length > 0) dead.push(s);
+    }
+    if (!dead.length) { warnEl.style.display = 'none'; warnEl.innerHTML = ''; return; }
+
+    warnEl.innerHTML = dead.map(s => {
+        const label = _STORE_LABELS[s] || s;
+        return `<div>⚠ <b>${escHtml(label)}</b> returned no results for any item — its session has likely expired. ` +
+               `Reconnect ${escHtml(label)} (make sure a delivery address is saved) to compare its prices.` +
+               `<br><button class="sw-reconnect" onclick="openBrowserAuth('${s}')">Reconnect ${escHtml(label)}</button></div>`;
+    }).join('<div style="height:8px"></div>');
+    warnEl.style.display = 'block';
 }
 
 function _makeItemCard(idx, entry) {
