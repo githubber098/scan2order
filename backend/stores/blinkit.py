@@ -551,39 +551,40 @@ async def probe_cart(user_id: str, query: str = "tomato") -> dict:
         return {"error": "no cart_item from search", "search_status": search_status}
 
     pid = cart_item.get("product_id")
-    body_items = {"items": [cart_item]}
-    body_cartitems = {"cart_items": [cart_item], "merchant_id": merchant_id}
-    body_old = {"items": [{"product_id": pid, "quantity": 1}], "order_type": "blinkIt"}
-
-    # (method, path, body) candidates — paths within blinkit.com.
+    CART = "/v1/layout/cart"
+    # /v1/layout/cart is the real endpoint (500, not 404). Probe payload shapes
+    # + a GET to learn the cart layout structure. (method, label, body)
     candidates = [
-        ("/v2/client/user_cart/", body_old),
-        ("/v2/client/cart/", body_items),
-        ("/v1/client/cart/", body_items),
-        ("/v1/cart/changes", body_cartitems),
-        ("/v2/cart/changes", body_cartitems),
-        ("/v1/cart", body_items),
-        ("/v2/cart", body_items),
-        ("/v1/cart/update", body_items),
-        ("/v2/cart/update", body_items),
-        ("/v1/cart/add", body_items),
-        ("/v2/cart/add", body_items),
-        ("/v1/layout/cart", body_items),
-        ("/v1/cart/items", body_items),
+        ("GET",  CART, "GET-empty", None),
+        ("POST", CART, "items", {"items": [cart_item]}),
+        ("POST", CART, "cart_items+merchant", {"cart_items": [cart_item], "merchant_id": merchant_id}),
+        ("POST", CART, "merchant+items", {"merchant_id": merchant_id, "items": [cart_item]}),
+        ("POST", CART, "products", {"products": [cart_item]}),
+        ("POST", CART, "cart.items", {"cart": {"items": [cart_item]}}),
+        ("POST", CART, "bare-cart_item", cart_item),
+        ("POST", CART, "postback+items", {"postback_meta": {}, "processed_rails": {},
+                                           "items": [cart_item], "merchant_id": merchant_id}),
+        ("POST", CART, "merchants[]", {"merchants": [
+            {"merchant_id": merchant_id, "merchant_type": "express", "items": [cart_item]}]}),
+        ("POST", CART, "cart_items-only", {"cart_items": [cart_item]}),
     ]
     results = []
     async with httpx.AsyncClient(timeout=10.0) as client:
-        for path, body in candidates:
+        for method, path, label, body in candidates:
             try:
-                rr = await client.post(f"{BASE_URL}{path}", json=body,
-                                       headers=headers, cookies=httpx_cookies)
-                results.append({"path": path, "status": rr.status_code,
-                                "body": rr.text[:180]})
+                if method == "GET":
+                    rr = await client.get(f"{BASE_URL}{path}", headers=headers,
+                                          cookies=httpx_cookies)
+                else:
+                    rr = await client.post(f"{BASE_URL}{path}", json=body,
+                                           headers=headers, cookies=httpx_cookies)
+                results.append({"label": label, "method": method, "status": rr.status_code,
+                                "body": rr.text[:400]})
             except Exception as e:
-                results.append({"path": path, "error": str(e)[:120]})
+                results.append({"label": label, "error": str(e)[:120]})
     return {
         "search_status": search_status,
         "product_id": pid,
-        "cart_item_keys": list(cart_item.keys()),
+        "cart_item": cart_item,
         "results": results,
     }
