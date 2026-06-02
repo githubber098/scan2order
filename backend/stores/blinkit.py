@@ -551,34 +551,38 @@ async def probe_cart(user_id: str, query: str = "tomato") -> dict:
         return {"error": "no cart_item from search", "search_status": search_status}
 
     pid = cart_item.get("product_id")
-    CART = "/v1/layout/cart"
-    # /v1/layout/cart is the real endpoint (500, not 404). Probe payload shapes
-    # + a GET to learn the cart layout structure. (method, label, body)
+    device_id = (cookies.get("gr_1_deviceId") or cookies.get("device_id")
+                 or cookies.get("deviceId") or "")
+    CART = f"{BASE_URL}/v1/layout/cart"
+    body_items = {"items": [cart_item]}
+    body_cartitems = {"cart_items": [cart_item], "merchant_id": merchant_id}
+
+    # Same 500 for every body shape ⇒ failure is pre-body. Vary HEADERS instead.
+    # (label, extra_headers, body, path_override)
+    h_merchant = {"merchant_id": str(merchant_id)}
+    h_device = {"device_id": device_id, "deviceid": device_id}
+    h_all = {"merchant_id": str(merchant_id), "device_id": device_id,
+             "deviceid": device_id, "session_uuid": "probe-session",
+             "merchant_type": "express", "eta_identifier": "express"}
     candidates = [
-        ("GET",  CART, "GET-empty", None),
-        ("POST", CART, "items", {"items": [cart_item]}),
-        ("POST", CART, "cart_items+merchant", {"cart_items": [cart_item], "merchant_id": merchant_id}),
-        ("POST", CART, "merchant+items", {"merchant_id": merchant_id, "items": [cart_item]}),
-        ("POST", CART, "products", {"products": [cart_item]}),
-        ("POST", CART, "cart.items", {"cart": {"items": [cart_item]}}),
-        ("POST", CART, "bare-cart_item", cart_item),
-        ("POST", CART, "postback+items", {"postback_meta": {}, "processed_rails": {},
-                                           "items": [cart_item], "merchant_id": merchant_id}),
-        ("POST", CART, "merchants[]", {"merchants": [
-            {"merchant_id": merchant_id, "merchant_type": "express", "items": [cart_item]}]}),
-        ("POST", CART, "cart_items-only", {"cart_items": [cart_item]}),
+        ("base", {}, body_items, None),
+        ("+merchant_hdr", h_merchant, body_items, None),
+        ("+device_hdr", h_device, body_items, None),
+        ("+all_hdrs", h_all, body_items, None),
+        ("+all_hdrs cart_items", h_all, body_cartitems, None),
+        ("trailing_slash +all", h_all, body_items, f"{BASE_URL}/v1/layout/cart/"),
+        ("layout_envelope +all", h_all,
+         {"postback_meta": {}, "processed_rails": {}, "monet_assets": [],
+          "cart_items": [cart_item], "merchant_id": merchant_id, "type": "cart"}, None),
     ]
-    results = []
+    results = [{"note": f"device_id_present={bool(device_id)}"}]
     async with httpx.AsyncClient(timeout=10.0) as client:
-        for method, path, label, body in candidates:
+        for label, extra, body, path_override in candidates:
+            url = path_override or CART
+            hh = {**headers, **{k: v for k, v in extra.items() if v}}
             try:
-                if method == "GET":
-                    rr = await client.get(f"{BASE_URL}{path}", headers=headers,
-                                          cookies=httpx_cookies)
-                else:
-                    rr = await client.post(f"{BASE_URL}{path}", json=body,
-                                           headers=headers, cookies=httpx_cookies)
-                results.append({"label": label, "method": method, "status": rr.status_code,
+                rr = await client.post(url, json=body, headers=hh, cookies=httpx_cookies)
+                results.append({"label": label, "status": rr.status_code,
                                 "body": rr.text[:400]})
             except Exception as e:
                 results.append({"label": label, "error": str(e)[:120]})
