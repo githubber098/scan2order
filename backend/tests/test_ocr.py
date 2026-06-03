@@ -114,6 +114,12 @@ class TestDownscale:
 class TestOcrBackendSelection:
     pytestmark = pytest.mark.asyncio
 
+    @pytest.fixture(autouse=True)
+    def _no_correction(self, monkeypatch):
+        # These tests exercise backend SELECTION, not the correction pass —
+        # disable it so they never make a real network call to Groq/Ollama.
+        monkeypatch.setenv("OCR_CONTEXT_CORRECTION", "0")
+
     async def test_auto_uses_tesseract_when_no_ollama(self, monkeypatch):
         import ocr
         monkeypatch.delenv("OLLAMA_HOST", raising=False)
