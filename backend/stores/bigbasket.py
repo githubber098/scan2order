@@ -23,6 +23,21 @@ def is_session_valid(user_id: str) -> bool:
     return bool(cookies.get("BBAUTHTOKEN"))
 
 
+def session_health(user_id: str) -> dict:
+    """Static health probe (no network call) for the page-load status indicator.
+
+    BBAUTHTOKEN is a time-limited JWT whose expiry we don't decode (would require
+    a jwt library). Presence is treated as healthy; actual expiry surfaces as zero
+    search results after a compare. A missing token is a definite failure.
+    BigBasket does not require a delivery-location cookie for searches to work
+    (it falls back to the default city), so we don't check for it here.
+    """
+    cookies = get_store_cookies(user_id, APP_NAME)
+    if not cookies.get("BBAUTHTOKEN"):
+        return {"ok": False, "reason": "Session expired — reconnect BigBasket."}
+    return {"ok": True, "reason": ""}
+
+
 async def _ensure_csurftoken(client: httpx.AsyncClient, user_id: str) -> str:
     """Ensure the httpx client has a fresh csurftoken cookie.
 

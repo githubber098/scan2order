@@ -687,7 +687,9 @@ async def api_auth_status(user_id: str):
     if not uid:
         return {"error": "missing user_id"}
     stores_data = user_store.get_user_stores(uid)
-    _health_fns = {"blinkit": blinkit.session_health, "zepto": zepto.session_health,
+    _health_fns = {"bigbasket": bigbasket.session_health,
+                   "blinkit": blinkit.session_health,
+                   "zepto": zepto.session_health,
                    "instamart": instamart.session_health}
     connected = {}
     for store in _STORE_DISPLAY:

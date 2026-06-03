@@ -194,7 +194,7 @@ async function checkStoreHealth() {
   if (!userId) return;
   try {
     const data = await (await fetch(`/api/auth/status/${encodeURIComponent(userId)}`)).json();
-    _storeHealth = data.stores || {};
+    _storeHealth = data.connected_stores || {};
     const banner = document.getElementById('health-warn');
     if (!banner) return;
     const msgs = [];

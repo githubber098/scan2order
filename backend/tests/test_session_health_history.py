@@ -2,14 +2,14 @@
 test_session_health_history.py — backfill coverage for two features merged
 since the test suite was last updated:
 
-  - Per-store session health (blinkit/zepto session_health + the healthy/reason
-    fields on GET /api/auth/status/{user_id})
+  - Per-store session health (all 4 stores: bigbasket/blinkit/zepto/instamart
+    session_health + the healthy/reason fields on GET /api/auth/status/{user_id})
   - Comparison history persistence (user_store.save_comparison / get_history +
     the GET /api/history endpoint)
 """
 
 import auth
-from stores import blinkit, zepto
+from stores import bigbasket, blinkit, zepto, instamart
 
 
 def _login(client, user_id):
@@ -19,6 +19,20 @@ def _login(client, user_id):
 # ── Session health (static probes) ───────────────────────────────────────────
 
 class TestSessionHealth:
+    # ── BigBasket ─────────────────────────────────────────────────────────────
+
+    def test_bigbasket_healthy_when_token_present(self, clean_db, connected_user_all):
+        h = bigbasket.session_health(connected_user_all)
+        assert h["ok"] is True
+        assert h["reason"] == ""
+
+    def test_bigbasket_unhealthy_when_not_connected(self, clean_db, user_id):
+        h = bigbasket.session_health(user_id)
+        assert h["ok"] is False
+        assert "reconnect" in h["reason"].lower()
+
+    # ── Blinkit ───────────────────────────────────────────────────────────────
+
     def test_blinkit_unhealthy_without_location(self, clean_db, connected_user_all):
         # bl_cookies fixture has an access token but no gr_1_lat/lon → unhealthy.
         h = blinkit.session_health(connected_user_all)
@@ -30,23 +44,45 @@ class TestSessionHealth:
         assert h["ok"] is False
         assert "reconnect" in h["reason"].lower()
 
+    # ── Zepto ─────────────────────────────────────────────────────────────────
+
     def test_zepto_unhealthy_without_store_id(self, clean_db, connected_user_all):
         # zepto_cookies has tokens but no store_id → unhealthy with a clear reason.
         h = zepto.session_health(connected_user_all)
         assert h["ok"] is False
         assert h["reason"]
 
+    # ── Instamart ─────────────────────────────────────────────────────────────
+
+    def test_instamart_unhealthy_without_store_id(self, clean_db, connected_user_all):
+        # im_cookies has tid + deviceId but no store_id → unhealthy.
+        h = instamart.session_health(connected_user_all)
+        assert h["ok"] is False
+        assert h["reason"]
+
+    def test_instamart_unhealthy_when_not_connected(self, clean_db, user_id):
+        h = instamart.session_health(user_id)
+        assert h["ok"] is False
+        assert "reconnect" in h["reason"].lower()
+
+    # ── API endpoint ──────────────────────────────────────────────────────────
+
     def test_auth_status_exposes_healthy_and_reason(self, client, connected_user_all, user_id):
         data = client.get(f"/api/auth/status/{user_id}").json()
         cs = data["connected_stores"]
-        # Every connected store entry carries the health fields.
-        for store in ("bigbasket", "blinkit", "zepto"):
-            assert "healthy" in cs[store]
-            assert "reason" in cs[store]
-        # Blinkit (no location) and Zepto (no store_id) report unhealthy + reason.
+        # All 4 connected stores carry the health fields.
+        for store in ("bigbasket", "blinkit", "zepto", "instamart"):
+            assert "healthy" in cs[store], f"{store} missing 'healthy'"
+            assert "reason" in cs[store], f"{store} missing 'reason'"
+        # BigBasket (token present, no location required) → healthy.
+        assert cs["bigbasket"]["healthy"] is True
+        # Blinkit (no location cookies) → unhealthy.
         assert cs["blinkit"]["healthy"] is False
         assert cs["blinkit"]["reason"]
+        # Zepto (no store_id) → unhealthy.
         assert cs["zepto"]["healthy"] is False
+        # Instamart (no store_id) → unhealthy.
+        assert cs["instamart"]["healthy"] is False
 
 
 # ── Comparison history ────────────────────────────────────────────────────────
