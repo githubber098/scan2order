@@ -95,6 +95,18 @@
     </div>
   </div>
   <div class="hr"></div>
+  <!-- Instamart -->
+  <div class="srow" data-store="instamart" style="padding:11px 2px">
+    <div class="slogo im">im</div>
+    <div style="flex:1"><div class="sname">Instamart</div><div class="smeta">{{ 'Connected' if stores.instamart else 'Not connected' }}</div></div>
+    <div class="row" style="gap:6px">
+      {% if stores.instamart %}<span class="pill-tag ok"><i data-ico="check" data-s="13" data-w="3"></i>Connected</span>{% endif %}
+      <button class="btn {% if not stores.instamart %}sm{% else %}ghost sm{% endif %}" onclick="connectStore('instamart', this)">
+        <i data-ico="plug" data-s="15"></i>{{ 'Reconnect' if stores.instamart else 'Connect' }}
+      </button>
+    </div>
+  </div>
+  <div class="hr"></div>
   <!-- BigBasket (mobile only) -->
   <div class="srow" style="padding:11px 2px">
     <div class="slogo bb">bb</div>
@@ -174,7 +186,7 @@ async function refreshStoreRows() {
     const data = await (await fetch('/api/auth/status/' + encodeURIComponent(uid))).json();
     cs = data.connected_stores || {};
   } catch (_) { return; }
-  ['zepto', 'blinkit'].forEach((store) => {
+  ['zepto', 'blinkit', 'instamart'].forEach((store) => {
     const row = document.querySelector(`[data-store="${store}"]`);
     if (!row) return;
     const connected = !!cs[store];

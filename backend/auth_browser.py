@@ -75,6 +75,24 @@ _STORE_CONFIG = {
             "and confirm your delivery address.  The window will close automatically."
         ),
     },
+    "instamart": {
+        # Swiggy Instamart. Cookie auth (tid = session JWT, sid, deviceId).
+        # Mirrors Zepto: search needs a location-resolved storeId, so the real
+        # readiness gate is a saved delivery address, not just login.
+        "url": "https://www.swiggy.com/instamart",
+        "auth_cookie": "tid",
+        "wait_for_ls": ["userLocation", "addressList", "user-location",
+                        "selectedAddress", "lastKnownLocation"],
+        "wait_for_ls_contains": {"userLocation": "lat"},
+        # Robust fallback: close as soon as any stored value carries a resolved
+        # store id (key name unknown across builds).
+        "location_scan": ["storeId", "store_id", "primaryStoreId"],
+        "wait_hint": (
+            "✅ Log in to Swiggy, then tap the location bar at the top and "
+            "save/confirm a delivery address so Instamart knows your store. "
+            "The window closes automatically once an address is set."
+        ),
+    },
 }
 
 _MOBILE_UA = (
@@ -362,6 +380,27 @@ class _Session:
             except Exception as exc:
                 print(f"[browser] {self.store}: localStorage check failed: {exc}")
 
+        # Generic fallback: scan EVERY cookie value AND every localStorage value
+        # for any of the given marker substrings (e.g. "storeId"). Used by
+        # Instamart where the delivery store id is buried in a persisted JSON
+        # blob whose key name varies across builds.
+        scan_markers = cfg.get("location_scan")
+        if scan_markers:
+            try:
+                blobs = list(kv.values())
+                ls_raw2 = await self._page.evaluate(
+                    "() => JSON.stringify(Object.fromEntries("
+                    "  Array.from({length: localStorage.length}, (_, i) => "
+                    "    [localStorage.key(i), localStorage.getItem(localStorage.key(i))]"
+                    ")))"
+                )
+                blobs += list(json.loads(ls_raw2 or "{}").values())
+                hay = " ".join(unquote(b) if isinstance(b, str) else "" for b in blobs)
+                if any(m in hay for m in scan_markers):
+                    return True
+            except Exception as exc:
+                print(f"[browser] {self.store}: location scan failed: {exc}")
+
         present = [k for k in kv if k != cfg["auth_cookie"]]
         print(
             f"[browser] {self.store}: phase-2 waiting. "
@@ -421,6 +460,25 @@ class _Session:
             return wait_hint                # phase 2: no delivery address yet
 
         return ""                           # done (caller checks get_auth_cookies)
+
+    async def get_local_storage(self) -> dict:
+        """Snapshot the page's localStorage (string→string). Returns {} on failure.
+
+        Some stores (Zepto user-position, Instamart store id) keep delivery /
+        store context in localStorage rather than cookies, so it is persisted
+        alongside the cookies when the session completes.
+        """
+        try:
+            raw = await self._page.evaluate(
+                "() => JSON.stringify(Object.fromEntries("
+                "  Array.from({length: localStorage.length}, (_, i) => "
+                "    [localStorage.key(i), localStorage.getItem(localStorage.key(i))]"
+                ")))"
+            )
+            return json.loads(raw or "{}")
+        except Exception as exc:
+            print(f"[browser] {self.store}: get_local_storage failed: {exc}")
+            return {}
 
     async def close(self):
         self._screencast_on = False

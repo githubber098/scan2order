@@ -104,11 +104,16 @@
 {% block extra_scripts %}
 <script>
 const userId = window._SERVER_USER_ID;
-const POPULAR = ["Milk", "Bread", "Eggs", "Bananas", "Tomato", "Onion", "Butter", "Curd"];
-const _SL = { bigbasket:"bb", blinkit:"bk", zepto:"zp" };
-const _SLT = { bigbasket:"bb", blinkit:"b", zepto:"Z" };
-const _SN = { bigbasket:"BigBasket", blinkit:"Blinkit", zepto:"Zepto" };
+const POPULAR = [
+  "Milk", "Bread", "Eggs", "Bananas", "Tomato", "Onion", "Butter", "Curd",
+  "Paneer", "Rice", "Atta", "Dal", "Sugar", "Tea", "Coffee", "Oil",
+  "Chicken", "Yogurt", "Cheese", "Soap",
+];
+const _SL  = { bigbasket:"bb", blinkit:"bk", zepto:"zp", instamart:"im" };
+const _SLT = { bigbasket:"bb", blinkit:"b",  zepto:"Z",  instamart:"im" };
+const _SN  = { bigbasket:"BigBasket", blinkit:"Blinkit", zepto:"Zepto", instamart:"Instamart" };
 let _shopBusy = false;
+let _debounceTimer = null;
 
 function _esc(s){ const d=document.createElement("div"); d.textContent=s==null?"":s; return d.innerHTML; }
 
@@ -303,7 +308,24 @@ document.addEventListener("DOMContentLoaded", () => {
   loadTrending();
   if (window.s2o_greet) window.s2o_greet();
   const input = document.getElementById("shop-q");
-  input.addEventListener("keydown", (e) => { if (e.key === "Enter") shopSearch(); });
+
+  // Realtime search: debounce 350ms. Clearing → revert to recommended page.
+  input.addEventListener("input", () => {
+    clearTimeout(_debounceTimer);
+    const q = input.value.trim();
+    if (!q) {
+      // Input cleared — show recommended page, hide results
+      document.getElementById("shop-reco").style.display = "";
+      document.getElementById("shop-results").innerHTML = "";
+      document.getElementById("shop-skeleton").style.display = "none";
+      document.getElementById("shop-status").style.display = "none";
+      _shopBusy = false;
+      return;
+    }
+    _debounceTimer = setTimeout(() => shopSearch(), 350);
+  });
+  input.addEventListener("keydown", (e) => { if (e.key === "Enter") { clearTimeout(_debounceTimer); shopSearch(); } });
+
   // Voice search: reuse the shared voice helper; auto-run on a final result.
   if (window.s2o){
     window.s2o.attachVoice(input, document.getElementById("shop-mic"), {

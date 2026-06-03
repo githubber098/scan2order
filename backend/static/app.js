@@ -127,7 +127,7 @@
      own caret shows in the stream.
      =================================================================== */
 
-  const _STORE_LABEL = { bigbasket: "BigBasket", blinkit: "Blinkit", zepto: "Zepto" };
+  const _STORE_LABEL = { bigbasket: "BigBasket", blinkit: "Blinkit", zepto: "Zepto", instamart: "Instamart" };
   let _browserSessionId = null;
   let _screenshotLoopActive = false;
   let _checkTimer = null;
@@ -384,10 +384,14 @@
 
   window.s2o_handleOcr = async function (event) {
     const file = event.target.files[0];
-    const status  = document.getElementById("ocr-status");
+    const statusEl  = document.getElementById("ocr-status");
+    const statusText = document.getElementById("ocr-status-text");
     const cancelBtn = document.getElementById("ocr-cancel");
+    // Fallback: if the page still uses the old single-element pattern, set textContent directly.
+    const status = statusText || statusEl;
     if (!file) return;
     if (status) status.textContent = "Scanning…";
+    if (statusEl) statusEl.classList.add("ocr-scanning");
     if (cancelBtn) cancelBtn.style.display = "inline-flex";
     _ocrAbort = new AbortController();
     const fd = new FormData();
@@ -405,6 +409,7 @@
       if (e.name === "AbortError") { if (status) status.textContent = "Scan cancelled."; }
       else { if (status) status.textContent = "Error: " + e.message; }
     } finally {
+      if (statusEl) statusEl.classList.remove("ocr-scanning");
       if (cancelBtn) cancelBtn.style.display = "none";
       _ocrAbort = null;
       event.target.value = "";

@@ -365,12 +365,13 @@ async def compare_one_item(item: dict, user_id: str,
           selected_pid:   product_id of selected product
         }
     """
-    from stores import bigbasket, blinkit, zepto
+    from stores import bigbasket, blinkit, zepto, instamart
 
     _store_search = {
         "bigbasket": bigbasket.search_item_api,
         "blinkit": blinkit.search_item_api,
         "zepto": zepto.search_item_api,
+        "instamart": instamart.search_item_api,
     }
 
     qty_str = (item.get("qty") or "").strip()

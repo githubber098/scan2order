@@ -2,6 +2,71 @@
 {% set page = "compare" %}
 {% block title %}Compare{% endblock %}
 
+{% block head %}
+<style>
+  /* ── OCR spinner ─────────────────────────────────────────────────── */
+  #ocr-status{ display:flex; align-items:center; gap:8px; }
+  .ocr-spinner{ display:none; width:14px; height:14px; border:2px solid color-mix(in srgb,var(--accent) 25%,transparent);
+    border-top-color:var(--accent); border-radius:50%; animation:ocr-spin .7s linear infinite; flex-shrink:0; }
+  .ocr-scanning .ocr-spinner{ display:inline-block; }
+  @keyframes ocr-spin{ to{ transform:rotate(360deg); } }
+
+  /* ── Thin item rows ───────────────────────────────────────────────── */
+  .irow{ display:flex; align-items:center; gap:10px; padding:9px 12px;
+    background:var(--card); border:1px solid var(--card-br); border-radius:var(--radius,12px); }
+  .irow-img{ width:46px; height:46px; border-radius:8px; object-fit:cover;
+    background:var(--surface); flex-shrink:0; }
+  .irow-img.ph{ display:flex; align-items:center; justify-content:center; color:var(--dim); }
+  .irow-body{ flex:1; min-width:0; }
+  .irow-name{ font-size:13px; font-weight:700; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .irow-meta{ display:flex; align-items:center; gap:5px; font-size:11.5px; color:var(--muted); margin-top:2px;
+    white-space:nowrap; overflow:hidden; }
+  .irow-price{ font-weight:800; font-size:14px; flex-shrink:0; white-space:nowrap; }
+  .irow-actions{ display:flex; gap:4px; flex-shrink:0; }
+  .irow-btn{ display:flex; align-items:center; justify-content:center; width:28px; height:28px;
+    border-radius:8px; border:1px solid var(--card-br); background:var(--surface); cursor:pointer;
+    color:var(--muted); transition:border-color .15s,color .15s; }
+  .irow-btn:hover{ border-color:var(--accent); color:var(--accent2); }
+  .irow-btn.err:hover{ border-color:var(--err); color:var(--err); }
+  [data-theme="brutal"] .irow{ border-width:2.5px; }
+  [data-theme="brutal"] .irow-btn{ border-width:2px; }
+
+  /* ── Swap popup ───────────────────────────────────────────────────── */
+  #swap-popup{ display:none; position:fixed; inset:0; background:rgba(0,0,0,.55); z-index:900;
+    align-items:flex-end; justify-content:center; padding:0 0 env(safe-area-inset-bottom,0); }
+  #swap-popup.open{ display:flex; }
+  .swap-sheet{ background:var(--card); border-radius:18px 18px 0 0; width:min(520px,100%);
+    max-height:80vh; display:flex; flex-direction:column;
+    border:1px solid var(--card-br); border-bottom:none; }
+  .swap-sheet-head{ display:flex; align-items:center; justify-content:space-between;
+    padding:14px 16px 10px; border-bottom:1px solid var(--card-br); flex-shrink:0; }
+  #swap-popup-title{ font-weight:800; font-size:15px; }
+  .swap-sheet-close{ background:none; border:1px solid var(--card-br); color:var(--muted);
+    border-radius:8px; padding:4px 10px; cursor:pointer; font-size:13px; }
+  .swap-sheet-close:hover{ border-color:var(--err); color:var(--err); }
+  #swap-popup-body{ overflow-y:auto; padding:10px 12px; display:flex; flex-direction:column; gap:8px; }
+  .swap-opt{ display:flex; align-items:center; gap:10px; padding:9px 10px; border-radius:10px;
+    border:1px solid var(--card-br); background:var(--surface); transition:border-color .15s; }
+  .swap-opt.sel{ border-color:var(--accent); background:color-mix(in srgb,var(--accent) 8%,var(--surface)); }
+  .swap-opt.incompat{ opacity:.45; cursor:not-allowed !important; }
+  .swap-opt:not(.incompat):not(.sel):hover{ border-color:var(--accent2); }
+  .swap-opt-img{ width:44px; height:44px; border-radius:8px; object-fit:cover;
+    background:var(--card); flex-shrink:0; }
+  .swap-opt-img.ph{ display:flex; align-items:center; justify-content:center;
+    color:var(--dim); font-size:18px; }
+  .swap-opt-body{ flex:1; min-width:0; }
+  .swap-opt-name{ font-size:13px; font-weight:650; line-height:1.25;
+    display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
+  .swap-opt-meta{ display:flex; align-items:center; gap:5px; font-size:11px; color:var(--muted); margin-top:2px; }
+  .swap-incompat{ font-size:10.5px; color:var(--err); margin-left:4px; }
+  .swap-opt-price{ font-weight:800; font-size:14px; flex-shrink:0; }
+  .swap-opt-price.sel{ color:var(--accent2); }
+  .swap-tick{ color:var(--ok); font-size:14px; flex-shrink:0; }
+  [data-theme="brutal"] .swap-opt{ border-width:2px; }
+  [data-theme="brutal"] .swap-sheet{ border-width:2.5px; }
+</style>
+{% endblock %}
+
 {% block content %}
 <!-- entry card -->
 <section class="card stack" aria-label="Build your list">
@@ -12,15 +77,15 @@
     {% else %}
     <span id="stores-pill" class="pill-tag">
       <span class="dot on" style="width:7px;height:7px"></span>
-      {% set n = (stores.bigbasket | int) + (stores.blinkit | int) + (stores.zepto | int) %}
+      {% set n = (stores.bigbasket | int) + (stores.blinkit | int) + (stores.zepto | int) + (stores.instamart | int) %}
       {{ n }} store{{ 's' if n != 1 else '' }} connected
     </span>
     {% endif %}
   </div>
   <div id="health-warn" class="stack" style="gap:5px;display:none"></div>
-  <p class="lead" style="margin-top:-6px">Scan a handwritten list or type items — we price it across Zepto, Blinkit &amp; BigBasket.</p>
+  <p class="lead" style="margin-top:-6px">Scan a handwritten list or type items — we price it across Zepto, Blinkit, Instamart &amp; BigBasket.</p>
 
-  <div id="ocr-status" class="dim" style="font-size:12px;min-height:1em"></div>
+  <div id="ocr-status" class="dim" style="font-size:12px;min-height:1em"><span class="ocr-spinner"></span><span id="ocr-status-text"></span></div>
   <textarea class="textarea" id="items" placeholder="Tomatoes 1kg&#10;Amul butter 100g&#10;Onions 1kg"></textarea>
 
   <div class="row" style="gap:10px">
@@ -86,6 +151,17 @@
 </section>
 {% endblock %}
 
+<!-- ===== Swap popup bottom-sheet ===== -->
+<div id="swap-popup">
+  <div class="swap-sheet">
+    <div class="swap-sheet-head">
+      <span id="swap-popup-title">Swap product</span>
+      <button class="swap-sheet-close" onclick="closeSwapPopup()">✕ Close</button>
+    </div>
+    <div id="swap-popup-body"></div>
+  </div>
+</div>
+
 {% block extra_scripts %}
 <script>
 /* ============================================================
@@ -122,7 +198,7 @@ async function checkStoreHealth() {
     const banner = document.getElementById('health-warn');
     if (!banner) return;
     const msgs = [];
-    const SN = {bigbasket:'BigBasket', blinkit:'Blinkit', zepto:'Zepto'};
+    const SN = {bigbasket:'BigBasket', blinkit:'Blinkit', zepto:'Zepto', instamart:'Instamart'};
     for (const [store, info] of Object.entries(_storeHealth)) {
       if (info.connected && !info.healthy && info.reason) {
         msgs.push(`${SN[store]||store}: ${info.reason}`);
@@ -253,9 +329,9 @@ async function startCompare() {
 }
 
 // ── Render ──────────────────────────────────────────────────
-const _SL = { bigbasket:'bb', blinkit:'bk', zepto:'zp' };
-const _SLT = { bigbasket:'bb', blinkit:'b', zepto:'Z' };
-const _SN = { bigbasket:'BigBasket', blinkit:'Blinkit', zepto:'Zepto' };
+const _SL  = { bigbasket:'bb', blinkit:'bk', zepto:'zp', instamart:'im' };
+const _SLT = { bigbasket:'bb', blinkit:'b',  zepto:'Z',  instamart:'im' };
+const _SN  = { bigbasket:'BigBasket', blinkit:'Blinkit', zepto:'Zepto', instamart:'Instamart' };
 
 // Guest view: cheapest pick per item only (no cross-store matrix, no cart).
 function renderGuestResults(data) {
@@ -323,54 +399,15 @@ function renderResults(data) {
   for (const [store, cart] of Object.entries(carts)) {
     const chip = document.createElement('div');
     chip.className = 'card tight center'; chip.style.cssText='flex:1;padding:12px 6px';
-    chip.innerHTML = `<div class="slogo ${_SL[store]||'bb'}">${_SL[store]==='bb'?'bb':_SL[store]==='bk'?'b':'Z'}</div><div class="smeta" style="margin-top:5px">${_SN[store]||store}</div><div class="num" style="font-weight:800">₹${Math.round(cart.total)}</div>`;
+    chip.innerHTML = `<div class="slogo ${_SL[store]||'bb'}">${_SLT[store]||'?'}</div><div class="smeta" style="margin-top:5px">${_SN[store]||store}</div><div class="num" style="font-weight:800">₹${Math.round(cart.total)}</div>`;
     split.appendChild(chip);
   }
 
-  // Item cards
+  // Item rows — thin one-liner per item with product image + action buttons
   const cardsEl = document.getElementById('item-cards');
   cardsEl.innerHTML = '';
   for (let i = 0; i < comparison.length; i++) {
-    const entry = comparison[i];
-    const shortlist = entry.shortlist || [];
-    const card = document.createElement('div');
-    card.className = 'card tight stack'; card.style.gap='0'; card.dataset.idx = i;
-
-    const qname = document.createElement('div');
-    qname.className='sname'; qname.style.padding='2px 0 8px';
-    qname.textContent = (entry.item && entry.item.name) || entry.query || '—';
-    card.appendChild(qname);
-
-    if (!entry.cheapest_app) {
-      const na = document.createElement('div');
-      na.className='dim'; na.style.fontSize='12.5px';
-      na.textContent='Not found in connected stores';
-      card.appendChild(na);
-    } else {
-      // Winner — show ×N badge if buying multiple units to reach target qty
-      const targetQty = (entry.item && entry.item.qty) || '';
-      const winnerProds = (entry.prices||{})[entry.cheapest_app]||[];
-      const winner = winnerProds.find(p=>p.product_id===entry.selected_pid)||winnerProds[0];
-      const qtyCount = entry.qty_count || 1;
-      if (winner) card.appendChild(_makeSwapRow(i, winner, entry.cheapest_app, true, qtyCount, targetQty));
-      // Shortlist — compute each item's own multiplier so a swap adds the
-      // correct number of units (e.g. swapping to a 250g item for a 1kg target
-      // must add 4, not 1).
-      const mkShort = sp => _makeSwapRow(i, sp, sp.app||sp.app_name, false,
-                                         _qtyMultiplier(targetQty, sp), targetQty);
-      for (const sp of shortlist.slice(0,2)) card.appendChild(mkShort(sp));
-      if (shortlist.length > 2) {
-        const moreCount = shortlist.length - 2;
-        const moreWrap = document.createElement('div'); moreWrap.style.display='none';
-        for (const sp of shortlist.slice(2)) moreWrap.appendChild(mkShort(sp));
-        const moreBtn = document.createElement('button');
-        moreBtn.className='btn ghost sm'; moreBtn.style.marginTop='4px';
-        moreBtn.textContent=`▾ ${moreCount} more`;
-        moreBtn.onclick=()=>{moreWrap.style.display='';moreBtn.style.display='none';};
-        card.appendChild(moreBtn); card.appendChild(moreWrap);
-      }
-    }
-    cardsEl.appendChild(card);
+    cardsEl.appendChild(_makeItemRow(i, comparison[i]));
   }
 
   // Skipped
@@ -383,7 +420,7 @@ function renderResults(data) {
   // Zero-results warning: connected stores that returned nothing across all items
   const zrWarn = document.getElementById('zero-results-warn');
   if (zrWarn && _storeHealth) {
-    const SN = {bigbasket:'BigBasket', blinkit:'Blinkit', zepto:'Zepto'};
+    const SN = {bigbasket:'BigBasket', blinkit:'Blinkit', zepto:'Zepto', instamart:'Instamart'};
     const skipped = new Set(data.skipped_apps || []);
     const zeroStores = [];
     for (const [store, info] of Object.entries(_storeHealth)) {
@@ -402,35 +439,186 @@ function renderResults(data) {
   }
 }
 
-function _makeSwapRow(idx, prod, app, selected, qtyCount, targetQty) {
+// ── NEW thin item row with product image + swap/edit-qty/delete buttons ──────
+function _makeItemRow(idx, entry) {
   const row = document.createElement('div');
-  // qtyCount === null means this size can't tile the requested quantity in whole
-  // units — show it greyed-out and non-selectable so the user isn't misled.
-  const incompatible = qtyCount === null;
-  const n = incompatible ? 1 : (qtyCount || 1);
-  row.className = 'srow';
-  row.style.cssText = 'padding:8px 0;border-radius:6px;'
-    + (incompatible ? 'opacity:.45;cursor:not-allowed;' : 'cursor:pointer;')
-    + (selected ? 'background:var(--accent-light, color-mix(in srgb,var(--accent) 10%,transparent));' : '');
-  row.dataset.app = app; row.dataset.pid = prod.product_id;
-  const price = prod.sale_price || prod.price || 0;
-  const effPrice = price * n;
-  const storeAbbr = _SL[app] || 'bb';
-  const qtyLabel = n > 1 ? `<span style="font-size:11px;color:var(--muted);margin-left:4px">×${n}</span>` : '';
-  const effLabel = incompatible ? `₹${Math.round(price)}` : `₹${Math.round(effPrice)}`;
-  const noteLabel = incompatible
-    ? `<span style="font-size:10.5px;color:var(--muted)"> · can't make ${_esc(targetQty||'')}</span>`
-    : '';
-  const unitLabel = n > 1 ? `${_esc(prod.unit||'')} × ${n}` : _esc(prod.unit||'');
-  row.innerHTML =
-    `<div class="slogo ${storeAbbr}" style="flex-shrink:0">${storeAbbr==='bb'?'bb':storeAbbr==='bk'?'b':'Z'}</div>`+
-    `<div style="flex:1;min-width:0"><div class="sname" style="font-size:13px">${_esc(prod.name||'')}${qtyLabel}${selected?'<span style="color:var(--ok);font-size:11px;margin-left:6px">✓ best</span>':''}</div>`+
-    `<div class="smeta">${_SN[app]||app}${unitLabel?' · '+unitLabel:''}${noteLabel}</div></div>`+
-    `<div class="num" style="font-weight:800;font-size:15px;color:${selected?'var(--accent2)':'inherit'}">${effLabel}</div>`;
-  if (!incompatible) {
-    row.onclick = () => swapSelection(idx, app, prod.product_id, price, n);
+  row.className = 'irow'; row.dataset.idx = idx;
+
+  const itemName = (entry.item && entry.item.name) || entry.search_query || '—';
+  const targetQty = (entry.item && entry.item.qty) || '';
+
+  if (!entry.cheapest_app) {
+    row.innerHTML = `
+      <div class="irow-img ph"><i data-ico="cart" data-s="18"></i></div>
+      <div class="irow-body">
+        <div class="irow-name">${_esc(itemName)}</div>
+        <div class="irow-meta dim">Not found in connected stores</div>
+      </div>
+      <button class="irow-btn err" title="Remove" onclick="removeItem(${idx})"><i data-ico="trash" data-s="14"></i></button>`;
+    return row;
   }
+
+  const winnerProds = (entry.prices||{})[entry.cheapest_app]||[];
+  const winner = winnerProds.find(p=>p.product_id===entry.selected_pid)||winnerProds[0]||{};
+  const n = entry.qty_count || 1;
+  const price = winner.sale_price || winner.price || 0;
+  const effPrice = price * n;
+  const imgUrl = winner.image_url || '';
+  const storeAbbr = _SL[entry.cheapest_app]||'bb';
+  const qtyLabel = n > 1 ? ` ×${n}` : '';
+  const unitLabel = winner.unit ? ` · ${_esc(winner.unit)}` : '';
+  const shortlist = entry.shortlist || [];
+  const canSwap = shortlist.length > 0;
+
+  row.innerHTML = `
+    ${imgUrl
+      ? `<img class="irow-img" src="${_esc(imgUrl)}" alt="" loading="lazy" onerror="this.outerHTML='<div class=\\'irow-img ph\\'><i data-ico=\\'cart\\' data-s=\\'18\\'></i></div>'">`
+      : `<div class="irow-img ph"><i data-ico="cart" data-s="18"></i></div>`}
+    <div class="irow-body">
+      <div class="irow-name">${_esc(itemName)}</div>
+      <div class="irow-meta">
+        <span class="slogo ${storeAbbr}" style="width:16px;height:16px;border-radius:5px;font-size:8px;flex-shrink:0">${_SLT[entry.cheapest_app]||'?'}</span>
+        <span>${_esc(winner.name||'')}${unitLabel}${qtyLabel}</span>
+      </div>
+    </div>
+    <div class="irow-price">₹${Math.round(effPrice)}</div>
+    <div class="irow-actions">
+      ${canSwap ? `<button class="irow-btn" title="Swap product" onclick="openSwapPopup(${idx})"><i data-ico="refresh" data-s="14"></i></button>` : ''}
+      <button class="irow-btn" title="Edit quantity" onclick="openEditQty(${idx})"><i data-ico="edit" data-s="14"></i></button>
+      <button class="irow-btn err" title="Remove" onclick="removeItem(${idx})"><i data-ico="trash" data-s="14"></i></button>
+    </div>`;
   return row;
+}
+
+// ── Swap popup — all alternatives for one item with product images ─────────
+function openSwapPopup(idx) {
+  if (!comparisonData) return;
+  const entry = comparisonData.comparison[idx];
+  const shortlist = entry.shortlist || [];
+  const targetQty = (entry.item && entry.item.qty) || '';
+  const popup = document.getElementById('swap-popup');
+  const body = document.getElementById('swap-popup-body');
+  const title = document.getElementById('swap-popup-title');
+  if (!popup || !body) return;
+  const itemName = (entry.item && entry.item.name) || '—';
+  title.textContent = `Swap: ${itemName}`;
+
+  // Build a flat list: winner first, then shortlist
+  const winnerProds = (entry.prices||{})[entry.cheapest_app]||[];
+  const winner = winnerProds.find(p=>p.product_id===entry.selected_pid)||winnerProds[0];
+  const allOptions = [];
+  if (winner) allOptions.push({ prod: winner, app: entry.cheapest_app, n: entry.qty_count||1, selected: true });
+  for (const sp of shortlist) {
+    const spApp = sp.app || sp.app_name || '';
+    const spN = _qtyMultiplier(targetQty, sp);
+    allOptions.push({ prod: sp, app: spApp, n: spN, selected: false, incompatible: spN === null });
+  }
+
+  body.innerHTML = '';
+  for (const opt of allOptions) {
+    const { prod, app, n, selected, incompatible } = opt;
+    const realN = incompatible ? 1 : (n || 1);
+    const price = prod.sale_price || prod.price || 0;
+    const effPrice = price * realN;
+    const storeAbbr = _SL[app]||'bb';
+    const unitLabel = prod.unit ? ` · ${_esc(prod.unit)}` : '';
+    const qtyLabel = realN > 1 ? ` ×${realN}` : '';
+    const imgUrl = prod.image_url || '';
+
+    const optEl = document.createElement('div');
+    optEl.className = 'swap-opt' + (selected ? ' sel' : '') + (incompatible ? ' incompat' : '');
+    optEl.innerHTML = `
+      ${imgUrl
+        ? `<img class="swap-opt-img" src="${_esc(imgUrl)}" alt="" loading="lazy" onerror="this.outerHTML='<div class=\\'swap-opt-img ph\\'></div>'">`
+        : `<div class="swap-opt-img ph"></div>`}
+      <div class="swap-opt-body">
+        <div class="swap-opt-name">${_esc(prod.name||'')}${qtyLabel}</div>
+        <div class="swap-opt-meta">
+          <span class="slogo ${storeAbbr}" style="width:14px;height:14px;border-radius:4px;font-size:7px">${_SLT[app]||'?'}</span>
+          <span>${_SN[app]||app}${unitLabel}</span>
+          ${incompatible ? '<span class="swap-incompat">can\'t match qty</span>' : ''}
+        </div>
+      </div>
+      <div class="swap-opt-price${selected?' sel':''}">₹${Math.round(effPrice)}</div>
+      ${selected ? '<span class="swap-tick">✓</span>' : ''}`;
+    if (!incompatible && !selected) {
+      optEl.style.cursor = 'pointer';
+      optEl.onclick = () => {
+        swapSelection(idx, app, prod.product_id, price, realN);
+        closeSwapPopup();
+        // Re-render just this row
+        const rowEl = document.querySelector(`[data-idx="${idx}"]`);
+        if (rowEl) rowEl.replaceWith(_makeItemRow(idx, comparisonData.comparison[idx]));
+        if (window.s2o) window.s2o.paintIcons(document.getElementById('item-cards'));
+      };
+    }
+    body.appendChild(optEl);
+  }
+  popup.classList.add('open');
+  if (window.s2o) window.s2o.paintIcons(body);
+}
+function closeSwapPopup() {
+  const popup = document.getElementById('swap-popup');
+  if (popup) popup.classList.remove('open');
+}
+
+// ── Edit qty inline ────────────────────────────────────────────────────────
+function openEditQty(idx) {
+  if (!comparisonData) return;
+  const entry = comparisonData.comparison[idx];
+  const current = (entry.item && entry.item.qty) || '';
+  const newQty = prompt(`Edit quantity for "${(entry.item&&entry.item.name)||'item'}":`, current);
+  if (newQty === null) return;  // cancelled
+  const trimmed = newQty.trim();
+  if (entry.item) entry.item.qty = trimmed;
+  // Re-run compare for just this item to update prices
+  _recompareItem(idx, trimmed);
+}
+
+async function _recompareItem(idx, newQty) {
+  if (!comparisonData || !userId) return;
+  const entry = comparisonData.comparison[idx];
+  const itemName = entry.item && entry.item.name;
+  if (!itemName) return;
+  const rowEl = document.querySelector(`[data-idx="${idx}"]`);
+  if (rowEl) rowEl.style.opacity = '0.5';
+  try {
+    const resp = await fetch('/api/compare/item', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ item: { name: itemName, qty: newQty }, user_id: userId }),
+    });
+    const data = await resp.json();
+    if (data.entry) {
+      comparisonData.comparison[idx] = data.entry;
+      _rebuildCarts();
+      const newRow = _makeItemRow(idx, data.entry);
+      if (rowEl) rowEl.replaceWith(newRow);
+      else document.querySelector('#item-cards').children[idx]?.replaceWith(newRow);
+      if (window.s2o) window.s2o.paintIcons(document.getElementById('item-cards'));
+    }
+  } catch(_) {}
+  finally {
+    if (rowEl) rowEl.style.opacity = '';
+  }
+}
+
+// ── Remove item ────────────────────────────────────────────────────────────
+function removeItem(idx) {
+  if (!comparisonData) return;
+  comparisonData.comparison.splice(idx, 1);
+  _rebuildCarts();
+  // Re-render all rows (indices shifted)
+  const cardsEl = document.getElementById('item-cards');
+  cardsEl.innerHTML = '';
+  comparisonData.comparison.forEach((e, i) => cardsEl.appendChild(_makeItemRow(i, e)));
+  if (window.s2o) window.s2o.paintIcons(cardsEl);
+  // Update totals
+  document.getElementById('grand-total').textContent = '₹' + Math.round(comparisonData.grand_total);
+  _updateSavingsBadge(comparisonData.savings);
+  document.getElementById('grand-summary').textContent =
+    comparisonData.comparison.filter(e=>e.cheapest_app).length + ' items · ' +
+    Object.keys(comparisonData.carts||{}).length + ' store' +
+    (Object.keys(comparisonData.carts||{}).length===1?'':'s');
 }
 
 function swapSelection(idx, app, pid, price, qtyCount) {
@@ -491,7 +679,7 @@ function _rebuildCarts() {
   const split = document.getElementById('store-split'); split.innerHTML='';
   for (const [store, cart] of Object.entries(carts)) {
     const chip=document.createElement('div'); chip.className='card tight center'; chip.style.cssText='flex:1;padding:12px 6px';
-    chip.innerHTML=`<div class="slogo ${_SL[store]||'bb'}">${_SL[store]==='bb'?'bb':_SL[store]==='bk'?'b':'Z'}</div><div class="smeta" style="margin-top:5px">${_SN[store]||store}</div><div class="num" style="font-weight:800">₹${Math.round(cart.total)}</div>`;
+    chip.innerHTML=`<div class="slogo ${_SL[store]||'bb'}">${_SLT[store]||'?'}</div><div class="smeta" style="margin-top:5px">${_SN[store]||store}</div><div class="num" style="font-weight:800">₹${Math.round(cart.total)}</div>`;
     split.appendChild(chip);
   }
 }
@@ -519,7 +707,7 @@ async function addAllToCarts() {
         ? `${addedItems.length} added, ${failedItems.length} failed`
         : `${unitsAdded} item${unitsAdded===1?'':'s'} added`;
       const div=document.createElement('div'); div.className='card tight srow';
-      div.innerHTML=`<div class="slogo ${_SL[store]||'bb'}">${_SL[store]==='bb'?'bb':_SL[store]==='bk'?'b':'Z'}</div><div style="flex:1"><div class="sname">${_SN[store]||store}</div><div class="smeta">${statusText}</div></div>${ok?'<i data-ico="check" data-s="16" style="color:var(--ok)"></i>':'<i data-ico="x" data-s="16" style="color:var(--err)"></i>'}`;
+      div.innerHTML=`<div class="slogo ${_SL[store]||'bb'}">${_SLT[store]||'?'}</div><div style="flex:1"><div class="sname">${_SN[store]||store}</div><div class="smeta">${statusText}</div></div>${ok?'<i data-ico="check" data-s="16" style="color:var(--ok)"></i>':'<i data-ico="x" data-s="16" style="color:var(--err)"></i>'}`;
       res.appendChild(div);
     }
     if (window.s2o) window.s2o.paintIcons(res);

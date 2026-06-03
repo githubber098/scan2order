@@ -153,12 +153,22 @@ def connected_user_bb(clean_db, user_id, bb_cookies):
 
 
 @pytest.fixture()
-def connected_user_all(clean_db, user_id, bb_cookies, bl_cookies, zepto_cookies):
-    """User with all three stores connected."""
+def im_cookies() -> dict:
+    return {
+        "tid": "fake-swiggy-tid-jwt-token",
+        "sid": "fake-swiggy-sid",
+        "deviceId": "s%3Afake-device-uuid-1234.sig",
+    }
+
+
+@pytest.fixture()
+def connected_user_all(clean_db, user_id, bb_cookies, bl_cookies, zepto_cookies, im_cookies):
+    """User with all four stores connected."""
     from storage import user_store
     user_store.connect_store(user_id, "bigbasket", bb_cookies)
     user_store.connect_store(user_id, "blinkit", bl_cookies)
     user_store.connect_store(user_id, "zepto", zepto_cookies)
+    user_store.connect_store(user_id, "instamart", im_cookies)
     return user_id
 
 
@@ -220,7 +230,7 @@ def mock_stores(monkeypatch):
     Returns a namespace object whose attributes can be inspected in tests
     (e.g. mock_stores.bb_search.call_count).
     """
-    from stores import bigbasket, blinkit, zepto
+    from stores import bigbasket, blinkit, zepto, instamart
 
     class _Mocks:
         pass
@@ -280,6 +290,34 @@ def mock_stores(monkeypatch):
     monkeypatch.setattr(zepto, "search_item_api", m.z_search)
     monkeypatch.setattr(zepto, "add_all_to_cart_api", m.z_cart)
 
+    # --- Instamart ---
+    IM_PRODUCTS = [
+        {
+            "product_id": "im-001",
+            "name": "Amul Butter 100g",
+            "unit": "100g",
+            "sale_price": 54.0,
+            "price": 58.0,
+            "app": "instamart",
+            "app_name": "Instamart",
+        },
+    ]
+
+    async def _im_search(user_id, query):
+        return [p for p in IM_PRODUCTS if "amul butter" in query.lower()]
+
+    async def _im_cart(user_id, items):
+        return {
+            "success": True,
+            "items": [{"success": True, "count_added": i.get("count", 1)}
+                      for i in items],
+        }
+
+    m.im_search = AsyncMock(side_effect=_im_search)
+    m.im_cart = AsyncMock(side_effect=_im_cart)
+    monkeypatch.setattr(instamart, "search_item_api", m.im_search)
+    monkeypatch.setattr(instamart, "add_all_to_cart_api", m.im_cart)
+
     return m
 
 
@@ -337,6 +375,9 @@ class FakeBrowserSession:
         if self._authed:
             return ""
         return "Waiting for login…"
+
+    async def get_local_storage(self) -> dict:
+        return {}
 
     async def close(self) -> None:
         pass

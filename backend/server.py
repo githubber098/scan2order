@@ -41,10 +41,10 @@ import ocr as ocr_module
 import ranker
 import sms
 from storage import user_store
-from stores import bigbasket, blinkit, zepto
+from stores import bigbasket, blinkit, zepto, instamart
 
 BASE_DIR = Path(__file__).parent
-APP_VERSION = "1.5.0"
+APP_VERSION = "1.6.0"
 _TEMPLATES_DIR = BASE_DIR / "templates"
 _STATIC_DIR    = BASE_DIR / "static"
 _404_HTML      = BASE_DIR / "templates" / "404.html"
@@ -86,9 +86,10 @@ def _user_ctx(user_id: str) -> dict:
     if user.get("theme") not in _VALID_THEMES:
         user["theme"] = "fresh"
     stores_connected = {
-        "bigbasket": bigbasket.is_session_valid(user_id),
-        "blinkit":   blinkit.is_session_valid(user_id),
-        "zepto":     zepto.is_session_valid(user_id),
+        "bigbasket":  bigbasket.is_session_valid(user_id),
+        "blinkit":    blinkit.is_session_valid(user_id),
+        "zepto":      zepto.is_session_valid(user_id),
+        "instamart":  instamart.is_session_valid(user_id),
     }
     return {"user": user, "user_id": user_id, "stores": stores_connected}
 
@@ -154,9 +155,10 @@ def _get_session_user(request: Request) -> str | None:
 # ── Store display names ─────────────────────────────────────────────────────
 
 _STORE_DISPLAY = {
-    "bigbasket": "BigBasket",
-    "blinkit": "Blinkit",
-    "zepto": "Zepto",
+    "bigbasket":  "BigBasket",
+    "blinkit":    "Blinkit",
+    "zepto":      "Zepto",
+    "instamart":  "Instamart",
 }
 
 
@@ -229,6 +231,8 @@ def _get_available_stores(user_id: str) -> list[str]:
         stores.append("blinkit")
     if zepto.is_session_valid(user_id):
         stores.append("zepto")
+    if instamart.is_session_valid(user_id):
+        stores.append("instamart")
     return stores
 
 
@@ -683,7 +687,8 @@ async def api_auth_status(user_id: str):
     if not uid:
         return {"error": "missing user_id"}
     stores_data = user_store.get_user_stores(uid)
-    _health_fns = {"blinkit": blinkit.session_health, "zepto": zepto.session_health}
+    _health_fns = {"blinkit": blinkit.session_health, "zepto": zepto.session_health,
+                   "instamart": instamart.session_health}
     connected = {}
     for store in _STORE_DISPLAY:
         if not stores_data.get(store, {}).get("connected"):
@@ -936,8 +941,16 @@ async def browser_auth_check(session_id: str):
         return {"done": False, "error": "session not found or expired"}
     cookies = await s.get_auth_cookies()
     if cookies:
-        user_store.connect_store(s.user_id, s.store, cookies)
-        print(f"[browser-auth] saved {len(cookies)} cookies for "
+        # Also snapshot localStorage — Zepto/Instamart keep the resolved
+        # delivery store id there, not (only) in cookies.
+        local_storage = {}
+        try:
+            local_storage = await s.get_local_storage()
+        except Exception:
+            pass
+        user_store.connect_store(s.user_id, s.store, cookies, local_storage)
+        print(f"[browser-auth] saved {len(cookies)} cookies + "
+              f"{len(local_storage)} localStorage keys for "
               f"{s.store} user {s.user_id[:8]}…")
         await auth_browser.close(session_id)
         return {"done": True, "user_id": s.user_id, "store": s.store}
@@ -1144,6 +1157,13 @@ async def mobile_order(request: Request):
                 if result.get("success"):
                     result = {"success": True, "count_added": qty}
                 cart_url = zepto.checkout_url()
+            elif store == "instamart":
+                result = await instamart.add_all_to_cart_api(
+                    user_id, [{"product_id": prod_id, "count": qty}]
+                )
+                if result.get("success"):
+                    result = {"success": True, "count_added": qty}
+                cart_url = instamart.checkout_url()
             else:
                 failed.append({**item, "reason": f"unknown store: {store}"})
                 continue
@@ -1159,7 +1179,8 @@ async def mobile_order(request: Request):
     # Default cart URL: first store that has added items
     _store_urls = {"bigbasket": bigbasket.checkout_url(),
                    "blinkit": blinkit.checkout_url(),
-                   "zepto": zepto.checkout_url()}
+                   "zepto": zepto.checkout_url(),
+                   "instamart": instamart.checkout_url()}
     first_store = (added[0].get("app") or added[0].get("store") or "bigbasket").lower() \
         if added else "bigbasket"
 
@@ -1208,10 +1229,11 @@ async def api_search(request: Request):
     if not available:
         return {"error": "No stores connected. Connect Blinkit or Zepto from the Profile page (in the sidebar)."}
 
-    from stores import bigbasket as bb, blinkit as bl, zepto as z
+    from stores import bigbasket as bb, blinkit as bl, zepto as z, instamart as im
     _search_fns = {"bigbasket": bb.search_item_api,
                    "blinkit": bl.search_item_api,
-                   "zepto": z.search_item_api}
+                   "zepto": z.search_item_api,
+                   "instamart": im.search_item_api}
 
     results = {}
 
@@ -1283,7 +1305,8 @@ async def api_shop_search(request: Request):
 
     _search_fns = {"bigbasket": bigbasket.search_item_api,
                    "blinkit": blinkit.search_item_api,
-                   "zepto": zepto.search_item_api}
+                   "zepto": zepto.search_item_api,
+                   "instamart": instamart.search_item_api}
     merged: list[dict] = []
 
     async def search_one(store_name: str):
@@ -1373,8 +1396,9 @@ async def _add_items_to_store(user_id: str, store_name: str,
     if not valid_items:
         return app_results
 
-    if store_name in ("zepto", "blinkit"):
-        store_mod = zepto if store_name == "zepto" else blinkit
+    _BATCH_STORES = {"zepto": zepto, "blinkit": blinkit, "instamart": instamart}
+    if store_name in _BATCH_STORES:
+        store_mod = _BATCH_STORES[store_name]
         try:
             batch = await store_mod.add_all_to_cart_api(user_id, valid_items)
         except Exception as e:
@@ -1436,7 +1460,8 @@ async def _trending_products(user_id: str, available: list[str]) -> list[dict]:
     """One representative (cheapest-per-unit) product per trending query."""
     _search_fns = {"bigbasket": bigbasket.search_item_api,
                    "blinkit": blinkit.search_item_api,
-                   "zepto": zepto.search_item_api}
+                   "zepto": zepto.search_item_api,
+                   "instamart": instamart.search_item_api}
 
     async def _one(term: str):
         merged: list[dict] = []
@@ -1696,13 +1721,14 @@ async def api_cart_add_all(request: Request):
                 continue
             valid_items.append(item)
 
-        # Zepto and Blinkit both expose a batched add_all_to_cart_api. Blinkit's
-        # /v5/carts is a SYNC endpoint (must send all items at once), so a
-        # per-item loop would overwrite each previous add — batching is required,
-        # not just an optimisation.
-        if store_name in ("zepto", "blinkit") and valid_items:
+        # Zepto, Blinkit and Instamart all expose a batched add_all_to_cart_api.
+        # Blinkit's /v5/carts is a SYNC endpoint (must send all items at once),
+        # so a per-item loop would overwrite each previous add — batching is
+        # required there, not just an optimisation.
+        _batch_stores = {"zepto": zepto, "blinkit": blinkit, "instamart": instamart}
+        if store_name in _batch_stores and valid_items:
             _cart_progress[user_id]["current"] = f"{store_name}: (batch add)"
-            store_mod = zepto if store_name == "zepto" else blinkit
+            store_mod = _batch_stores[store_name]
             try:
                 batch = await store_mod.add_all_to_cart_api(user_id, valid_items)
             except Exception as e:
@@ -1856,6 +1882,7 @@ def _store_base(name: str) -> str:
         "bigbasket": bigbasket.BASE_URL,
         "blinkit": blinkit.BASE_URL,
         "zepto": zepto.BASE_URL,
+        "instamart": instamart.BASE_URL,
     }.get(name, "")
 
 
