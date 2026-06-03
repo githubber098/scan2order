@@ -1295,6 +1295,7 @@ async def api_shop_search(request: Request):
     if not search_uid:
         return {"query": query, "products": [], "is_guest": is_guest,
                 "can_add": False,
+                "login_required": True,
                 "note": "Log in and connect a store to see live prices."}
 
     available = _get_available_stores(search_uid)
@@ -1552,6 +1553,10 @@ async def api_compare(request: Request):
     items = body.get("items", [])
 
     if not user_id:
+        # Guest with no GUEST_STORE_USER_ID configured: return 401 so the
+        # frontend can show a login CTA instead of alerting a raw error string.
+        if is_guest:
+            return JSONResponse({"error": "login_required"}, status_code=401)
         return {"error": "missing user_id"}
     if not items:
         return {"error": "missing items"}

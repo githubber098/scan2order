@@ -77,12 +77,15 @@ class TestApiCompare:
         assert abs(data["grand_total"] - carts_total) < 0.01
 
     def test_compare_missing_user_id(self, client, clean_db):
+        # A request with no session cookie and no body user_id is treated as a
+        # guest with no backing store → 401 login_required (not a raw error string).
         r = client.post("/api/compare", json={
             "items": [{"name": "Milk", "qty": "1L"}],
         })
+        assert r.status_code == 401
         data = r.json()
         assert "error" in data
-        assert "user_id" in data["error"].lower()
+        assert data["error"] == "login_required"
 
     def test_compare_empty_items(self, client, connected_user_bb, user_id, clean_db):
         r = client.post("/api/compare", json={

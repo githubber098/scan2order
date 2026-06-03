@@ -113,9 +113,13 @@
     // Reset to the default theme on the way out so the login page (and any next
     // account) never inherits this user's look.
     try { localStorage.removeItem("s2o-theme"); } catch (_) {}
+    // Clear recent searches so the next visitor doesn't see this user's history.
+    try { localStorage.removeItem("s2o-recent"); } catch (_) {}
     document.documentElement.setAttribute("data-theme", "fresh");
     await fetch("/api/auth/logout", { method: "POST" }).catch(() => {});
-    window.location.href = "/login";
+    // Go to the compare page (guest mode) not the login wall, so the app stays
+    // usable after signing out.
+    window.location.href = "/";
   };
 
   /* ===================================================================

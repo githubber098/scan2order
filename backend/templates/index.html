@@ -315,6 +315,17 @@ async function startCompare() {
     clearInterval(_pollTimer);
     document.getElementById('progress-wrap').style.display = 'none';
     btn.disabled = false;
+    // Guest with no backing store: show the login CTA instead of an alert.
+    if (resp.status === 401 || data.error === 'login_required') {
+      document.getElementById('results').style.display = '';
+      document.getElementById('item-cards').innerHTML = '';
+      document.getElementById('grand-total').textContent = '₹—';
+      document.getElementById('grand-summary').textContent = 'Sign in to compare';
+      document.querySelectorAll('[data-guest-hide]').forEach(el => el.style.display = 'none');
+      const guestCta = document.getElementById('guest-cta');
+      if (guestCta) guestCta.style.display = '';
+      return;
+    }
     if (data.error) { alert(data.error); return; }
     comparisonData = data;
     // Server computes savings; use it if provided, else compute client-side.

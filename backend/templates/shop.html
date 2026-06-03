@@ -42,6 +42,11 @@
 
   <!-- results -->
   <div id="shop-status" class="dim" style="font-size:12.5px;display:none"></div>
+  <!-- shown when guest has no GUEST_STORE_USER_ID configured -->
+  <div id="shop-login-cta" class="shop-guest-note" style="display:none;justify-content:space-between;align-items:center">
+    <span style="display:flex;align-items:center;gap:7px"><i data-ico="lock" data-s="14"></i>Sign in to see live prices</span>
+    <a class="btn" href="/login" style="text-decoration:none;font-size:13px;padding:7px 14px;white-space:nowrap">Log in</a>
+  </div>
   <div id="shop-skeleton" class="shop-grid" style="display:none"></div>
   <div id="shop-results" class="shop-grid"></div>
 </section>
@@ -149,8 +154,10 @@ async function shopSearch(preset){
   document.getElementById("shop-reco").style.display = "none";
   const results = document.getElementById("shop-results");
   const status = document.getElementById("shop-status");
+  const loginCta = document.getElementById("shop-login-cta");
   results.innerHTML = "";
   status.style.display = "none";
+  if (loginCta) loginCta.style.display = "none";
   _showSkeleton(true);
 
   try {
@@ -162,8 +169,14 @@ async function shopSearch(preset){
     _showSkeleton(false);
     const products = data.products || [];
     if (!products.length){
-      status.style.display = "";
-      status.textContent = data.note || `No results for “${q}”.`;
+      if (data.login_required) {
+        // No GUEST_STORE_USER_ID configured: show the sign-in CTA, not a dim text note.
+        const cta = document.getElementById(“shop-login-cta”);
+        if (cta) { cta.style.display = “”; if (window.s2o) window.s2o.paintIcons(cta); }
+      } else {
+        status.style.display = “”;
+        status.textContent = data.note || `No results for “${q}”.`;
+      }
     } else {
       renderProducts(products, data.can_add);
     }
@@ -319,6 +332,8 @@ document.addEventListener("DOMContentLoaded", () => {
       document.getElementById("shop-results").innerHTML = "";
       document.getElementById("shop-skeleton").style.display = "none";
       document.getElementById("shop-status").style.display = "none";
+      const _lc = document.getElementById("shop-login-cta");
+      if (_lc) _lc.style.display = "none";
       _shopBusy = false;
       return;
     }
