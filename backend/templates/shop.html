@@ -24,7 +24,7 @@
   {% endif %}
 
   <!-- recommended (shown until a search runs) -->
-  <div id="shop-reco" class="stack" style="gap:12px">
+  <div id="shop-reco" class="stack" style="gap:14px">
     <div>
       <div class="sectiontitle">Popular right now</div>
       <div id="shop-popular" class="chip-row"></div>
@@ -32,6 +32,11 @@
     <div id="shop-recent-wrap" style="display:none">
       <div class="sectiontitle">Recent searches</div>
       <div id="shop-recent" class="chip-row"></div>
+    </div>
+    <div id="shop-trending-wrap" style="display:none">
+      <div class="sectiontitle">Trending now</div>
+      <div id="shop-trending-skel" class="shop-grid" style="display:none"></div>
+      <div id="shop-trending" class="shop-grid"></div>
     </div>
   </div>
 
@@ -174,14 +179,14 @@ function _showSkeleton(on){
 }
 
 // ── Render product cards (already sorted cheapest-per-unit first) ──────────
-function renderProducts(products, canAdd){
-  const el = document.getElementById("shop-results");
+function renderProducts(products, canAdd, container){
+  const el = container || document.getElementById("shop-results");
   el.innerHTML = "";
-  products.forEach((p, i) => el.appendChild(_card(p, i, canAdd)));
+  products.forEach((p) => el.appendChild(_card(p, canAdd)));
   if (window.s2o) window.s2o.paintIcons(el);
 }
 
-function _card(p, idx, canAdd){
+function _card(p, canAdd){
   const card = document.createElement("div");
   card.className = "pcard";
   const sale = p.sale_price || p.price || 0;
@@ -205,34 +210,43 @@ function _card(p, idx, canAdd){
         ${mrp ? `<span class="pcard-mrp">₹${Math.round(mrp)}</span>` : ""}
         ${p.ppu_label ? `<span class="pcard-ppu">${_esc(p.ppu_label)}</span>` : ""}
       </div>
-      <div class="pcard-foot">
-        <div class="qstep">
-          <button type="button" aria-label="Decrease" data-q="-">−</button>
-          <span data-qty>1</span>
-          <button type="button" aria-label="Increase" data-q="+">+</button>
-        </div>
-        <button class="pcard-add" type="button">
-          <i data-ico="cart" data-s="15"></i><span>Add</span>
-        </button>
-      </div>
+      <div class="pcard-foot" data-control></div>
     </div>`;
-
-  // qty stepper
-  let qty = 1;
-  const qtyEl = card.querySelector("[data-qty]");
-  card.querySelectorAll("[data-q]").forEach(b => b.addEventListener("click", () => {
-    qty = Math.max(1, Math.min(99, qty + (b.dataset.q === "+" ? 1 : -1)));
-    qtyEl.textContent = qty;
-  }));
-
-  // add to cart
-  const addBtn = card.querySelector(".pcard-add");
-  addBtn.addEventListener("click", () => addToCart(p, qty, addBtn, canAdd));
+  _renderControl(card.querySelector("[data-control]"), p, canAdd);
   return card;
 }
 
-// ── Add to cart ────────────────────────────────────────────────────────────
-async function addToCart(product, qty, btn, canAdd){
+// The footer control is driven by the cart: nothing in the cart → a single
+// "Add" button; once added → a +/- quantity picker. Decrementing to 0 removes
+// the item and reverts to the Add button.
+function _renderControl(foot, p, canAdd){
+  const qty = (window.s2o && !window.s2o.isGuest()) ? window.s2o.shopCartGetQty(p) : 0;
+  foot.innerHTML = "";
+  if (qty > 0){
+    const step = document.createElement("div");
+    step.className = "qstep";
+    step.innerHTML = `<button type="button" aria-label="Decrease" data-d="-1">−</button>`
+      + `<span>${qty}</span>`
+      + `<button type="button" aria-label="Increase" data-d="1">+</button>`;
+    step.querySelectorAll("button").forEach(b =>
+      b.addEventListener("click", () => changeQty(p, parseInt(b.dataset.d), foot, canAdd)));
+    foot.appendChild(step);
+    const tag = document.createElement("span");
+    tag.style.cssText = "font-size:11px;color:var(--accent2);font-weight:700";
+    tag.textContent = "in cart";
+    foot.appendChild(tag);
+  } else {
+    const add = document.createElement("button");
+    add.className = "pcard-add"; add.type = "button";
+    add.innerHTML = `<i data-ico="cart" data-s="15"></i><span>Add</span>`;
+    add.addEventListener("click", () => changeQty(p, 1, foot, canAdd));
+    foot.appendChild(add);
+  }
+  if (window.s2o) window.s2o.paintIcons(foot);
+}
+
+// ── Add / change quantity ────────────────────────────────────────────────
+async function changeQty(product, delta, foot, canAdd){
   if (window.s2o && window.s2o.isGuest()){
     window.s2o_loginPrompt("Log in to add items to your cart.");
     return;
@@ -241,47 +255,51 @@ async function addToCart(product, qty, btn, canAdd){
     window.s2o_loginPrompt("Connect a store from your Profile to add items.");
     return;
   }
-  btn.disabled = true;
-  const label = btn.querySelector("span");
-  const prev = label.textContent;
-  label.textContent = "Adding…";
-
-  // Send the FULL per-app shop-cart list — Blinkit's /v5/carts replaces the
-  // whole cart, so the backend must always receive every Blinkit item.
-  const fullList = window.s2o.shopCartAdd({ ...product, count: qty }, qty);
+  const cur = window.s2o.shopCartGetQty(product);
+  const next = cur + delta;
+  // Update the local cart (qty 0 removes), repaint the control optimistically,
+  // then re-sync the FULL per-app list (Blinkit's /v5/carts replaces the cart).
+  const fullList = window.s2o.shopCartSetQty(product, next);
+  _renderControl(foot, product, canAdd);
+  window.s2o.updateCartBadge();
   try {
     const resp = await fetch("/api/shop/add", {
       method:"POST", headers:{"Content-Type":"application/json"},
       body: JSON.stringify({ app: product.app, items: fullList, user_id: userId }),
     });
     if (resp.status === 403){
-      // Session lost / not logged in — roll back the optimistic cart add.
-      window.s2o.shopCartAdd({ ...product, count: qty }, -qty - 999);
-      window.s2o_loginPrompt("Log in to add items to your cart.");
-      btn.disabled = false; label.textContent = prev; return;
-    }
-    const data = await resp.json();
-    const added = data.result && data.result.added && data.result.added.length;
-    if (added){
-      btn.classList.add("added");
-      label.textContent = "Added ✓";
+      window.s2o.shopCartSetQty(product, cur);   // roll back the optimistic change
+      _renderControl(foot, product, canAdd);
       window.s2o.updateCartBadge();
-      setTimeout(() => { btn.classList.remove("added"); label.textContent = prev; btn.disabled = false; }, 1600);
-    } else {
-      const reason = (data.result && data.result.failed && data.result.failed[0] || {}).failed_reason || "failed";
-      label.textContent = "Failed";
-      setTimeout(() => { label.textContent = prev; btn.disabled = false; }, 2000);
-      console.warn("[shop] add failed:", reason);
+      window.s2o_loginPrompt("Log in to add items to your cart.");
     }
-  } catch(e){
-    label.textContent = "Error";
-    setTimeout(() => { label.textContent = prev; btn.disabled = false; }, 2000);
+  } catch(_){ /* keep the optimistic local state; cart page can re-sync */ }
+}
+
+// ── Trending product cards (one per popular query, cached server-side) ─────
+async function loadTrending(){
+  const wrap = document.getElementById("shop-trending-wrap");
+  const skel = document.getElementById("shop-trending-skel");
+  wrap.style.display = "";
+  skel.style.display = "";
+  skel.innerHTML = Array.from({length:6}, () => `<div class="skel"></div>`).join("");
+  try {
+    const data = await (await fetch("/api/shop/trending")).json();
+    const prods = data.products || [];
+    skel.style.display = "none"; skel.innerHTML = "";
+    if (!prods.length){ wrap.style.display = "none"; return; }
+    renderProducts(prods, data.can_add, document.getElementById("shop-trending"));
+  } catch(_){
+    skel.style.display = "none";
+    wrap.style.display = "none";
   }
 }
 
 // ── Init ─────────────────────────────────────────────────────────────────
 document.addEventListener("DOMContentLoaded", () => {
   renderReco();
+  loadTrending();
+  if (window.s2o_greet) window.s2o_greet();
   const input = document.getElementById("shop-q");
   input.addEventListener("keydown", (e) => { if (e.key === "Enter") shopSearch(); });
   // Voice search: reuse the shared voice helper; auto-run on a final result.

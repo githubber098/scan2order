@@ -13,6 +13,7 @@ so the backend's session-based guest enforcement is exercised end-to-end.
 """
 
 import auth
+import server
 from server import _ppu_label, _guest_strip_entry
 
 
@@ -35,6 +36,19 @@ class TestGuestPages:
         r = client.get("/", follow_redirects=False)
         assert r.status_code == 200
         assert "_SERVER_GUEST   = true" in r.text
+
+    def test_cart_page_renders(self, client):
+        # The Cart tab must render its own page (empty state), NOT redirect.
+        r = client.get("/cart", follow_redirects=False)
+        assert r.status_code == 200
+        assert "cart-empty" in r.text and "Your cart is empty" in r.text
+
+    def test_tab_order_compare_shop_cart(self, client):
+        body = client.get("/shop").text
+        i_c = body.find('data-nav="compare"')
+        i_s = body.find('data-nav="shop"')
+        i_k = body.find('data-nav="cart"')
+        assert 0 < i_c < i_s < i_k   # Compare, Shop, Cart in that order
 
     def test_home_is_not_guest_when_authed(self, client, connected_user_all):
         _login(client, connected_user_all)
@@ -128,6 +142,31 @@ class TestShopAdd:
         assert mock_stores.bl_cart_all.await_count == 1
         sent = mock_stores.bl_cart_all.await_args.args[1]
         assert len(sent) == 2
+
+
+# ── Trending ───────────────────────────────────────────────────────────────────
+
+class TestShopTrending:
+    def test_trending_returns_cards_when_authed(self, client, mock_stores,
+                                                connected_user_all, monkeypatch):
+        server._trending_cache.clear()
+        # Point trending at the one query the store mocks actually match.
+        monkeypatch.setattr(server, "_TRENDING_QUERIES", ["amul butter"])
+        _login(client, connected_user_all)
+        r = client.get("/api/shop/trending")
+        assert r.status_code == 200
+        data = r.json()
+        assert data["is_guest"] is False and data["can_add"] is True
+        assert len(data["products"]) >= 1
+        assert "price_per_unit" in data["products"][0]
+
+    def test_trending_empty_for_guest_without_backing(self, client, mock_stores):
+        server._trending_cache.clear()
+        r = client.get("/api/shop/trending")
+        data = r.json()
+        assert data["is_guest"] is True
+        assert data["can_add"] is False
+        assert data["products"] == []
 
 
 # ── Compare guest restriction ────────────────────────────────────────────────────

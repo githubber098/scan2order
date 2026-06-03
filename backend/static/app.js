@@ -469,6 +469,58 @@
       badge.style.display = n > 0 ? "flex" : "none";
     });
   }
+  // Current quantity of a product in the cart (0 if not present).
+  function shopCartGetQty(product) {
+    const c = shopCartGet();
+    return ((c[product.app] || {})[String(product.product_id)] || {}).count || 0;
+  }
+  // All items for one app, as an array (for re-syncing the full per-app list).
+  function shopCartItems(app) {
+    return Object.values(shopCartGet()[app] || {});
+  }
+  // Set an absolute quantity; qty <= 0 removes the item. Returns the full
+  // per-app list so the caller can re-sync the store cart.
+  function shopCartSetQty(product, qty) {
+    const c = shopCartGet();
+    const app = product.app;
+    if (!c[app]) c[app] = {};
+    const pid = String(product.product_id);
+    if (qty <= 0) {
+      delete c[app][pid];
+    } else {
+      const cur = c[app][pid] || { ...product };
+      cur.count = Math.min(99, qty);
+      c[app][pid] = cur;
+    }
+    shopCartSet(c);
+    return Object.values(c[app] || {});
+  }
+
+  /* ---- greeting toast (Shop / Compare) --------------------------------- */
+  // Small friendly "Hi, <name>" that slides in on load and auto-dismisses.
+  window.s2o_greet = function () {
+    const el = document.getElementById("greet-toast");
+    if (!el) return;
+    const su = window._SERVER_USER;
+    const name = (su && su.name) ? su.name : (isGuest() ? "there" : "");
+    const hellos = ["Hi", "Hello", "Hey", "Welcome back"];
+    // Vary the greeting without Math.random (unavailable in some sandboxes):
+    const pick = hellos[(new Date().getMinutes()) % hellos.length];
+    el.textContent = name ? `${pick}, ${name} 👋` : `${pick} 👋`;
+    requestAnimationFrame(() => el.classList.add("show"));
+    clearTimeout(el._t);
+    el._t = setTimeout(() => el.classList.remove("show"), 3600);
+  };
+
+  /* ---- sign-out confirmation ------------------------------------------- */
+  window.s2o_confirmSignout = function () {
+    const m = document.getElementById("signout-confirm");
+    if (m) m.classList.add("open"); else logout();
+  };
+  window.s2o_closeSignout = function () {
+    const m = document.getElementById("signout-confirm");
+    if (m) m.classList.remove("open");
+  };
 
   /* ---- init ------------------------------------------------------------ */
   document.documentElement.setAttribute("data-theme", currentTheme());
@@ -508,5 +560,6 @@
     paintIcons, applyTheme, saveTheme, THEMES,
     attachVoice, voiceSupported, isGuest,
     shopCartGet, shopCartSet, shopCartAdd, shopCartCount, updateCartBadge,
+    shopCartGetQty, shopCartItems, shopCartSetQty,
   };
 })();

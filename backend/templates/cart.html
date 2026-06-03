@@ -1,0 +1,180 @@
+{% extends "base.html" %}
+{% set page = "cart" %}
+{% block title %}Cart{% endblock %}
+
+{% block content %}
+<section class="stack" aria-label="Cart">
+  <div class="spread">
+    <h1 class="h1">Your cart</h1>
+    <span id="cart-count-pill" class="pill-tag" style="display:none"></span>
+  </div>
+
+  <!-- empty state -->
+  <div id="cart-empty" class="card stack" style="display:none;text-align:center;padding:34px 20px;align-items:center">
+    <div style="width:64px;height:64px;border-radius:18px;background:var(--surface);color:var(--dim);display:flex;align-items:center;justify-content:center"><i data-ico="cart" data-s="30"></i></div>
+    <div style="font-weight:800;font-size:18px">Your cart is empty</div>
+    <p class="dim" style="font-size:13px;margin:0;max-width:300px">Browse the Shop and tap <b>Add</b> on an item to start a cart across your stores.</p>
+    <a class="btn" style="text-decoration:none;width:auto;padding:0 20px" href="/shop"><i data-ico="search" data-s="16"></i>Go to Shop</a>
+  </div>
+
+  <!-- cart contents -->
+  <div id="cart-body" style="display:none">
+    <div id="cart-apps" class="stack" style="gap:14px"></div>
+
+    <div class="hero spread" style="margin-top:6px">
+      <div>
+        <div style="font-size:12.5px;opacity:.85;font-weight:600">Cart total</div>
+        <div class="big num" id="cart-grand">₹—</div>
+        <div style="font-size:12px;opacity:.9;margin-top:2px" id="cart-summary"></div>
+      </div>
+    </div>
+
+    <p class="center dim" style="font-size:11.5px;margin-top:8px">
+      Items are added to each app's own cart — open the app to check out.
+    </p>
+    <button class="btn ghost" id="cart-clear" type="button" style="margin-top:2px" onclick="clearCart()">
+      <i data-ico="trash" data-s="16"></i>Clear cart
+    </button>
+  </div>
+</section>
+{% endblock %}
+
+{% block head %}
+<style>
+  .citem{ display:flex; gap:11px; align-items:center; padding:11px 0;
+    border-bottom:1px solid var(--card-br); }
+  .citem:last-child{ border-bottom:none; }
+  .citem-img{ width:50px; height:50px; border-radius:10px; object-fit:cover;
+    background:var(--surface); flex-shrink:0; display:flex; align-items:center;
+    justify-content:center; color:var(--dim); }
+  .citem-body{ flex:1; min-width:0; }
+  .citem-name{ font-size:13.5px; font-weight:650; line-height:1.25;
+    display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
+  .citem-meta{ font-size:11.5px; color:var(--muted); margin-top:2px; }
+  .citem-line{ font-weight:800; font-size:14px; min-width:54px; text-align:right; }
+  .app-head{ display:flex; align-items:center; justify-content:space-between; margin-bottom:2px; }
+  .app-head-l{ display:flex; align-items:center; gap:8px; font-weight:750; font-size:14px; }
+  .app-open{ font-size:11.5px; color:var(--accent2); font-weight:700; text-decoration:none; }
+  .qstep{ display:flex; align-items:center; border:1px solid var(--card-br);
+    border-radius:10px; overflow:hidden; }
+  .qstep button{ width:28px; height:28px; border:none; background:var(--surface);
+    color:var(--text); cursor:pointer; font-size:16px; line-height:1; display:flex;
+    align-items:center; justify-content:center; }
+  .qstep span{ min-width:26px; text-align:center; font-size:13px; font-weight:700; }
+</style>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+const userId = window._SERVER_USER_ID;
+const _SL = { bigbasket:"bb", blinkit:"bk", zepto:"zp" };
+const _SLT = { bigbasket:"bb", blinkit:"b", zepto:"Z" };
+const _SN = { bigbasket:"BigBasket", blinkit:"Blinkit", zepto:"Zepto" };
+const _STORE_CART_URL = {
+  blinkit: "https://blinkit.com/cart",
+  zepto: "https://www.zeptonow.com/cart",
+  bigbasket: "https://www.bigbasket.com/basket/",
+};
+function _esc(s){ const d=document.createElement("div"); d.textContent=s==null?"":s; return d.innerHTML; }
+function _price(p){ return p.sale_price || p.price || 0; }
+
+function render(){
+  const cart = window.s2o.shopCartGet();
+  const apps = Object.keys(cart).filter(a => Object.keys(cart[a]||{}).length);
+  const empty = document.getElementById("cart-empty");
+  const body = document.getElementById("cart-body");
+  const pill = document.getElementById("cart-count-pill");
+
+  let count = 0, grand = 0;
+  apps.forEach(a => Object.values(cart[a]).forEach(it => { count += (it.count||1); }));
+
+  if (!apps.length){
+    empty.style.display = "";
+    body.style.display = "none";
+    pill.style.display = "none";
+    if (window.s2o) window.s2o.paintIcons(document);
+    return;
+  }
+  empty.style.display = "none";
+  body.style.display = "";
+
+  const wrap = document.getElementById("cart-apps");
+  wrap.innerHTML = "";
+  for (const app of apps){
+    const items = Object.values(cart[app]);
+    let sub = 0;
+    const sec = document.createElement("div");
+    sec.className = "card tight stack"; sec.style.gap = "2px";
+    const ab = _SL[app] || "bb";
+    const openUrl = _STORE_CART_URL[app] || "#";
+    sec.innerHTML = `<div class="app-head">
+        <div class="app-head-l"><span class="slogo ${ab}" style="width:20px;height:20px;font-size:10px">${_SLT[app]||"?"}</span>${_SN[app]||app}</div>
+        <a class="app-open" href="${openUrl}" target="_blank" rel="noopener">Open ${_SN[app]||app} →</a>
+      </div>`;
+    for (const it of items){
+      const line = _price(it) * (it.count||1);
+      sub += line;
+      const row = document.createElement("div");
+      row.className = "citem";
+      row.innerHTML = `
+        <div class="citem-img">${it.image_url ? `<img src="${_esc(it.image_url)}" style="width:100%;height:100%;border-radius:10px;object-fit:cover" onerror="this.replaceWith(Object.assign(document.createElement('i'),{}));">` : `<i data-ico="cart" data-s="20"></i>`}</div>
+        <div class="citem-body">
+          <div class="citem-name">${_esc(it.name)}</div>
+          <div class="citem-meta">${it.unit ? _esc(it.unit)+" · " : ""}₹${Math.round(_price(it))} each</div>
+        </div>
+        <div class="qstep" data-pid="${_esc(String(it.product_id))}">
+          <button type="button" aria-label="Decrease" data-d="-1">−</button>
+          <span>${it.count||1}</span>
+          <button type="button" aria-label="Increase" data-d="1">+</button>
+        </div>
+        <div class="citem-line">₹${Math.round(line)}</div>`;
+      const stepper = row.querySelector(".qstep");
+      stepper.querySelectorAll("button").forEach(b =>
+        b.addEventListener("click", () => changeQty({...it, app}, parseInt(b.dataset.d))));
+      sec.appendChild(row);
+    }
+    const subEl = document.createElement("div");
+    subEl.className = "spread"; subEl.style.cssText = "padding-top:8px;font-size:12.5px;color:var(--muted)";
+    subEl.innerHTML = `<span>${_SN[app]||app} subtotal</span><span class="num" style="font-weight:800;color:var(--text)">₹${Math.round(sub)}</span>`;
+    sec.appendChild(subEl);
+    wrap.appendChild(sec);
+    grand += sub;
+  }
+
+  document.getElementById("cart-grand").textContent = "₹" + Math.round(grand);
+  document.getElementById("cart-summary").textContent =
+    count + " item" + (count===1?"":"s") + " · " + apps.length + " store" + (apps.length===1?"":"s");
+  pill.style.display = "";
+  pill.textContent = count + " item" + (count===1?"":"s");
+  window.s2o.updateCartBadge();
+  if (window.s2o) window.s2o.paintIcons(document);
+}
+
+async function changeQty(product, delta){
+  const cur = window.s2o.shopCartGetQty(product);
+  const next = cur + delta;
+  // Update local cart first (qty 0 removes), then re-sync the store cart.
+  const fullList = window.s2o.shopCartSetQty(product, next);
+  render();
+  try {
+    await fetch("/api/shop/add", {
+      method:"POST", headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({ app: product.app, items: fullList, user_id: userId }),
+    });
+  } catch(_){}
+}
+
+function clearCart(){
+  if (!confirm("Remove all items from your cart?")) return;
+  const cart = window.s2o.shopCartGet();
+  for (const app of Object.keys(cart)){
+    for (const pid of Object.keys(cart[app]||{})){
+      window.s2o.shopCartSetQty({app, product_id: pid}, 0);
+    }
+  }
+  render();
+}
+
+document.addEventListener("DOMContentLoaded", render);
+</script>
+{% endblock %}

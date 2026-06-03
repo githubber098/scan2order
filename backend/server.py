@@ -22,6 +22,7 @@ Mobile auth is unchanged: user_id is sent in the request body.
 import asyncio
 import json
 import os
+import time
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -43,7 +44,7 @@ from storage import user_store
 from stores import bigbasket, blinkit, zepto
 
 BASE_DIR = Path(__file__).parent
-APP_VERSION = "1.3.0"
+APP_VERSION = "1.4.0"
 _TEMPLATES_DIR = BASE_DIR / "templates"
 _STATIC_DIR    = BASE_DIR / "static"
 _404_HTML      = BASE_DIR / "templates" / "404.html"
@@ -344,6 +345,13 @@ async def home(request: Request):
 async def shop_page(request: Request):
     # Shop is browsable by guests (Add-to-Cart is gated to logged-in users).
     return _template_response(request, "shop.html", allow_guest=True)
+
+
+@app.get("/cart", response_class=HTMLResponse)
+async def cart_page(request: Request):
+    # Cart contents live client-side (localStorage); the page renders them or a
+    # themed empty state. Guest-allowed (a guest's cart is always empty).
+    return _template_response(request, "cart.html", allow_guest=True)
 
 
 @app.get("/history", response_class=HTMLResponse)
@@ -1415,6 +1423,84 @@ async def _add_items_to_store(user_id: str, store_name: str,
             print(f"[shop/add][bigbasket] error: {e}")
             app_results["failed"].append({**item, "failed_reason": str(e)})
     return app_results
+
+
+# Curated trending queries shown as product cards on the Shop landing.
+_TRENDING_QUERIES = ["Milk", "Bread", "Eggs", "Bananas", "Tomato", "Onion", "Paneer", "Curd"]
+# Cache: search_uid -> (timestamp, products). Avoids re-hitting the stores on
+# every Shop page load (trending changes slowly; a 10-min cache is plenty).
+_trending_cache: dict = {}
+
+
+async def _trending_products(user_id: str, available: list[str]) -> list[dict]:
+    """One representative (cheapest-per-unit) product per trending query."""
+    _search_fns = {"bigbasket": bigbasket.search_item_api,
+                   "blinkit": blinkit.search_item_api,
+                   "zepto": zepto.search_item_api}
+
+    async def _one(term: str):
+        merged: list[dict] = []
+
+        async def _s(store: str):
+            try:
+                prods = await _search_fns[store](user_id, term)
+            except Exception:
+                return
+            merged.extend(ranker.filter_by_query_relevance(prods, term) or prods)
+
+        await asyncio.gather(*[_s(s) for s in available])
+        best, best_ppu = None, float("inf")
+        for p in merged:
+            ppu = ranker._price_per_unit(p)
+            if ppu < best_ppu:
+                best, best_ppu = p, ppu
+        if best is None and merged:
+            best = merged[0]
+        if best:
+            ppu = ranker._price_per_unit(best)
+            best["price_per_unit"] = None if ppu == float("inf") else round(ppu, 4)
+            best["ppu_label"] = _ppu_label(best)
+        return best
+
+    results = await asyncio.gather(*[_one(t) for t in _TRENDING_QUERIES])
+    # Dedupe by (app, product_id) in case two queries map to the same product.
+    seen: set = set()
+    out: list[dict] = []
+    for r in results:
+        if not r:
+            continue
+        key = (r.get("app"), str(r.get("product_id") or ""))
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(r)
+    return out
+
+
+@app.get("/api/shop/trending")
+async def api_shop_trending(request: Request):
+    """Trending product cards for the Shop landing (one per popular query).
+
+    Cached per search-account for 10 minutes so it doesn't hammer the stores on
+    every page load. Same guest rules as /api/shop/search.
+    """
+    session_uid = _get_session_user(request)
+    is_guest = session_uid is None
+    search_uid = session_uid or _guest_store_user()
+    if not search_uid:
+        return {"products": [], "is_guest": is_guest, "can_add": False}
+    available = _get_available_stores(search_uid)
+    if not available:
+        return {"products": [], "is_guest": is_guest, "can_add": not is_guest}
+
+    now = time.time()
+    cached = _trending_cache.get(search_uid)
+    if cached and now - cached[0] < 600:
+        products = cached[1]
+    else:
+        products = await _trending_products(search_uid, available)
+        _trending_cache[search_uid] = (now, products)
+    return {"products": products, "is_guest": is_guest, "can_add": not is_guest}
 
 
 @app.post("/api/compare")

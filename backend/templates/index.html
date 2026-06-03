@@ -105,6 +105,7 @@ document.addEventListener('DOMContentLoaded', () => {
     sessionStorage.removeItem('s2o_rerun');
   }
   checkStoreHealth();
+  if (window.s2o_greet) window.s2o_greet();
   // Voice input on the list textarea (append mode), via the shared helper.
   if (window.s2o) {
     window.s2o.attachVoice(document.getElementById('items'),
