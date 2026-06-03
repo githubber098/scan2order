@@ -268,6 +268,8 @@
     _screenshotLoopActive = false;
   }
 
+  let _doneBtnShown = false;
+
   async function _checkBrowserAuth() {
     if (!_browserSessionId) return;
     try {
@@ -285,8 +287,39 @@
         if (d.message) statusEl.textContent = d.message;
         else if (d.error) statusEl.textContent = "⚠ " + d.error;
       }
+      // Show the manual "Done" button once the user is past login phase
+      // (status message changes from "Waiting for login…" to the wait_hint).
+      if (!_doneBtnShown && d.message && !d.message.startsWith("Waiting")) {
+        _doneBtnShown = true;
+        const bar = document.getElementById("browser-done-bar");
+        if (bar) bar.style.display = "flex";
+      }
     } catch (_) { /* transient — keep polling */ }
   }
+
+  window.s2o_forceSaveSession = async function () {
+    if (!_browserSessionId) return;
+    const btn = document.getElementById("browser-done-btn");
+    const msg = document.getElementById("browser-done-msg");
+    if (btn) btn.disabled = true;
+    if (msg) msg.textContent = "";
+    try {
+      const r = await fetch(`/api/auth/browser/force/${_browserSessionId}`, { method: "POST" });
+      const d = await r.json();
+      if (d.success) {
+        const label = _STORE_LABEL[d.store] || d.store || "Store";
+        await _closeBrowserModal();
+        toast(label + " connected!", "ok");
+        if (typeof refreshStoreRows === "function") refreshStoreRows();
+      } else {
+        if (msg) msg.textContent = d.error || "Could not save — try again.";
+        if (btn) btn.disabled = false;
+      }
+    } catch (e) {
+      if (msg) msg.textContent = "Network error — try again.";
+      if (btn) btn.disabled = false;
+    }
+  };
 
   function _showKeyboardHint() {
     const hint = document.getElementById("browser-kbd-hint");
@@ -306,6 +339,7 @@
     clearInterval(_checkTimer); clearTimeout(_typeFlushTimer);
     _checkTimer = null; _typeFlushTimer = null; _typeBuffer = "";
     _browserSessionId = null;
+    _doneBtnShown = false;
     document.removeEventListener("keydown", _browserKeyHandler);
     const loading = document.getElementById("browser-loading");
     if (loading) loading.classList.remove("show");
@@ -313,6 +347,13 @@
     if (modal) modal.classList.remove("open");
     const img = document.getElementById("browser-screenshot");
     if (img) { if (img.src && img.src.startsWith("blob:")) URL.revokeObjectURL(img.src); img.src = ""; }
+    // Hide done bar and reset its state for next open
+    const bar = document.getElementById("browser-done-bar");
+    if (bar) bar.style.display = "none";
+    const doneBtn = document.getElementById("browser-done-btn");
+    if (doneBtn) doneBtn.disabled = false;
+    const doneMsg = document.getElementById("browser-done-msg");
+    if (doneMsg) doneMsg.textContent = "";
   }
 
   async function _closeBrowserSession(callBackend) {

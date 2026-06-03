@@ -961,6 +961,34 @@ async def browser_auth_check(session_id: str):
     return {"done": False, "message": message}
 
 
+@app.post("/api/auth/browser/force/{session_id}")
+async def browser_auth_force(session_id: str):
+    """Force-save cookies without waiting for location detection.
+
+    Called when the user clicks "Done — I've set my address ✓" in the
+    browser relay UI. Requires at least phase-1 (auth cookie) to be present.
+    Used as a manual fallback for stores (like Instamart) where auto-detection
+    of the resolved storeId may fail due to sessionStorage/localStorage
+    variations across Swiggy app builds.
+    """
+    s = auth_browser.get(session_id)
+    if not s:
+        return {"success": False, "error": "session not found or expired"}
+    cfg = auth_browser._STORE_CONFIG.get(s.store, {})
+    auth_key = cfg.get("auth_cookie", "")
+    raw = await s._context.cookies()
+    kv = {c["name"]: c["value"] for c in raw}
+    if not kv.get(auth_key):
+        return {"success": False, "error": "Not logged in yet — please log in first"}
+    local_storage = await s.get_local_storage()
+    user_store.connect_store(s.user_id, s.store, kv, local_storage)
+    print(f"[browser-auth] force-saved {len(kv)} cookies + "
+          f"{len(local_storage)} localStorage keys for "
+          f"{s.store} user {s.user_id[:8]}… (manual Done button)")
+    await auth_browser.close(session_id)
+    return {"success": True, "user_id": s.user_id, "store": s.store}
+
+
 @app.delete("/api/auth/browser/session/{session_id}")
 async def browser_auth_close(session_id: str):
     """Cancel and close a browser auth session (e.g. user clicked Cancel)."""

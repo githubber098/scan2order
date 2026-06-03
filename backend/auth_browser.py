@@ -85,8 +85,14 @@ _STORE_CONFIG = {
                         "selectedAddress", "lastKnownLocation"],
         "wait_for_ls_contains": {"userLocation": "lat"},
         # Robust fallback: close as soon as any stored value carries a resolved
-        # store id (key name unknown across builds).
-        "location_scan": ["storeId", "store_id", "primaryStoreId"],
+        # store id (key name unknown across builds). Also include lat/lng
+        # markers since Swiggy saves resolved coords in sessionStorage.
+        "location_scan": [
+            "storeId", "store_id", "primaryStoreId", "swiggyStoreId",
+            "activeStoreId", "nearestStoreId", "instamart_store_id",
+            "\"lat\"", "\"latitude\"", "activeLatLng", "userLocation",
+            "addressId", "deliveryAddress",
+        ],
         "wait_hint": (
             "✅ Log in to Swiggy, then tap the location bar at the top and "
             "save/confirm a delivery address so Instamart knows your store. "
@@ -380,14 +386,15 @@ class _Session:
             except Exception as exc:
                 print(f"[browser] {self.store}: localStorage check failed: {exc}")
 
-        # Generic fallback: scan EVERY cookie value AND every localStorage value
-        # for any of the given marker substrings (e.g. "storeId"). Used by
-        # Instamart where the delivery store id is buried in a persisted JSON
-        # blob whose key name varies across builds.
+        # Generic fallback: scan EVERY cookie value AND every localStorage AND
+        # sessionStorage value for any of the given marker substrings (e.g.
+        # "storeId"). Used by Instamart where the delivery store id is buried
+        # in a persisted JSON blob whose key/storage type varies across builds.
         scan_markers = cfg.get("location_scan")
         if scan_markers:
             try:
                 blobs = list(kv.values())
+                # localStorage
                 ls_raw2 = await self._page.evaluate(
                     "() => JSON.stringify(Object.fromEntries("
                     "  Array.from({length: localStorage.length}, (_, i) => "
@@ -395,9 +402,23 @@ class _Session:
                     ")))"
                 )
                 blobs += list(json.loads(ls_raw2 or "{}").values())
+                # sessionStorage — Swiggy/Instamart stores resolved storeId here
+                ss_raw = await self._page.evaluate(
+                    "() => { try { return JSON.stringify(Object.fromEntries("
+                    "  Array.from({length: sessionStorage.length}, (_, i) => "
+                    "    [sessionStorage.key(i), sessionStorage.getItem(sessionStorage.key(i))]"
+                    "))); } catch(e) { return '{}'; } }"
+                )
+                ss = json.loads(ss_raw or "{}")
+                blobs += list(ss.values())
                 hay = " ".join(unquote(b) if isinstance(b, str) else "" for b in blobs)
                 if any(m in hay for m in scan_markers):
                     return True
+                # Log sessionStorage keys (not values) so we can add the right
+                # marker if our list is still wrong.
+                print(
+                    f"[browser] {self.store}: sessionStorage keys: {list(ss.keys())[:30]}"
+                )
             except Exception as exc:
                 print(f"[browser] {self.store}: location scan failed: {exc}")
 

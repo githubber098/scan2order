@@ -160,6 +160,13 @@
     border:2px solid var(--accent); border-radius:50%; pointer-events:none;
     animation:b-ripple .5s ease-out forwards; z-index:3; }
   @keyframes b-ripple{ from{ opacity:.9; transform:scale(.4); } to{ opacity:0; transform:scale(1.7); } }
+  .browser-done-bar{ padding:8px 14px; border-top:1px solid var(--card-br);
+    display:flex; align-items:center; gap:10px; flex-shrink:0; }
+  .browser-done-btn{ flex:1; padding:10px 16px; background:var(--accent);
+    color:var(--accent-ink); border:none; border-radius:8px; font-size:14px;
+    font-weight:700; cursor:pointer; transition:opacity .15s; }
+  .browser-done-btn:active{ opacity:.8; }
+  .browser-done-msg{ font-size:12px; color:var(--err); }
 </style>
 
 
@@ -179,6 +186,12 @@
     <div class="browser-footer">
       <span class="browser-footer-hint">Click to interact · type directly · scroll works</span>
       <span id="browser-auth-status">Waiting for login…</span>
+    </div>
+    <div class="browser-done-bar" id="browser-done-bar" style="display:none">
+      <button class="browser-done-btn" id="browser-done-btn" onclick="s2o_forceSaveSession()">
+        ✓ Done — I've set my address
+      </button>
+      <span class="browser-done-msg" id="browser-done-msg"></span>
     </div>
   </div>
 </div>
