@@ -1,0 +1,295 @@
+{% extends "base.html" %}
+{% set page = "shop" %}
+{% block title %}Shop{% endblock %}
+
+{% block content %}
+<section class="stack" aria-label="Shop">
+  <!-- search bar -->
+  <div class="shop-search">
+    <i data-ico="search" data-s="19" class="shop-search-ico"></i>
+    <input id="shop-q" class="shop-search-input" type="search" inputmode="search"
+           placeholder="Search milk, bread, eggs…" autocomplete="off"
+           enterkeyhint="search" />
+    <button id="shop-mic" class="mic-btn" type="button" aria-label="Voice search" style="width:38px;height:38px">
+      <i data-ico="mic" data-s="19"></i>
+    </button>
+    <button id="shop-go" class="btn" type="button" style="width:auto;padding:0 16px" onclick="shopSearch()">Search</button>
+  </div>
+
+  {% if guest %}
+  <div class="shop-guest-note">
+    <i data-ico="lock" data-s="14"></i>
+    <span>Browsing as a guest — <a href="/login">log in</a> to add items to your cart.</span>
+  </div>
+  {% endif %}
+
+  <!-- recommended (shown until a search runs) -->
+  <div id="shop-reco" class="stack" style="gap:12px">
+    <div>
+      <div class="sectiontitle">Popular right now</div>
+      <div id="shop-popular" class="chip-row"></div>
+    </div>
+    <div id="shop-recent-wrap" style="display:none">
+      <div class="sectiontitle">Recent searches</div>
+      <div id="shop-recent" class="chip-row"></div>
+    </div>
+  </div>
+
+  <!-- results -->
+  <div id="shop-status" class="dim" style="font-size:12.5px;display:none"></div>
+  <div id="shop-skeleton" class="shop-grid" style="display:none"></div>
+  <div id="shop-results" class="shop-grid"></div>
+</section>
+{% endblock %}
+
+{% block head %}
+<style>
+  .shop-search{ display:flex; align-items:center; gap:8px; background:var(--input-bg);
+    border:1px solid var(--card-br); border-radius:14px; padding:6px 8px 6px 12px; }
+  .shop-search-ico{ color:var(--muted); flex-shrink:0; }
+  .shop-search-input{ flex:1; min-width:0; border:none; background:transparent;
+    color:var(--text); font-size:15px; outline:none; padding:8px 2px; }
+  .chip-row{ display:flex; flex-wrap:wrap; gap:8px; }
+  .chip{ border:1px solid var(--card-br); background:var(--surface); color:var(--text);
+    border-radius:999px; padding:7px 13px; font-size:13px; cursor:pointer;
+    transition:border-color .15s, background .15s; }
+  .chip:hover{ border-color:var(--accent); }
+  .shop-guest-note{ display:flex; align-items:center; gap:7px; font-size:12.5px;
+    color:var(--muted); background:var(--accent-soft); border-radius:10px; padding:8px 12px; }
+  .shop-guest-note a{ color:var(--accent2); font-weight:700; }
+
+  .shop-grid{ display:grid; grid-template-columns:1fr; gap:9px; }
+  @media (min-width:560px){ .shop-grid{ grid-template-columns:1fr 1fr; } }
+  @media (min-width:1100px){ .shop-grid{ grid-template-columns:1fr 1fr 1fr; } }
+
+  .pcard{ display:flex; gap:11px; padding:11px; background:var(--card);
+    border:1px solid var(--card-br); border-radius:var(--radius, 14px); position:relative; }
+  .pcard-img{ width:62px; height:62px; border-radius:10px; object-fit:cover;
+    background:var(--surface); flex-shrink:0; }
+  .pcard-img.ph{ display:flex; align-items:center; justify-content:center; color:var(--dim); }
+  .pcard-body{ flex:1; min-width:0; display:flex; flex-direction:column; gap:3px; }
+  .pcard-name{ font-size:13.5px; font-weight:650; line-height:1.25;
+    display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
+  .pcard-meta{ display:flex; align-items:center; gap:7px; font-size:11.5px; color:var(--muted); }
+  .pcard-price-row{ display:flex; align-items:baseline; gap:6px; margin-top:1px; }
+  .pcard-price{ font-weight:800; font-size:15px; }
+  .pcard-mrp{ font-size:11.5px; color:var(--dim); text-decoration:line-through; }
+  .pcard-ppu{ font-size:11px; color:var(--accent2); font-weight:700; }
+  .pcard-foot{ display:flex; align-items:center; gap:8px; margin-top:7px; }
+  .qstep{ display:flex; align-items:center; gap:0; border:1px solid var(--card-br);
+    border-radius:10px; overflow:hidden; }
+  .qstep button{ width:28px; height:28px; border:none; background:var(--surface);
+    color:var(--text); cursor:pointer; font-size:16px; line-height:1; display:flex;
+    align-items:center; justify-content:center; }
+  .qstep span{ min-width:26px; text-align:center; font-size:13px; font-weight:700; }
+  .pcard-add{ flex:1; height:30px; border-radius:9px; border:none; cursor:pointer;
+    background:var(--accent-grad); color:var(--accent-ink); font-weight:750; font-size:12.5px;
+    display:flex; align-items:center; justify-content:center; gap:5px; }
+  .pcard-add.added{ background:var(--ok); }
+  .pcard-add:disabled{ opacity:.6; cursor:not-allowed; }
+  .skel{ height:86px; border-radius:var(--radius,14px); background:var(--surface);
+    position:relative; overflow:hidden; }
+  .skel::after{ content:""; position:absolute; inset:0; transform:translateX(-100%);
+    background:linear-gradient(90deg,transparent,color-mix(in srgb,var(--card-br) 55%,transparent),transparent);
+    animation:shimmer 1.25s infinite; }
+  @keyframes shimmer{ 100%{ transform:translateX(100%); } }
+</style>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+const userId = window._SERVER_USER_ID;
+const POPULAR = ["Milk", "Bread", "Eggs", "Bananas", "Tomato", "Onion", "Butter", "Curd"];
+const _SL = { bigbasket:"bb", blinkit:"bk", zepto:"zp" };
+const _SLT = { bigbasket:"bb", blinkit:"b", zepto:"Z" };
+const _SN = { bigbasket:"BigBasket", blinkit:"Blinkit", zepto:"Zepto" };
+let _shopBusy = false;
+
+function _esc(s){ const d=document.createElement("div"); d.textContent=s==null?"":s; return d.innerHTML; }
+
+// ── Recommended (popular chips + recent searches) ───────────────────────
+function _recent(){ try { return JSON.parse(localStorage.getItem("s2o-recent")||"[]"); } catch(_){ return []; } }
+function _pushRecent(q){
+  let r = _recent().filter(x => x.toLowerCase() !== q.toLowerCase());
+  r.unshift(q); r = r.slice(0,8);
+  try { localStorage.setItem("s2o-recent", JSON.stringify(r)); } catch(_){}
+}
+function renderReco(){
+  const pop = document.getElementById("shop-popular");
+  pop.innerHTML = POPULAR.map(p => `<button class="chip" onclick="shopSearch('${_esc(p)}')">${_esc(p)}</button>`).join("");
+  const rec = _recent();
+  const wrap = document.getElementById("shop-recent-wrap");
+  if (rec.length){
+    wrap.style.display = "";
+    document.getElementById("shop-recent").innerHTML =
+      rec.map(p => `<button class="chip" onclick="shopSearch('${_esc(p)}')">${_esc(p)}</button>`).join("");
+  } else { wrap.style.display = "none"; }
+  if (window.s2o) window.s2o.paintIcons(document);
+}
+
+// ── Search ───────────────────────────────────────────────────────────────
+async function shopSearch(preset){
+  const input = document.getElementById("shop-q");
+  if (preset) input.value = preset;
+  const q = input.value.trim();
+  if (!q || _shopBusy) return;
+  _shopBusy = true;
+  _pushRecent(q);
+
+  document.getElementById("shop-reco").style.display = "none";
+  const results = document.getElementById("shop-results");
+  const status = document.getElementById("shop-status");
+  results.innerHTML = "";
+  status.style.display = "none";
+  _showSkeleton(true);
+
+  try {
+    const resp = await fetch("/api/shop/search", {
+      method:"POST", headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({ query: q, user_id: userId }),
+    });
+    const data = await resp.json();
+    _showSkeleton(false);
+    const products = data.products || [];
+    if (!products.length){
+      status.style.display = "";
+      status.textContent = data.note || `No results for “${q}”.`;
+    } else {
+      renderProducts(products, data.can_add);
+    }
+  } catch(e){
+    _showSkeleton(false);
+    status.style.display = "";
+    status.textContent = "Search error: " + e.message;
+  } finally {
+    _shopBusy = false;
+  }
+}
+
+function _showSkeleton(on){
+  const sk = document.getElementById("shop-skeleton");
+  sk.style.display = on ? "" : "none";
+  if (on) sk.innerHTML = Array.from({length:6}, () => `<div class="skel"></div>`).join("");
+  else sk.innerHTML = "";
+}
+
+// ── Render product cards (already sorted cheapest-per-unit first) ──────────
+function renderProducts(products, canAdd){
+  const el = document.getElementById("shop-results");
+  el.innerHTML = "";
+  products.forEach((p, i) => el.appendChild(_card(p, i, canAdd)));
+  if (window.s2o) window.s2o.paintIcons(el);
+}
+
+function _card(p, idx, canAdd){
+  const card = document.createElement("div");
+  card.className = "pcard";
+  const sale = p.sale_price || p.price || 0;
+  const mrp = (p.price && p.price > sale) ? p.price : 0;
+  const ab = _SL[p.app] || "bb";
+  const img = p.image_url
+    ? `<img class="pcard-img" src="${_esc(p.image_url)}" alt="" loading="lazy" onerror="this.replaceWith(Object.assign(document.createElement('div'),{className:'pcard-img ph',innerHTML:'<i data-ico=\\'cart\\' data-s=\\'22\\'></i>'}))">`
+    : `<div class="pcard-img ph"><i data-ico="cart" data-s="22"></i></div>`;
+
+  card.innerHTML = `
+    ${img}
+    <div class="pcard-body">
+      <div class="pcard-name">${_esc(p.name)}</div>
+      <div class="pcard-meta">
+        <span class="slogo ${ab}" style="width:18px;height:18px;font-size:9px">${_SLT[p.app]||"?"}</span>
+        <span>${_SN[p.app]||p.app}</span>
+        ${p.unit ? "· <span>"+_esc(p.unit)+"</span>" : ""}
+      </div>
+      <div class="pcard-price-row">
+        <span class="pcard-price">₹${Math.round(sale)}</span>
+        ${mrp ? `<span class="pcard-mrp">₹${Math.round(mrp)}</span>` : ""}
+        ${p.ppu_label ? `<span class="pcard-ppu">${_esc(p.ppu_label)}</span>` : ""}
+      </div>
+      <div class="pcard-foot">
+        <div class="qstep">
+          <button type="button" aria-label="Decrease" data-q="-">−</button>
+          <span data-qty>1</span>
+          <button type="button" aria-label="Increase" data-q="+">+</button>
+        </div>
+        <button class="pcard-add" type="button">
+          <i data-ico="cart" data-s="15"></i><span>Add</span>
+        </button>
+      </div>
+    </div>`;
+
+  // qty stepper
+  let qty = 1;
+  const qtyEl = card.querySelector("[data-qty]");
+  card.querySelectorAll("[data-q]").forEach(b => b.addEventListener("click", () => {
+    qty = Math.max(1, Math.min(99, qty + (b.dataset.q === "+" ? 1 : -1)));
+    qtyEl.textContent = qty;
+  }));
+
+  // add to cart
+  const addBtn = card.querySelector(".pcard-add");
+  addBtn.addEventListener("click", () => addToCart(p, qty, addBtn, canAdd));
+  return card;
+}
+
+// ── Add to cart ────────────────────────────────────────────────────────────
+async function addToCart(product, qty, btn, canAdd){
+  if (window.s2o && window.s2o.isGuest()){
+    window.s2o_loginPrompt("Log in to add items to your cart.");
+    return;
+  }
+  if (canAdd === false){
+    window.s2o_loginPrompt("Connect a store from your Profile to add items.");
+    return;
+  }
+  btn.disabled = true;
+  const label = btn.querySelector("span");
+  const prev = label.textContent;
+  label.textContent = "Adding…";
+
+  // Send the FULL per-app shop-cart list — Blinkit's /v5/carts replaces the
+  // whole cart, so the backend must always receive every Blinkit item.
+  const fullList = window.s2o.shopCartAdd({ ...product, count: qty }, qty);
+  try {
+    const resp = await fetch("/api/shop/add", {
+      method:"POST", headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({ app: product.app, items: fullList, user_id: userId }),
+    });
+    if (resp.status === 403){
+      // Session lost / not logged in — roll back the optimistic cart add.
+      window.s2o.shopCartAdd({ ...product, count: qty }, -qty - 999);
+      window.s2o_loginPrompt("Log in to add items to your cart.");
+      btn.disabled = false; label.textContent = prev; return;
+    }
+    const data = await resp.json();
+    const added = data.result && data.result.added && data.result.added.length;
+    if (added){
+      btn.classList.add("added");
+      label.textContent = "Added ✓";
+      window.s2o.updateCartBadge();
+      setTimeout(() => { btn.classList.remove("added"); label.textContent = prev; btn.disabled = false; }, 1600);
+    } else {
+      const reason = (data.result && data.result.failed && data.result.failed[0] || {}).failed_reason || "failed";
+      label.textContent = "Failed";
+      setTimeout(() => { label.textContent = prev; btn.disabled = false; }, 2000);
+      console.warn("[shop] add failed:", reason);
+    }
+  } catch(e){
+    label.textContent = "Error";
+    setTimeout(() => { label.textContent = prev; btn.disabled = false; }, 2000);
+  }
+}
+
+// ── Init ─────────────────────────────────────────────────────────────────
+document.addEventListener("DOMContentLoaded", () => {
+  renderReco();
+  const input = document.getElementById("shop-q");
+  input.addEventListener("keydown", (e) => { if (e.key === "Enter") shopSearch(); });
+  // Voice search: reuse the shared voice helper; auto-run on a final result.
+  if (window.s2o){
+    window.s2o.attachVoice(input, document.getElementById("shop-mic"), {
+      onText: (text, isFinal) => { input.value = text; if (isFinal && text) shopSearch(); },
+    });
+  }
+});
+</script>
+{% endblock %}

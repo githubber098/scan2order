@@ -35,6 +35,9 @@
     x:       '<path d="M6 6l12 12M18 6L6 18"/>',
     plug:    '<path d="M9 2v6M15 2v6M7 8h10v3a5 5 0 0 1-10 0V8zM12 16v6"/>',
     spinner: '<path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/>',
+    search:  '<circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/>',
+    mic:     '<rect x="9" y="2" width="6" height="11" rx="3"/><path d="M5 10a7 7 0 0 0 14 0M12 17v4M8 21h8"/>',
+    lock:    '<rect x="4" y="10" width="16" height="11" rx="2.5"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/>',
   };
   function paintIcons(root) {
     (root || document).querySelectorAll("i[data-ico]").forEach((el) => {
@@ -349,6 +352,124 @@
 
   window.s2o_cancelOcr = function () { if (_ocrAbort) _ocrAbort.abort(); };
 
+  /* ---- voice input (Web Speech API) ------------------------------------ */
+  // Shared voice-to-text used by every input field with a mic button. Falls
+  // back gracefully (hides the button) where the browser has no SpeechRecognition
+  // (e.g. Firefox). attachVoice(inputEl, micBtnEl, {append, onText}).
+  const _SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  function voiceSupported() { return !!_SR; }
+
+  function attachVoice(input, btn, opts) {
+    opts = opts || {};
+    if (!input || !btn) return;
+    if (!_SR) { btn.style.display = "none"; return; }  // unsupported → hide mic
+    let rec = null, listening = false;
+    const stop = () => { try { rec && rec.stop(); } catch (_) {} };
+    btn.addEventListener("click", (e) => {
+      e.preventDefault();
+      if (listening) { stop(); return; }
+      rec = new _SR();
+      rec.lang = "en-IN";
+      rec.interimResults = true;
+      rec.continuous = false;
+      let finalText = "";
+      rec.onstart = () => { listening = true; btn.classList.add("listening"); };
+      rec.onend = () => { listening = false; btn.classList.remove("listening"); };
+      rec.onerror = () => { listening = false; btn.classList.remove("listening"); };
+      rec.onresult = (ev) => {
+        let interim = "";
+        finalText = "";
+        for (let i = 0; i < ev.results.length; i++) {
+          const t = ev.results[i][0].transcript;
+          if (ev.results[i].isFinal) finalText += t;
+          else interim += t;
+        }
+        const text = (finalText || interim).trim();
+        if (opts.onText) { opts.onText(text, !!finalText); return; }
+        if (opts.append && input.value.trim()) {
+          input.value = input.value.replace(/\s*$/, "") + "\n" + text;
+        } else {
+          input.value = text;
+        }
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+      };
+      try { rec.start(); } catch (_) {}
+    });
+  }
+
+  /* ---- guest mode ------------------------------------------------------ */
+  // A logged-out visitor: no server user_id. They can browse Shop + Compare
+  // (cheapest-only) but Add-to-Cart / full comparison / History are gated.
+  function isGuest() {
+    return window._SERVER_GUEST === true || !window._SERVER_USER_ID;
+  }
+
+  // Non-intrusive bottom-sheet asking the guest to log in. Backed by markup in
+  // base.html (#login-prompt). message overrides the default copy.
+  window.s2o_loginPrompt = function (message) {
+    const sheet = document.getElementById("login-prompt");
+    if (!sheet) { if (confirm("Log in to unlock this feature?")) location.href = "/login"; return; }
+    const msg = sheet.querySelector("[data-lp-msg]");
+    if (msg && message) msg.textContent = message;
+    sheet.classList.add("open");
+  };
+  window.s2o_closeLoginPrompt = function () {
+    const sheet = document.getElementById("login-prompt");
+    if (sheet) sheet.classList.remove("open");
+  };
+
+  /* ---- shop cart (client-side, per user) ------------------------------- */
+  // Tracks items added via the Shop tab so the header badge can show a running
+  // count across all apps. This reflects what THIS browser added this session,
+  // not a live fetch of each store's real cart. Keyed by user so it never
+  // leaks across accounts; guests get no cart.
+  function _cartKey() {
+    const uid = window._SERVER_USER_ID || "anon";
+    return "s2o-shopcart-" + uid;
+  }
+  function shopCartGet() {
+    try { return JSON.parse(localStorage.getItem(_cartKey()) || "{}"); }
+    catch (_) { return {}; }
+  }
+  function shopCartSet(c) {
+    try { localStorage.setItem(_cartKey(), JSON.stringify(c)); } catch (_) {}
+    updateCartBadge();
+  }
+  function shopCartCount() {
+    const c = shopCartGet();
+    let n = 0;
+    for (const app of Object.keys(c)) {
+      for (const pid of Object.keys(c[app] || {})) n += (c[app][pid].count || 1);
+    }
+    return n;
+  }
+  // Add/increment one product in the per-app cart; returns the full per-app list.
+  function shopCartAdd(product, delta) {
+    const c = shopCartGet();
+    const app = product.app;
+    if (!c[app]) c[app] = {};
+    const pid = String(product.product_id);
+    const cur = c[app][pid] || { ...product, count: 0 };
+    const next = (cur.count || 0) + (delta == null ? 1 : delta);
+    if (next <= 0) {
+      delete c[app][pid];          // removed (e.g. rolling back a failed add)
+    } else {
+      cur.count = Math.min(99, next);
+      c[app][pid] = cur;
+    }
+    shopCartSet(c);
+    return Object.values(c[app] || {});
+  }
+  function updateCartBadge() {
+    const badges = document.querySelectorAll(".cart-badge");
+    if (!badges.length) return;
+    const n = isGuest() ? 0 : shopCartCount();
+    badges.forEach((badge) => {
+      badge.textContent = n;
+      badge.style.display = n > 0 ? "flex" : "none";
+    });
+  }
+
   /* ---- init ------------------------------------------------------------ */
   document.documentElement.setAttribute("data-theme", currentTheme());
   document.addEventListener("DOMContentLoaded", function () {
@@ -356,11 +477,20 @@
     wireSwitcher();
     _initBrowserModal();
 
-    // Active nav from <body data-page="compare|history|profile">
+    // Active nav from <body data-page="compare|shop|history|profile">
     const page = document.body.getAttribute("data-page");
     document.querySelectorAll("[data-nav]").forEach((el) => {
       if (el.getAttribute("data-nav") === page) el.classList.add("on");
     });
+
+    // Guest mode: hide login-gated nav (History) and show the cart count.
+    if (isGuest()) {
+      document.querySelectorAll("[data-guest-hide]").forEach((el) => {
+        el.style.display = "none";
+      });
+      document.body.classList.add("is-guest");
+    }
+    updateCartBadge();
 
     // Preserve ?theme= preview across navigation
     const t = qp("theme");
@@ -374,5 +504,9 @@
     }
   });
 
-  window.s2o = { paintIcons, applyTheme, saveTheme, THEMES };
+  window.s2o = {
+    paintIcons, applyTheme, saveTheme, THEMES,
+    attachVoice, voiceSupported, isGuest,
+    shopCartGet, shopCartSet, shopCartAdd, shopCartCount, updateCartBadge,
+  };
 })();

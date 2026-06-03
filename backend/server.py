@@ -43,7 +43,7 @@ from storage import user_store
 from stores import bigbasket, blinkit, zepto
 
 BASE_DIR = Path(__file__).parent
-APP_VERSION = "1.1.0"
+APP_VERSION = "1.2.0"
 _TEMPLATES_DIR = BASE_DIR / "templates"
 _STATIC_DIR    = BASE_DIR / "static"
 _404_HTML      = BASE_DIR / "templates" / "404.html"
@@ -93,12 +93,34 @@ def _user_ctx(user_id: str) -> dict:
 
 
 def _template_response(request: Request, tpl: str, extra: dict | None = None,
-                       headers: dict | None = None):
-    """Render a Jinja2 template with common user context."""
+                       headers: dict | None = None, allow_guest: bool = False):
+    """Render a Jinja2 template with common user context.
+
+    allow_guest=True lets a logged-out visitor render the page in *guest mode*
+    (browse-only). The template receives guest=True, user_id=None and a stub
+    user so base.html renders; the frontend then applies feature restrictions
+    and the backend enforces them on the API endpoints.
+    """
     user_id = _get_session_user(request)
     if not user_id:
-        return RedirectResponse("/login", status_code=302)
+        if not allow_guest:
+            return RedirectResponse("/login", status_code=302)
+        ctx = {
+            "user": {"name": None, "theme": "fresh", "phone": None, "email": None},
+            "user_id": None,
+            "stores": {"bigbasket": False, "blinkit": False, "zepto": False},
+            "guest": True,
+        }
+        if extra:
+            ctx.update(extra)
+        resp = templates.TemplateResponse(request, tpl, ctx)
+        resp.headers.setdefault("Cache-Control", "no-store")
+        if headers:
+            for k, v in headers.items():
+                resp.headers[k] = v
+        return resp
     ctx = _user_ctx(user_id)
+    ctx["guest"] = False
     if extra:
         ctx.update(extra)
     resp = templates.TemplateResponse(request, tpl, ctx)
@@ -209,6 +231,66 @@ def _get_available_stores(user_id: str) -> list[str]:
     return stores
 
 
+def _guest_store_user() -> str | None:
+    """Owner account whose connected store sessions back GUEST (logged-out)
+    price searches, set via the GUEST_STORE_USER_ID env var.
+
+    Opt-in and OFF by default: when unset, a logged-out visitor gets the full
+    Shop/Compare UI but no live prices (they must log in and connect a store).
+    When the owner opts in, guest searches reuse that account's sessions for
+    READ-ONLY price lookups only — guests can never add to a cart (that is
+    enforced separately on the cart endpoints). Intended for a personal/shared
+    deployment where the owner wants visitors to see prices without an account.
+    """
+    uid = (os.getenv("GUEST_STORE_USER_ID") or "").strip()
+    return uid or None
+
+
+def _ppu_label(product: dict) -> str:
+    """Human price-per-unit label, e.g. '₹0.4/100g', '₹0.5/100ml', '₹12/pc'.
+
+    Empty string when the product has no parseable size or price.
+    """
+    pq = ranker._product_qty(product)
+    price = ranker._product_price(product)
+    if not pq or price == float("inf") or pq[0] <= 0:
+        return ""
+    val, kind = pq
+    if kind == "mass":
+        return f"₹{price / val * 100:.1f}/100g"
+    if kind == "volume":
+        return f"₹{price / val * 100:.1f}/100ml"
+    return f"₹{price / val:.1f}/pc"
+
+
+def _guest_strip_entry(entry: dict) -> dict:
+    """Reduce a compare entry to the cheapest pick only (guest restriction).
+
+    Drops the full per-store price matrix and the swap shortlist, keeping just
+    the selected winning product so a logged-out user sees the cheapest option
+    without the full cross-store comparison.
+    """
+    prod = ranker.selected_product(entry) if entry.get("cheapest_app") else {}
+    return {
+        "item": entry.get("item"),
+        "search_query": entry.get("search_query"),
+        "cheapest_app": entry.get("cheapest_app"),
+        "cheapest_price": entry.get("cheapest_price"),
+        "cheapest_effective_price": entry.get("cheapest_effective_price"),
+        "qty_count": entry.get("qty_count", 1),
+        "cheapest_product": {
+            "name": prod.get("name", ""),
+            "unit": prod.get("unit", ""),
+            "image_url": prod.get("image_url", ""),
+            "sale_price": prod.get("sale_price"),
+            "price": prod.get("price"),
+            "product_id": prod.get("product_id"),
+            "app": prod.get("app"),
+            "app_name": prod.get("app_name"),
+        } if prod else None,
+    }
+
+
 # ── Utility ──────────────────────────────────────────────────────────────────
 
 def _require_user_id(user_id: str | None) -> str | None:
@@ -249,13 +331,19 @@ async def api_version():
 @app.get("/", response_class=HTMLResponse)
 async def home(request: Request):
     user_id = _get_session_user(request)
-    if not user_id:
-        return RedirectResponse("/login", status_code=302)
-    # After login, if the user has no name, redirect to onboarding first.
-    user = user_store.get_user_by_id(user_id)
-    if user and not user.get("name"):
-        return RedirectResponse("/onboarding", status_code=302)
-    return _template_response(request, "index.html")
+    if user_id:
+        # After login, if the user has no name, redirect to onboarding first.
+        user = user_store.get_user_by_id(user_id)
+        if user and not user.get("name"):
+            return RedirectResponse("/onboarding", status_code=302)
+    # Logged-out visitors get the Compare page in guest mode (cheapest-only).
+    return _template_response(request, "index.html", allow_guest=True)
+
+
+@app.get("/shop", response_class=HTMLResponse)
+async def shop_page(request: Request):
+    # Shop is browsable by guests (Add-to-Cart is gated to logged-in users).
+    return _template_response(request, "shop.html", allow_guest=True)
 
 
 @app.get("/history", response_class=HTMLResponse)
@@ -1152,14 +1240,204 @@ async def api_search(request: Request):
     return {"query": query, "results": results, "cheapest": overall_cheapest}
 
 
+# ── Shop tab (browse + add a single item) ─────────────────────────────────────
+
+@app.post("/api/shop/search")
+async def api_shop_search(request: Request):
+    """Search ONE query across all available stores, merged + sorted cheapest
+    price-per-unit (per-gram/ml/piece) first. Powers the Shop tab.
+
+    Body: {query, user_id?}. The search account is the logged-in user, or the
+    optional guest-backing account (GUEST_STORE_USER_ID) for logged-out
+    visitors. Returns can_add=False for guests so the UI gates Add-to-Cart.
+    """
+    body = await request.json()
+    session_uid = _get_session_user(request)
+    is_guest = session_uid is None
+    # Logged-in user searches their own sessions; a guest borrows the opt-in
+    # owner account's sessions for READ-ONLY price lookups (or none if unset).
+    search_uid = session_uid or _require_user_id(body.get("user_id")) or _guest_store_user()
+    query = (body.get("query") or "").strip()
+
+    if not query:
+        return {"error": "missing query", "products": [], "is_guest": is_guest,
+                "can_add": not is_guest}
+    if not search_uid:
+        return {"query": query, "products": [], "is_guest": is_guest,
+                "can_add": False,
+                "note": "Log in and connect a store to see live prices."}
+
+    available = _get_available_stores(search_uid)
+    if not available:
+        return {"query": query, "products": [], "is_guest": is_guest,
+                "can_add": not is_guest,
+                "note": "No stores connected."}
+
+    _search_fns = {"bigbasket": bigbasket.search_item_api,
+                   "blinkit": blinkit.search_item_api,
+                   "zepto": zepto.search_item_api}
+    merged: list[dict] = []
+
+    async def search_one(store_name: str):
+        fn = _search_fns.get(store_name)
+        if not fn:
+            return
+        try:
+            products = await fn(search_uid, query)
+        except Exception as e:
+            print(f"[shop/search][{store_name}] error: {e}")
+            return
+        # Drop off-topic hits; fall back to raw list if the filter nukes all.
+        relevant = ranker.filter_by_query_relevance(products, query) or products
+        merged.extend(relevant)
+
+    await asyncio.gather(*[search_one(s) for s in available])
+
+    # Dedupe by (app, product_id); attach price-per-unit for sort + display.
+    seen: set = set()
+    uniq: list[dict] = []
+    for p in merged:
+        key = (p.get("app"), str(p.get("product_id") or ""))
+        if not key[1] or key in seen:
+            continue
+        seen.add(key)
+        ppu = ranker._price_per_unit(p)
+        p["price_per_unit"] = None if ppu == float("inf") else round(ppu, 4)
+        p["ppu_label"] = _ppu_label(p)
+        uniq.append(p)
+
+    # Cheapest price-per-unit first; products with no parseable size go last.
+    uniq.sort(key=lambda p: p["price_per_unit"]
+              if p.get("price_per_unit") is not None else float("inf"))
+
+    return {"query": query, "products": uniq, "is_guest": is_guest,
+            "can_add": not is_guest}
+
+
+@app.post("/api/shop/add")
+async def api_shop_add(request: Request):
+    """Add item(s) from the Shop tab to ONE store's real cart.
+
+    Requires a logged-in session — guests get 403 {error:"login_required"} so
+    the restriction can't be bypassed by calling the endpoint directly.
+
+    Body: {app, items:[{product_id, count, fc_id?, ...}]}. The frontend sends
+    the FULL per-app shop-cart list because Blinkit's /v5/carts replaces the
+    whole cart; the tested batch logic handles per-store semantics.
+    """
+    session_uid = _get_session_user(request)
+    if not session_uid:
+        return JSONResponse({"error": "login_required",
+                             "message": "Log in to add items to your cart."},
+                            status_code=403)
+    body = await request.json()
+    app_name = (body.get("app") or "").strip()
+    items = body.get("items")
+    if not items and body.get("product_id"):
+        items = [body]
+    if app_name not in _STORE_DISPLAY:
+        return {"error": f"unknown store: {app_name}"}
+    if not items:
+        return {"error": "no items"}
+    if not bigbasket.is_session_valid(session_uid) and app_name == "bigbasket":
+        return {"error": f"{app_name} not connected"}
+
+    result = await _add_items_to_store(session_uid, app_name, items)
+    return {"result": result, "app": app_name}
+
+
+async def _add_items_to_store(user_id: str, store_name: str,
+                              items: list[dict]) -> dict:
+    """Add a list of items to one store's cart. Returns {added, failed}.
+
+    Mirrors the per-store logic in /api/cart/add-all (Zepto/Blinkit batch via
+    add_all_to_cart_api; BigBasket per-item) without the progress bookkeeping,
+    so the Shop tab can reuse the same tested cart paths.
+    """
+    app_results: dict = {"added": [], "failed": []}
+    valid_items = []
+    for item in items:
+        pid = item.get("product_id")
+        if not pid or len(str(pid)) < 4 or str(pid).startswith("gen-"):
+            app_results["failed"].append(item)
+            continue
+        valid_items.append(item)
+    if not valid_items:
+        return app_results
+
+    if store_name in ("zepto", "blinkit"):
+        store_mod = zepto if store_name == "zepto" else blinkit
+        try:
+            batch = await store_mod.add_all_to_cart_api(user_id, valid_items)
+        except Exception as e:
+            print(f"[shop/add][{store_name}] batch raised: {e}")
+            batch = {"success": False, "reason": str(e)}
+        if batch.get("success"):
+            item_results = batch.get("items") or []
+            for i, item in enumerate(valid_items):
+                ir = item_results[i] if i < len(item_results) else {}
+                try:
+                    requested = max(1, min(99, int(item.get("count") or 1)))
+                except (TypeError, ValueError):
+                    requested = 1
+                if ir.get("success"):
+                    app_results["added"].append(
+                        {**item, "count_added": ir.get("count_added", requested),
+                         "count_requested": requested})
+                else:
+                    app_results["failed"].append(
+                        {**item, "failed_reason": ir.get("reason", "")})
+            return app_results
+        # Batch failed: mark all failed (never per-item retry — Blinkit clobbers).
+        reason = batch.get("reason", "cart add failed")
+        for item in valid_items:
+            app_results["failed"].append({**item, "failed_reason": reason})
+        return app_results
+
+    # BigBasket: per-item.
+    for item in valid_items:
+        pid = str(item.get("product_id") or "")
+        try:
+            count = max(1, min(99, int(item.get("count") or 1)))
+        except (TypeError, ValueError):
+            count = 1
+        try:
+            result = await bigbasket.add_to_cart_api(
+                user_id, pid, count=count, fc_id=item.get("fc_id"))
+            if result.get("success"):
+                app_results["added"].append(
+                    {**item, "count_added": result.get("count_added", count),
+                     "count_requested": count})
+            else:
+                app_results["failed"].append(
+                    {**item, "failed_reason": result.get("reason", "")})
+        except Exception as e:
+            print(f"[shop/add][bigbasket] error: {e}")
+            app_results["failed"].append({**item, "failed_reason": str(e)})
+    return app_results
+
+
 @app.post("/api/compare")
 async def api_compare(request: Request):
     """Compare a full grocery list across all connected stores.
 
     Body: {items: [{name, qty?, count?}], user_id}
+
+    Guests (no session) get a restricted response: each entry keeps only the
+    selected cheapest product (full per-store prices + shortlist are stripped),
+    and the comparison is not saved to history. Enforced server-side so it
+    can't be bypassed by calling the endpoint directly.
     """
     body = await request.json()
-    user_id = _require_user_id(body.get("user_id"))
+    session_uid = _get_session_user(request)
+    body_uid = _require_user_id(body.get("user_id"))
+    # Guest = a logged-out web visitor: no session AND no explicit user_id.
+    # Mobile / legacy callers pass user_id in the body and get the full result;
+    # the guest frontend deliberately sends none, so it gets the stripped one.
+    is_guest = session_uid is None and not body_uid
+    # Logged-in users compare their own sessions; guests borrow the opt-in
+    # owner account (GUEST_STORE_USER_ID) if configured.
+    user_id = session_uid or body_uid or _guest_store_user()
     items = body.get("items", [])
 
     if not user_id:
@@ -1214,22 +1492,39 @@ async def api_compare(request: Request):
         print(f"[compare] DONE. Found {items_found}/{len(items)}, "
               f"grand total ₹{grand_total:.0f}, savings ₹{savings:.0f}\n")
 
-        # Persist to history
-        stores_used = list(carts.keys())
-        query_text = "\n".join(
-            f"{it.get('name','')} {it.get('qty','')}".strip() for it in items
-        )
-        try:
-            user_store.save_comparison(
-                user_id=user_id,
-                query_text=query_text,
-                items=[{"name": it.get("name",""), "qty": it.get("qty","")} for it in items],
-                grand_total=grand_total,
-                savings=savings,
-                stores=stores_used,
+        # Persist to history — logged-in users only (guests have no account).
+        if not is_guest:
+            stores_used = list(carts.keys())
+            query_text = "\n".join(
+                f"{it.get('name','')} {it.get('qty','')}".strip() for it in items
             )
-        except Exception as e:
-            print(f"[compare] history save failed: {e}")
+            try:
+                user_store.save_comparison(
+                    user_id=user_id,
+                    query_text=query_text,
+                    items=[{"name": it.get("name",""), "qty": it.get("qty","")} for it in items],
+                    grand_total=grand_total,
+                    savings=savings,
+                    stores=stores_used,
+                )
+            except Exception as e:
+                print(f"[compare] history save failed: {e}")
+
+        if is_guest:
+            # Guest restriction: expose ONLY the cheapest pick per item — strip
+            # the full per-store price matrix and the swap shortlist so the full
+            # comparison stays a logged-in feature. Enforced here, not just in UI.
+            return {
+                "comparison": [_guest_strip_entry(e) for e in comparison],
+                "grand_total": grand_total,
+                "skipped_apps": skipped,
+                "is_guest": True,
+                "summary": {
+                    "total_items": len(items),
+                    "items_found": items_found,
+                    "apps_used": len(carts),
+                },
+            }
 
         return {
             "comparison": comparison,
@@ -1237,6 +1532,7 @@ async def api_compare(request: Request):
             "grand_total": grand_total,
             "savings": savings,
             "skipped_apps": skipped,
+            "is_guest": False,
             "summary": {
                 "total_items": len(items),
                 "items_found": items_found,

@@ -14,6 +14,7 @@
 <script>
   window._SERVER_USER    = {{ user | tojson }};
   window._SERVER_USER_ID = {{ user_id | tojson }};
+  window._SERVER_GUEST   = {{ guest | default(false) | tojson }};
 </script>
 
 <div class="app">
@@ -22,18 +23,27 @@
     <!-- ===== desktop sidebar ===== -->
     <aside class="sidebar">
       <div class="wm">scan2order</div>
+      <a class="nav-item" data-nav="shop" data-navlink href="/shop"><i data-ico="search"></i><span>Shop</span></a>
       <a class="nav-item" data-nav="compare" data-navlink href="/"><i data-ico="compare"></i><span>Compare</span></a>
-      <a class="nav-item" data-nav="history" data-navlink href="/history"><i data-ico="history"></i><span>History</span></a>
-      <a class="nav-item" data-nav="profile" data-navlink href="/profile"><i data-ico="user"></i><span>Profile</span></a>
+      <a class="nav-item" data-nav="history" data-navlink href="/history" data-guest-hide><i data-ico="history"></i><span>History</span></a>
+      <a class="nav-item" data-nav="profile" data-navlink href="/profile"><i data-ico="user"></i><span>{% if guest %}Log in{% else %}Profile{% endif %}</span></a>
+      <a class="nav-item" data-navlink href="/shop" style="position:relative"><i data-ico="cart"></i><span>Cart</span><span class="cart-badge" style="display:none">0</span></a>
       <div class="nav-spacer"></div>
-      <button class="nav-item" onclick="logout()"><i data-ico="signout"></i><span>Sign out</span></button>
+      {% if not guest %}<button class="nav-item" onclick="logout()"><i data-ico="signout"></i><span>Sign out</span></button>{% endif %}
     </aside>
 
     <!-- ===== main ===== -->
     <main class="main">
       <header class="topbar">
         <div class="wm">scan2order</div>
-        <a data-navlink href="/profile" aria-label="Profile" style="width:36px;height:36px;border-radius:12px;background:var(--accent-grad);color:var(--accent-ink);display:flex;align-items:center;justify-content:center;font-weight:800;font-size:16px;text-decoration:none">{{ (user.name or user.phone or user.email or 'U')[0] | upper }}</a>
+        <div style="display:flex;align-items:center;gap:12px">
+          <a data-navlink href="/shop" aria-label="Cart" style="position:relative;display:flex;color:var(--text);text-decoration:none"><i data-ico="cart" data-s="24"></i><span class="cart-badge" style="display:none">0</span></a>
+          {% if guest %}
+          <a href="/login" aria-label="Log in" style="height:36px;padding:0 14px;border-radius:12px;background:var(--accent-grad);color:var(--accent-ink);display:flex;align-items:center;justify-content:center;font-weight:800;font-size:13px;text-decoration:none">Log in</a>
+          {% else %}
+          <a data-navlink href="/profile" aria-label="Profile" style="width:36px;height:36px;border-radius:12px;background:var(--accent-grad);color:var(--accent-ink);display:flex;align-items:center;justify-content:center;font-weight:800;font-size:16px;text-decoration:none">{{ (user.name or user.phone or user.email or 'U')[0] | upper }}</a>
+          {% endif %}
+        </div>
       </header>
 
       <div class="page">
@@ -44,11 +54,44 @@
 
   <!-- ===== mobile bottom tabs ===== -->
   <nav class="tabbar">
+    <a class="tb" data-nav="shop" data-navlink href="/shop"><i data-ico="search"></i><b>Shop</b></a>
     <a class="tb" data-nav="compare" data-navlink href="/"><i data-ico="compare"></i><b>Compare</b></a>
-    <a class="tb" data-nav="history" data-navlink href="/history"><i data-ico="history"></i><b>History</b></a>
-    <a class="tb" data-nav="profile" data-navlink href="/profile"><i data-ico="user"></i><b>Profile</b></a>
+    <a class="tb" data-nav="history" data-navlink href="/history" data-guest-hide><i data-ico="history"></i><b>History</b></a>
+    <a class="tb" data-nav="profile" data-navlink href="/profile"><i data-ico="user"></i><b>{% if guest %}Log in{% else %}Profile{% endif %}</b></a>
   </nav>
 </div>
+
+<!-- ===== Login-prompt bottom sheet (guest gate) ===== -->
+<div class="modal-bg" id="login-prompt">
+  <div class="modal" style="max-width:400px;padding:22px 20px;text-align:center">
+    <div style="width:46px;height:46px;border-radius:14px;background:var(--accent-soft);color:var(--accent2);display:flex;align-items:center;justify-content:center;margin:0 auto 12px"><i data-ico="lock" data-s="22"></i></div>
+    <div style="font-weight:800;font-size:17px;margin-bottom:6px">Log in to continue</div>
+    <p data-lp-msg style="color:var(--muted);font-size:13.5px;margin:0 0 18px">Log in to unlock full comparisons, cart actions, and saved lists.</p>
+    <div style="display:flex;gap:10px">
+      <button class="btn ghost" style="flex:1" onclick="s2o_closeLoginPrompt()">Maybe later</button>
+      <a class="btn" style="flex:1;text-decoration:none" href="/login">Log In</a>
+    </div>
+  </div>
+</div>
+
+<style>
+  /* Shared guest / shop chrome — kept out of theme.css so raghav's themes stay
+     untouched; all colours come from the active theme's CSS variables. */
+  .cart-badge{ position:absolute; top:-6px; right:-8px; min-width:17px; height:17px;
+    padding:0 4px; border-radius:9px; background:var(--coral); color:#fff;
+    font-size:10.5px; font-weight:800; align-items:center; justify-content:center;
+    line-height:1; box-shadow:0 0 0 2px var(--bg); }
+  .sidebar .cart-badge{ position:static; margin-left:auto; display:inline-flex; }
+  .mic-btn{ display:inline-flex; align-items:center; justify-content:center;
+    cursor:pointer; border:none; background:transparent; color:var(--muted);
+    border-radius:10px; transition:color .15s, background .15s; }
+  .mic-btn:hover{ color:var(--accent2); }
+  .mic-btn.listening{ color:#fff; background:var(--coral);
+    animation:micpulse 1.1s ease-in-out infinite; }
+  @keyframes micpulse{ 0%,100%{ box-shadow:0 0 0 0 color-mix(in srgb,var(--coral) 55%,transparent); }
+    50%{ box-shadow:0 0 0 7px transparent; } }
+</style>
+
 
 <!-- ===== Browser-relay connect modal ===== -->
 <div class="modal-bg" id="connect-modal">
