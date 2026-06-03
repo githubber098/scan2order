@@ -119,21 +119,25 @@
   };
 
   /* ===================================================================
-     Browser-relay connect modal
-     Streams a live screenshot of a headless Chromium window so the user
-     can log in to a store inside the app.
+     Browser-relay connect modal  (restored from main's working version)
+     Streams a live Chromium window (CDP screencast over WebSocket, with a
+     screenshot-polling fallback) so the user can log in to a store inside the
+     app. Clicks send NORMALISED 0-1 coords (what the backend expects); the
+     wheel forwards scroll; keystrokes are batched. No fake caret — the page's
+     own caret shows in the stream.
      =================================================================== */
 
+  const _STORE_LABEL = { bigbasket: "BigBasket", blinkit: "Blinkit", zepto: "Zepto" };
   let _browserSessionId = null;
   let _screenshotLoopActive = false;
   let _checkTimer = null;
-  let _browserStartToken = 0;
+  let _browserStartToken = 0;       // bumped on close/cancel to abort an in-flight start
   let _browserWs = null;
   let _wsGotFrame = false;
+  let _pendingFrame = null;         // newest stream frame awaiting paint (older dropped)
+  let _rafScheduled = false;
   let _typeBuffer = "";
   let _typeFlushTimer = null;
-  let _connectingStore = null;     // store slug being connected
-  let _connectBtnEl = null;        // the button that triggered connect (to restore it)
 
   function _flushTypeBuffer() {
     clearTimeout(_typeFlushTimer); _typeFlushTimer = null;
@@ -142,8 +146,10 @@
     _sendBrowserEvent({ type: "type", text });
   }
 
+  // Document-level key handler (active only while the modal is open) so the
+  // user can type straight into the page without focusing a separate field.
   function _browserKeyHandler(e) {
-    if (e.ctrlKey || e.metaKey) return;
+    if (e.ctrlKey || e.metaKey) return;   // let Ctrl+R, F12, etc. through
     const ignore = ["Shift","Alt","Meta","Control","CapsLock","Fn","Dead"];
     if (ignore.includes(e.key)) return;
     e.preventDefault();
@@ -160,67 +166,102 @@
   function _initBrowserModal() {
     const img = document.getElementById("browser-screenshot");
     if (!img) return;
+    // Click → normalised 0-1 coords (the backend maps them onto the 430×700
+    // viewport). Dividing by the rendered rect makes this pixel-accurate
+    // because the img's aspect-ratio matches the viewport (no letterboxing).
     img.addEventListener("click", (e) => {
       const rect = img.getBoundingClientRect();
-      const scaleX = img.naturalWidth  / rect.width;
-      const scaleY = img.naturalHeight / rect.height;
-      _placeCaret(e.clientX - rect.left, e.clientY - rect.top);
-      _sendBrowserEvent({ type:"click", x:Math.round((e.clientX-rect.left)*scaleX), y:Math.round((e.clientY-rect.top)*scaleY) });
+      const nx = (e.clientX - rect.left) / rect.width;
+      const ny = (e.clientY - rect.top) / rect.height;
+      _sendBrowserEvent({ type: "click", nx, ny });
+      _showClickRipple(e.clientX, e.clientY);
     });
+    // Wheel → forward scroll delta.
+    img.addEventListener("wheel", (e) => {
+      e.preventDefault();
+      _sendBrowserEvent({ type: "scroll", delta_y: e.deltaY });
+    }, { passive: false });
   }
 
-  function _placeCaret(cx, cy) {
-    const img = document.getElementById("browser-screenshot");
-    const caret = document.getElementById("browser-caret");
-    if (!img || !caret) return;
-    const rect = img.getBoundingClientRect();
-    caret.style.left = Math.min(Math.max(cx, 0), rect.width)  + "px";
-    caret.style.top  = Math.min(Math.max(cy, 0), rect.height) + "px";
-    caret.style.display = "block";
-    clearTimeout(caret._t); caret._t = setTimeout(() => caret.style.display="none", 1500);
+  // Brief teal ripple at the tap point so it's obvious the click registered.
+  function _showClickRipple(clientX, clientY) {
+    const box = document.querySelector(".browser-box");
+    if (!box) return;
+    const r = box.getBoundingClientRect();
+    const dot = document.createElement("div");
+    dot.className = "click-ripple";
+    dot.style.left = (clientX - r.left) + "px";
+    dot.style.top = (clientY - r.top) + "px";
+    box.appendChild(dot);
+    setTimeout(() => dot.remove(), 520);
   }
 
   async function _sendBrowserEvent(payload) {
     if (!_browserSessionId) return;
-    if (_browserWs && _browserWs.readyState === WebSocket.OPEN) {
-      _browserWs.send(JSON.stringify(payload)); return;
+    // Prefer the open WebSocket so a click/keystroke skips the HTTP round-trip.
+    if (_browserWs && _browserWs.readyState === 1) {
+      try { _browserWs.send(JSON.stringify(payload)); return; } catch (_) {}
     }
     fetch(`/api/auth/browser/event/${_browserSessionId}`, {
-      method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(payload),
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
     }).catch(() => {});
   }
 
-  function _startScreenshotStream() {
-    const sid = _browserSessionId;
-    const proto = location.protocol === "https:" ? "wss:" : "ws:";
-    let ws;
-    try { ws = new WebSocket(`${proto}//${location.host}/api/auth/browser/ws/${sid}`); }
-    catch { _runScreenshotLoop(); return; }
-    _browserWs = ws; _wsGotFrame = false;
+  // Paint the newest frame at most once per animation frame (drop stale frames
+  // so latency never builds up → smooth, no lag pile-up).
+  function _paintFrame() {
+    _rafScheduled = false;
+    const blob = _pendingFrame; _pendingFrame = null;
+    if (!blob || !_browserSessionId) return;
     const img = document.getElementById("browser-screenshot");
-    ws.onmessage = (ev) => {
-      if (!img || _browserSessionId !== sid) { ws.close(); return; }
-      if (typeof ev.data === "string") { try { const d=JSON.parse(ev.data); if(d.done) { _handleConnectDone(); ws.close(); } } catch(_){} return; }
-      _wsGotFrame = true;
-      const old = img.src; img.src = URL.createObjectURL(ev.data); if(old.startsWith("blob:")) URL.revokeObjectURL(old);
-    };
-    ws.onerror = () => { if (!_wsGotFrame) _runScreenshotLoop(); };
-    ws.onclose = () => { _browserWs = null; if (!_wsGotFrame && _browserSessionId === sid) _runScreenshotLoop(); };
-    setTimeout(() => { if (!_wsGotFrame && ws.readyState !== WebSocket.OPEN) _runScreenshotLoop(); }, 2500);
+    const url = URL.createObjectURL(blob);
+    const old = img.src; img.src = url;
+    if (old && old.startsWith("blob:")) URL.revokeObjectURL(old);
   }
 
-  async function _runScreenshotLoop() {
+  function _startScreenshotStream() {
+    _wsGotFrame = false;
+    const proto = location.protocol === "https:" ? "wss:" : "ws:";
     const sid = _browserSessionId;
+    let ws;
+    try { ws = new WebSocket(`${proto}//${location.host}/api/auth/browser/ws/${sid}`); }
+    catch (e) { _runScreenshotLoop(); return; }
+    ws.binaryType = "blob";
+    _browserWs = ws;
+    ws.onmessage = (ev) => {
+      if (!_browserSessionId || _browserWs !== ws) { try { ws.close(); } catch(_){} return; }
+      _wsGotFrame = true;
+      _pendingFrame = ev.data;
+      if (!_rafScheduled) { _rafScheduled = true; requestAnimationFrame(_paintFrame); }
+    };
+    ws.onclose = () => {
+      if (_browserWs === ws) _browserWs = null;
+      if (_browserSessionId && sid === _browserSessionId && !_wsGotFrame) _runScreenshotLoop();
+    };
+    ws.onerror = () => { try { ws.close(); } catch(_){} };
+  }
+
+  // Fallback: sequential screenshot polling when the WebSocket never opens.
+  async function _runScreenshotLoop() {
+    _screenshotLoopActive = true;
     const img = document.getElementById("browser-screenshot");
-    while (_screenshotLoopActive && _browserSessionId === sid) {
+    while (_screenshotLoopActive && _browserSessionId) {
+      const t0 = Date.now();
       try {
-        const r = await fetch(`/api/auth/browser/screenshot/${sid}`, { cache:"no-store" });
-        if (!r.ok || _browserSessionId !== sid) break;
-        const blob = await r.blob();
-        if (img && _browserSessionId === sid) { const old=img.src; img.src=URL.createObjectURL(blob); if(old.startsWith("blob:"))URL.revokeObjectURL(old); }
-      } catch (_) {}
-      await new Promise(r => setTimeout(r, 800));
+        const r = await fetch(`/api/auth/browser/screenshot/${_browserSessionId}?t=${t0}`, { cache: "no-store" });
+        if (!_screenshotLoopActive || !_browserSessionId) break;
+        if (r.ok) {
+          const blob = await r.blob();
+          if (!_screenshotLoopActive || !_browserSessionId) break;
+          const old = img.src; img.src = URL.createObjectURL(blob);
+          if (old && old.startsWith("blob:")) URL.revokeObjectURL(old);
+        }
+      } catch (_) { if (!_browserSessionId) break; }
+      const gap = Date.now() - t0;
+      if (gap < 80) await new Promise(r => setTimeout(r, 80 - gap));
     }
+    _screenshotLoopActive = false;
   }
 
   async function _checkBrowserAuth() {
@@ -228,93 +269,113 @@
     try {
       const r = await fetch(`/api/auth/browser/check/${_browserSessionId}`);
       const d = await r.json();
-      if (d.done) _handleConnectDone();
-      else _checkTimer = setTimeout(_checkBrowserAuth, 2000);
-    } catch (_) { _checkTimer = setTimeout(_checkBrowserAuth, 2000); }
+      if (d.done) {
+        const label = _STORE_LABEL[d.store] || d.store || "Store";
+        await _closeBrowserModal();
+        toast(label + " connected!", "ok");
+        if (typeof refreshStoreRows === "function") refreshStoreRows();
+        return;
+      }
+      const statusEl = document.getElementById("browser-auth-status");
+      if (statusEl) {
+        if (d.message) statusEl.textContent = d.message;
+        else if (d.error) statusEl.textContent = "⚠ " + d.error;
+      }
+    } catch (_) { /* transient — keep polling */ }
   }
 
-  function _handleConnectDone() {
-    clearTimeout(_checkTimer);
-    _closeBrowserModal();
-    // Refresh the store status row on profile page if present
-    if (typeof refreshStoreRows === "function") refreshStoreRows();
+  function _showKeyboardHint() {
+    const hint = document.getElementById("browser-kbd-hint");
+    if (!hint) return;
+    hint.style.opacity = "1";
+    hint.style.transform = "translateX(-50%) translateY(0)";
+    setTimeout(() => {
+      hint.style.opacity = "0";
+      hint.style.transform = "translateX(-50%) translateY(4px)";
+    }, 3500);
   }
 
   async function _closeBrowserModal() {
-    const sid = _browserSessionId;
-    _browserSessionId = null;
+    _browserStartToken++;          // abort any in-flight start (cancel during launch)
     _screenshotLoopActive = false;
-    clearTimeout(_checkTimer);
-    if (_browserWs) { try { _browserWs.close(); } catch(_){} _browserWs = null; }
+    if (_browserWs) { try { _browserWs.close(); } catch (_) {} _browserWs = null; }
+    clearInterval(_checkTimer); clearTimeout(_typeFlushTimer);
+    _checkTimer = null; _typeFlushTimer = null; _typeBuffer = "";
+    _browserSessionId = null;
     document.removeEventListener("keydown", _browserKeyHandler);
+    const loading = document.getElementById("browser-loading");
+    if (loading) loading.classList.remove("show");
     const modal = document.getElementById("connect-modal");
     if (modal) modal.classList.remove("open");
-    if (sid) {
-      fetch(`/api/auth/browser/session/${sid}`, { method:"DELETE" }).catch(()=>{});
-    }
-    // Restore button text
-    if (_connectBtnEl) {
-      _connectBtnEl.disabled = false;
-      _connectBtnEl.innerHTML = '<i data-ico="plug" data-s="15"></i>Connect';
-      paintIcons(_connectBtnEl);
-      _connectBtnEl = null;
-    }
+    const img = document.getElementById("browser-screenshot");
+    if (img) { if (img.src && img.src.startsWith("blob:")) URL.revokeObjectURL(img.src); img.src = ""; }
   }
 
-  // Ask the browser for GPS so the store's location prompt resolves inside the
-  // headless session. Resolves to null (never rejects) so connect proceeds even
-  // when permission is denied or unavailable.
-  function _getGeolocation() {
-    return new Promise((resolve) => {
-      if (!navigator.geolocation) return resolve(null);
-      navigator.geolocation.getCurrentPosition(
-        (pos) => resolve({ latitude: pos.coords.latitude, longitude: pos.coords.longitude }),
-        () => resolve(null),
-        { timeout: 5000, maximumAge: 600000 }
-      );
-    });
+  async function _closeBrowserSession(callBackend) {
+    const sid = _browserSessionId;
+    if (callBackend && sid) {
+      fetch(`/api/auth/browser/session/${sid}`, { method: "DELETE" }).catch(() => {});
+    }
+    await _closeBrowserModal();
   }
 
-  // PUBLIC: called by Connect buttons across the app.
+  // PUBLIC: called by Connect/Reconnect buttons across the app.
   window.connectStore = async function (store, btn) {
-    _connectingStore = store;
-    _connectBtnEl = btn || null;
-    if (btn) { btn.disabled = true; btn.textContent = "Opening…"; }
+    const label = _STORE_LABEL[store] || store;
+    if (_browserSessionId) await _closeBrowserSession(false);
 
+    // Open the modal IMMEDIATELY with a loading state — launching Chromium +
+    // loading the store page takes a few seconds; showing the spinner at once
+    // stops the user re-clicking (which used to spawn duplicate sessions).
     const token = ++_browserStartToken;
+    const setText = (id, t) => { const e = document.getElementById(id); if (e) e.textContent = t; };
+    setText("connect-modal-title", "Connect " + label);
+    setText("browser-auth-status", "Starting…");
+    setText("browser-loading-text", "Starting " + label + "…");
+    const img0 = document.getElementById("browser-screenshot"); if (img0) img0.src = "";
+    document.getElementById("browser-loading").classList.add("show");
+    document.getElementById("connect-modal").classList.add("open");
+
+    // Forward the user's real GPS so the store's location prompt resolves.
+    let geolocation = null;
+    if (navigator.geolocation) {
+      geolocation = await new Promise((resolve) => {
+        navigator.geolocation.getCurrentPosition(
+          (p) => resolve({ latitude: p.coords.latitude, longitude: p.coords.longitude }),
+          () => resolve(null),
+          { timeout: 4000, maximumAge: 60000 }
+        );
+      });
+    }
+    if (token !== _browserStartToken) return;   // cancelled while waiting on GPS
+
     try {
-      const geolocation = await _getGeolocation();
-      if (token !== _browserStartToken) return; // aborted during the GPS prompt
-      // Always send a JSON body — the endpoint calls request.json(); an empty
-      // POST body would 500 with a plain-text "Internal Server Error".
       const r = await fetch(`/api/auth/browser/start/${store}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ geolocation }),
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ user_id: window._SERVER_USER_ID, geolocation }),
       });
       const d = await r.json();
-      if (token !== _browserStartToken) return; // aborted
-      if (d.error) { alert(d.error); if (btn) { btn.disabled=false; btn.textContent="Connect"; } return; }
-
+      if (token !== _browserStartToken) return;   // cancelled during launch
+      if (!d.success) { await _closeBrowserModal(); toast("Connect error: " + (d.error || "unknown"), "err"); return; }
       _browserSessionId = d.session_id;
-      _screenshotLoopActive = true;
-
-      // Open the connect modal
-      const modal = document.getElementById("connect-modal");
-      const title = document.getElementById("connect-modal-title");
-      if (title) title.textContent = "Connect " + ({blinkit:"Blinkit",zepto:"Zepto",bigbasket:"BigBasket"}[store]||store);
-      if (modal) modal.classList.add("open");
-
-      document.addEventListener("keydown", _browserKeyHandler);
-      _startScreenshotStream();
-      _checkTimer = setTimeout(_checkBrowserAuth, 3000);
     } catch (e) {
-      alert("Could not start browser session: " + e.message);
-      if (btn) { btn.disabled=false; btn.textContent="Connect"; }
+      if (token !== _browserStartToken) return;
+      await _closeBrowserModal();
+      toast("Failed to start browser: " + e.message, "err");
+      return;
     }
-  };
 
-  window.closeConnectModal = function () { _closeBrowserModal(); };
+    document.getElementById("browser-loading").classList.remove("show");
+    setText("browser-auth-status", "Waiting for login…");
+    const img = document.getElementById("browser-screenshot"); if (img) img.focus();
+    document.addEventListener("keydown", _browserKeyHandler);
+    _startScreenshotStream();
+    _checkTimer = setInterval(_checkBrowserAuth, 2000);
+    _showKeyboardHint();
+  };
+  // Back-compat alias (some pages/health notes call openBrowserAuth).
+  window.openBrowserAuth = window.connectStore;
+  window.closeConnectModal = function () { _closeBrowserSession(true); };
 
   /* ---- OCR upload ------------------------------------------------------ */
   // Page calls:  document.getElementById('ocr-input').addEventListener('change', s2o.handleOcr)
@@ -496,20 +557,38 @@
     return Object.values(c[app] || {});
   }
 
+  /* ---- toasts ---------------------------------------------------------- */
+  // Generic transient notification. type: "" | "ok" | "err" | "greet".
+  // Declared (not assigned) so it's hoisted and callable from the relay code above.
+  function toast(message, type) {
+    const host = document.getElementById("toast-host");
+    if (!host) return;
+    const el = document.createElement("div");
+    el.className = "s2o-toast" + (type && type !== "greet" ? " " + type : "");
+    el.textContent = message;
+    host.appendChild(el);
+    requestAnimationFrame(() => el.classList.add("show"));
+    const ttl = type === "greet" ? 3600 : 2800;
+    setTimeout(() => {
+      el.classList.remove("show");
+      setTimeout(() => el.remove(), 320);
+    }, ttl);
+  }
+
   /* ---- greeting toast (Shop / Compare) --------------------------------- */
-  // Small friendly "Hi, <name>" that slides in on load and auto-dismisses.
+  // Friendly "Hi, <name>" — shown ONLY on the first tab load of a session
+  // (sessionStorage flag) so it doesn't pop on every navigation.
   window.s2o_greet = function () {
-    const el = document.getElementById("greet-toast");
-    if (!el) return;
+    try {
+      if (sessionStorage.getItem("s2o-greeted")) return;
+      sessionStorage.setItem("s2o-greeted", "1");
+    } catch (_) {}
     const su = window._SERVER_USER;
     const name = (su && su.name) ? su.name : (isGuest() ? "there" : "");
     const hellos = ["Hi", "Hello", "Hey", "Welcome back"];
     // Vary the greeting without Math.random (unavailable in some sandboxes):
     const pick = hellos[(new Date().getMinutes()) % hellos.length];
-    el.textContent = name ? `${pick}, ${name} 👋` : `${pick} 👋`;
-    requestAnimationFrame(() => el.classList.add("show"));
-    clearTimeout(el._t);
-    el._t = setTimeout(() => el.classList.remove("show"), 3600);
+    toast(name ? `${pick}, ${name} 👋` : `${pick} 👋`, "greet");
   };
 
   /* ---- sign-out confirmation ------------------------------------------- */
@@ -557,7 +636,7 @@
   });
 
   window.s2o = {
-    paintIcons, applyTheme, saveTheme, THEMES,
+    paintIcons, applyTheme, saveTheme, THEMES, toast,
     attachVoice, voiceSupported, isGuest,
     shopCartGet, shopCartSet, shopCartAdd, shopCartCount, updateCartBadge,
     shopCartGetQty, shopCartItems, shopCartSetQty,

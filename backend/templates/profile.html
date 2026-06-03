@@ -161,8 +161,43 @@
 
 {% block extra_scripts %}
 <script>
-/* After connect modal closes, refresh the store rows on this page. */
-function refreshStoreRows() { window.location.reload(); }
+/* After the connect modal closes, refresh the store rows from the server.
+   Updates the "Connected" pill, the status sub-text AND the Connect/Reconnect
+   button together from the SAME connected flag, so they can never disagree
+   (the old version reloaded the page, which could race the cookie write and
+   leave a connected store still showing "Connect"). */
+async function refreshStoreRows() {
+  const uid = window._SERVER_USER_ID;
+  if (!uid) return;
+  let cs = {};
+  try {
+    const data = await (await fetch('/api/auth/status/' + encodeURIComponent(uid))).json();
+    cs = data.connected_stores || {};
+  } catch (_) { return; }
+  ['zepto', 'blinkit'].forEach((store) => {
+    const row = document.querySelector(`[data-store="${store}"]`);
+    if (!row) return;
+    const connected = !!cs[store];
+    const smeta = row.querySelector('.smeta');
+    const btnWrap = row.querySelector('.row');
+    const btn = row.querySelector('button');
+    if (smeta) smeta.textContent = connected ? 'Connected' : 'Not connected';
+    if (btn) {
+      btn.className = 'btn ' + (connected ? 'ghost sm' : 'sm');
+      btn.innerHTML = `<i data-ico="plug" data-s="15"></i>${connected ? 'Reconnect' : 'Connect'}`;
+    }
+    let pill = row.querySelector('.pill-tag');
+    if (connected && !pill && btnWrap) {
+      pill = document.createElement('span');
+      pill.className = 'pill-tag ok';
+      pill.innerHTML = '<i data-ico="check" data-s="13" data-w="3"></i>Connected';
+      btnWrap.insertBefore(pill, btn);
+    } else if (!connected && pill) {
+      pill.remove();
+    }
+  });
+  if (window.s2o) window.s2o.paintIcons(document);
+}
 
 /* Avatar color based on name initial (deterministic). */
 const _AVATAR_COLORS = [

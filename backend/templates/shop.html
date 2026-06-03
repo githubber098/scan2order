@@ -262,6 +262,8 @@ async function changeQty(product, delta, foot, canAdd){
   const fullList = window.s2o.shopCartSetQty(product, next);
   _renderControl(foot, product, canAdd);
   window.s2o.updateCartBadge();
+  if (cur === 0 && next > 0) window.s2o.toast((product.name || "Item") + " added to cart", "ok");
+  else if (next <= 0) window.s2o.toast("Removed from cart");
   try {
     const resp = await fetch("/api/shop/add", {
       method:"POST", headers:{"Content-Type":"application/json"},

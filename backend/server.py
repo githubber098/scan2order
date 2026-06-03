@@ -44,7 +44,7 @@ from storage import user_store
 from stores import bigbasket, blinkit, zepto
 
 BASE_DIR = Path(__file__).parent
-APP_VERSION = "1.4.0"
+APP_VERSION = "1.5.0"
 _TEMPLATES_DIR = BASE_DIR / "templates"
 _STATIC_DIR    = BASE_DIR / "static"
 _404_HTML      = BASE_DIR / "templates" / "404.html"
