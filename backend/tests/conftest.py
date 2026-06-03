@@ -379,6 +379,9 @@ class FakeBrowserSession:
     async def get_local_storage(self) -> dict:
         return {}
 
+    async def get_current_cookies(self) -> dict:
+        return {}
+
     async def close(self) -> None:
         pass
 

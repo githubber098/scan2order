@@ -943,6 +943,26 @@ async def browser_auth_check(session_id: str):
         return {"done": False, "error": "session not found or expired"}
     cookies = await s.get_auth_cookies()
     if cookies:
+        # Zepto and Instamart: the serviceability / storeId cookie updates
+        # ~1-3 s AFTER the user-position localStorage key fires (which is what
+        # triggers Phase 2).  If we snapshot immediately we only capture the
+        # empty {"timeSaved":…} form and lose the storeId forever.
+        # Sleeping here keeps the browser open for a brief grace period so both
+        # the serviceability cookie and localStorage are fully settled before we
+        # snapshot and close.  3 s is imperceptible to the user.
+        if s.store in ("zepto", "instamart"):
+            await asyncio.sleep(3.0)
+            try:
+                fresh = await s.get_current_cookies()
+                if fresh:
+                    # Merge: fresh values take precedence (more up to date),
+                    # but keep any cookies that may have been removed by the page.
+                    cookies = {**cookies, **fresh}
+                    print(f"[browser-auth] {s.store}: re-snapshotted cookies after "
+                          f"3s grace period ({len(fresh)} cookies in fresh snapshot)")
+            except Exception as exc:
+                print(f"[browser-auth] {s.store}: re-snapshot failed: {exc}")
+
         # Also snapshot localStorage — Zepto/Instamart keep the resolved
         # delivery store id there, not (only) in cookies.
         local_storage = {}

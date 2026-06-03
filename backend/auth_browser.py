@@ -501,6 +501,20 @@ class _Session:
             print(f"[browser] {self.store}: get_local_storage failed: {exc}")
             return {}
 
+    async def get_current_cookies(self) -> dict:
+        """Return the current browser cookies as a name→value dict.
+
+        Used to re-snapshot after a deliberate delay (e.g. waiting for Zepto's
+        serviceability cookie to update with storeId after address confirmation).
+        Returns {} on failure so callers can merge safely.
+        """
+        try:
+            cookies = await self._context.cookies()
+            return {c["name"]: c["value"] for c in cookies}
+        except Exception as exc:
+            print(f"[browser] {self.store}: get_current_cookies failed: {exc}")
+            return {}
+
     async def close(self):
         self._screencast_on = False
         self._cdp = None   # closing the context below detaches the CDP session
