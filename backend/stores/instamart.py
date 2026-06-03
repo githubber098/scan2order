@@ -73,7 +73,8 @@ def _hunt_store_id(local_storage: dict, raw_cookies: dict) -> str:
     def _search(obj) -> str:
         if isinstance(obj, dict):
             for key in ("storeId", "store_id", "primaryStoreId",
-                        "primary_store_id"):
+                        "primary_store_id", "swiggyStoreId", "activeStoreId",
+                        "nearestStoreId", "instamart_store_id", "retailStoreId"):
                 v = obj.get(key)
                 if isinstance(v, (str, int)) and str(v).strip():
                     return str(v)

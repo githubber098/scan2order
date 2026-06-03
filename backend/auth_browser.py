@@ -515,6 +515,25 @@ class _Session:
             print(f"[browser] {self.store}: get_current_cookies failed: {exc}")
             return {}
 
+    async def get_session_storage(self) -> dict:
+        """Snapshot the page's sessionStorage (string→string). Returns {} on failure.
+
+        Swiggy/Instamart stores the resolved storeId in sessionStorage after the
+        user selects a delivery address. We merge this into the local_storage
+        blob saved by connect_store() so _hunt_store_id() can find it later.
+        """
+        try:
+            raw = await self._page.evaluate(
+                "() => { try { return JSON.stringify(Object.fromEntries("
+                "  Array.from({length: sessionStorage.length}, (_, i) => "
+                "    [sessionStorage.key(i), sessionStorage.getItem(sessionStorage.key(i))]"
+                "))); } catch(e) { return '{}'; } }"
+            )
+            return json.loads(raw or "{}")
+        except Exception as exc:
+            print(f"[browser] {self.store}: get_session_storage failed: {exc}")
+            return {}
+
     async def close(self):
         self._screencast_on = False
         self._cdp = None   # closing the context below detaches the CDP session

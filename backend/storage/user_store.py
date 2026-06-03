@@ -187,6 +187,33 @@ _SQLITE_DDL = """
         grand_total REAL NOT NULL DEFAULT 0,
         savings     REAL NOT NULL DEFAULT 0,
         stores_json TEXT NOT NULL DEFAULT '[]'
+    );
+    CREATE TABLE IF NOT EXISTS named_carts (
+        id          TEXT PRIMARY KEY,
+        user_id     TEXT NOT NULL,
+        name        TEXT NOT NULL,
+        created_at  REAL NOT NULL,
+        updated_at  REAL NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS named_cart_items (
+        id          TEXT PRIMARY KEY,
+        cart_id     TEXT NOT NULL,
+        app         TEXT NOT NULL,
+        product_id  TEXT NOT NULL,
+        name        TEXT NOT NULL,
+        price       REAL NOT NULL DEFAULT 0,
+        count       INTEGER NOT NULL DEFAULT 1,
+        unit        TEXT NOT NULL DEFAULT '',
+        image_url   TEXT NOT NULL DEFAULT '',
+        FOREIGN KEY (cart_id) REFERENCES named_carts(id) ON DELETE CASCADE
+    );
+    CREATE TABLE IF NOT EXISTS cart_schedules (
+        cart_id     TEXT PRIMARY KEY,
+        frequency   TEXT NOT NULL DEFAULT 'weekly',
+        next_run_at REAL NOT NULL DEFAULT 0,
+        last_run_at REAL NOT NULL DEFAULT 0,
+        enabled     INTEGER NOT NULL DEFAULT 1,
+        FOREIGN KEY (cart_id) REFERENCES named_carts(id) ON DELETE CASCADE
     )
 """
 
@@ -226,6 +253,34 @@ _MYSQL_DDL = """
         savings     DOUBLE       NOT NULL DEFAULT 0,
         stores_json TEXT         NOT NULL DEFAULT '[]',
         PRIMARY KEY (id)
+    );
+    CREATE TABLE IF NOT EXISTS named_carts (
+        id          VARCHAR(64)  NOT NULL,
+        user_id     VARCHAR(255) NOT NULL,
+        name        VARCHAR(255) NOT NULL,
+        created_at  DOUBLE       NOT NULL,
+        updated_at  DOUBLE       NOT NULL,
+        PRIMARY KEY (id)
+    );
+    CREATE TABLE IF NOT EXISTS named_cart_items (
+        id          VARCHAR(64)  NOT NULL,
+        cart_id     VARCHAR(64)  NOT NULL,
+        app         VARCHAR(64)  NOT NULL,
+        product_id  VARCHAR(255) NOT NULL,
+        name        TEXT         NOT NULL,
+        price       DOUBLE       NOT NULL DEFAULT 0,
+        count       INT          NOT NULL DEFAULT 1,
+        unit        VARCHAR(64)  NOT NULL DEFAULT '',
+        image_url   TEXT         NOT NULL DEFAULT '',
+        PRIMARY KEY (id)
+    );
+    CREATE TABLE IF NOT EXISTS cart_schedules (
+        cart_id     VARCHAR(64)  NOT NULL,
+        frequency   VARCHAR(32)  NOT NULL DEFAULT 'weekly',
+        next_run_at DOUBLE       NOT NULL DEFAULT 0,
+        last_run_at DOUBLE       NOT NULL DEFAULT 0,
+        enabled     TINYINT      NOT NULL DEFAULT 1,
+        PRIMARY KEY (cart_id)
     );
     CREATE TABLE IF NOT EXISTS otp_codes (
         target     VARCHAR(255) NOT NULL,
@@ -842,3 +897,122 @@ def get_history(user_id: str, limit: int = 50) -> list[dict]:
             "stores": stores,
         })
     return result
+
+
+# ── Named carts ─────────────────────────────────────────────────────────────────
+
+def create_named_cart(user_id: str, name: str) -> str:
+    """Create a new named cart, return its id."""
+    import uuid as _uuid
+    cid = str(_uuid.uuid4())
+    now = time.time()
+    _conn.execute(
+        "INSERT INTO named_carts (id, user_id, name, created_at, updated_at) VALUES (?,?,?,?,?)",
+        (cid, user_id, name.strip()[:80], now, now),
+    )
+    _conn.commit()
+    return cid
+
+
+def get_named_carts(user_id: str) -> list[dict]:
+    """Return all named carts for the user, newest first."""
+    rows = _conn.execute(
+        "SELECT id, name, created_at, updated_at FROM named_carts WHERE user_id=? ORDER BY updated_at DESC",
+        (user_id,),
+    ).fetchall()
+    result = []
+    for r in rows:
+        items = _conn.execute(
+            "SELECT * FROM named_cart_items WHERE cart_id=?", (r["id"],)
+        ).fetchall()
+        sched = _conn.execute(
+            "SELECT * FROM cart_schedules WHERE cart_id=?", (r["id"],)
+        ).fetchone()
+        result.append({
+            "id": r["id"],
+            "name": r["name"],
+            "created_at": r["created_at"],
+            "updated_at": r["updated_at"],
+            "items": [dict(i) for i in items],
+            "schedule": dict(sched) if sched else None,
+        })
+    return result
+
+
+def delete_named_cart(cart_id: str, user_id: str) -> bool:
+    """Delete a cart and its items/schedule. Returns True if deleted."""
+    cursor = _conn.execute(
+        "DELETE FROM named_carts WHERE id=? AND user_id=?", (cart_id, user_id)
+    )
+    _conn.execute("DELETE FROM named_cart_items WHERE cart_id=?", (cart_id,))
+    _conn.execute("DELETE FROM cart_schedules WHERE cart_id=?", (cart_id,))
+    _conn.commit()
+    return cursor.rowcount > 0
+
+
+def add_named_cart_item(cart_id: str, item: dict) -> str:
+    """Add an item to a named cart, return item id."""
+    import uuid as _uuid
+    iid = str(_uuid.uuid4())
+    _conn.execute(
+        "INSERT INTO named_cart_items (id, cart_id, app, product_id, name, price, count, unit, image_url)"
+        " VALUES (?,?,?,?,?,?,?,?,?)",
+        (iid, cart_id, item.get("app",""), str(item.get("product_id","")),
+         str(item.get("name",""))[:120], float(item.get("price") or item.get("sale_price") or 0),
+         int(item.get("count") or 1), str(item.get("unit",""))[:40],
+         str(item.get("image_url",""))[:400]),
+    )
+    _conn.execute(
+        "UPDATE named_carts SET updated_at=? WHERE id=?", (time.time(), cart_id)
+    )
+    _conn.commit()
+    return iid
+
+
+def remove_named_cart_item(item_id: str, cart_id: str) -> bool:
+    """Remove an item from a named cart."""
+    cursor = _conn.execute(
+        "DELETE FROM named_cart_items WHERE id=? AND cart_id=?", (item_id, cart_id)
+    )
+    _conn.commit()
+    return cursor.rowcount > 0
+
+
+def set_cart_schedule(cart_id: str, frequency: str, enabled: bool = True) -> None:
+    """Set or update the schedule for a named cart."""
+    now = time.time()
+    if frequency == "daily":
+        next_run = now + 86400
+    else:  # weekly default
+        next_run = now + 604800
+    # Upsert (SQLite: INSERT OR REPLACE)
+    _conn.execute(
+        "INSERT OR REPLACE INTO cart_schedules (cart_id, frequency, next_run_at, last_run_at, enabled)"
+        " VALUES (?,?,?,?,?)",
+        (cart_id, frequency, next_run, 0, 1 if enabled else 0),
+    )
+    _conn.commit()
+
+
+def get_due_scheduled_carts() -> list[dict]:
+    """Return all scheduled carts whose next_run_at is in the past."""
+    now = time.time()
+    rows = _conn.execute(
+        "SELECT cs.cart_id, cs.frequency, nc.user_id, nc.name"
+        " FROM cart_schedules cs"
+        " JOIN named_carts nc ON cs.cart_id = nc.id"
+        " WHERE cs.enabled=1 AND cs.next_run_at <= ?",
+        (now,),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def mark_cart_ran(cart_id: str, frequency: str) -> None:
+    """Update last_run_at and advance next_run_at by one period."""
+    now = time.time()
+    advance = 86400 if frequency == "daily" else 604800
+    _conn.execute(
+        "UPDATE cart_schedules SET last_run_at=?, next_run_at=? WHERE cart_id=?",
+        (now, now + advance, cart_id),
+    )
+    _conn.commit()

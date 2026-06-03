@@ -32,11 +32,43 @@
     <p class="center dim" style="font-size:11.5px;margin-top:8px">
       Items are added to each app's own cart — open the app to check out.
     </p>
-    <button class="btn ghost" id="cart-clear" type="button" style="margin-top:2px" onclick="clearCart()">
-      <i data-ico="trash" data-s="16"></i>Clear cart
+    <div style="display:flex;gap:10px;margin-top:2px;flex-wrap:wrap">
+      <button class="btn ghost" id="cart-clear" type="button" style="flex:1" onclick="clearCart()">
+        <i data-ico="trash" data-s="16"></i>Clear cart
+      </button>
+      <button class="btn ghost" id="cart-clear-all" type="button" style="flex:1;color:var(--err);border-color:var(--err)" onclick="clearAllCarts()">
+        <i data-ico="trash" data-s="16"></i>Clear all store carts
+      </button>
+    </div>
+    <button class="btn ghost" type="button" style="margin-top:4px" onclick="saveCartToNamed()">
+      <i data-ico="plus" data-s="16"></i>Save as named cart
     </button>
   </div>
 </section>
+
+<!-- ===== Named / Saved Carts ===== -->
+<section class="stack" aria-label="Saved carts" style="margin-top:20px" id="named-carts-section">
+  <div class="spread">
+    <h2 class="h1" style="font-size:18px">Saved Carts</h2>
+    <button class="btn" style="width:auto;padding:0 14px;font-size:13px" onclick="showCreateCartModal()">
+      <i data-ico="plus" data-s="15"></i> New cart
+    </button>
+  </div>
+  <p class="dim" style="font-size:12.5px;margin:0">Save item lists as named carts and add them to your stores with one tap — or schedule them to run automatically.</p>
+  <div id="named-carts-list" class="stack" style="gap:10px"></div>
+</section>
+
+<!-- Create cart modal -->
+<div class="modal-overlay" id="create-cart-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:200;align-items:flex-end">
+  <div class="card stack" style="width:100%;max-width:520px;margin:0 auto;border-radius:18px 18px 0 0;padding:20px">
+    <div style="font-weight:800;font-size:16px">New saved cart</div>
+    <input id="create-cart-name" class="input" type="text" placeholder="Cart name (e.g. Weekly Groceries)" maxlength="80" style="font-size:14px">
+    <div style="display:flex;gap:10px">
+      <button class="btn" style="flex:1" onclick="createNamedCart()">Create</button>
+      <button class="btn ghost" style="flex:1" onclick="document.getElementById('create-cart-modal').style.display='none'">Cancel</button>
+    </div>
+  </div>
+</div>
 {% endblock %}
 
 {% block head %}
@@ -175,6 +207,181 @@ function clearCart(){
   render();
 }
 
-document.addEventListener("DOMContentLoaded", render);
+async function clearAllCarts(){
+  if (!confirm("This will clear your cart here AND send a clear request to each connected store app. Continue?")) return;
+  const btn = document.getElementById("cart-clear-all");
+  btn.disabled = true;
+  // First clear local cart
+  clearCart();
+  // Then call each store's clear-all API
+  try {
+    const r = await fetch("/api/cart/clear-all", {
+      method: "POST", headers: {"Content-Type":"application/json"},
+      body: JSON.stringify({ user_id: userId }),
+    });
+    const d = await r.json();
+    const lines = Object.entries(d.results||{}).map(([store, res]) =>
+      `${store}: ${res.cleared ? "✓ cleared" : "✗ " + (res.reason||"not cleared")}`
+    );
+    if (lines.length) alert("Store carts:\n" + lines.join("\n"));
+  } catch(e) {
+    alert("Failed to clear store carts: " + e.message);
+  }
+  btn.disabled = false;
+}
+
+document.addEventListener("DOMContentLoaded", () => { render(); loadNamedCarts(); });
+
+// ── Named / Saved Carts ─────────────────────────────────────────────────────
+const _FREQ_LABEL = { daily:"Every day", weekly:"Every week", off:"Off" };
+const _SN4 = { bigbasket:"BigBasket", blinkit:"Blinkit", zepto:"Zepto", instamart:"Instamart" };
+
+async function loadNamedCarts(){
+  if (window._SERVER_GUEST) {
+    document.getElementById("named-carts-section").style.display = "none";
+    return;
+  }
+  try {
+    const r = await fetch("/api/named-carts");
+    const d = await r.json();
+    renderNamedCarts(d.carts || []);
+  } catch(e) { console.error("named carts load failed", e); }
+}
+
+function renderNamedCarts(carts){
+  const wrap = document.getElementById("named-carts-list");
+  wrap.innerHTML = "";
+  if (!carts.length){
+    wrap.innerHTML = `<div class="dim" style="font-size:13px;text-align:center;padding:18px 0">No saved carts yet. Tap <b>New cart</b> to create one.</div>`;
+    if (window.s2o) window.s2o.paintIcons(document);
+    return;
+  }
+  for (const cart of carts){
+    const sched = cart.schedule;
+    const freq = sched?.enabled ? (sched.frequency || "weekly") : "off";
+    const sec = document.createElement("div");
+    sec.className = "card tight stack"; sec.style.gap = "8px";
+    const itemCount = cart.items.length;
+    const apps = [...new Set(cart.items.map(i => i.app))];
+    sec.innerHTML = `
+      <div class="spread" style="align-items:flex-start">
+        <div>
+          <div style="font-weight:750;font-size:15px">${_esc(cart.name)}</div>
+          <div class="dim" style="font-size:12px;margin-top:2px">${itemCount} item${itemCount===1?'':'s'} · ${apps.map(a=>_SN4[a]||a).join(', ')||'no stores'}</div>
+        </div>
+        <div style="display:flex;gap:6px;flex-shrink:0">
+          <button class="btn" style="width:auto;padding:0 12px;font-size:12.5px" onclick="runNamedCart('${cart.id}',this)">
+            <i data-ico="bolt" data-s="13"></i> Add to carts
+          </button>
+          <button class="btn ghost" style="width:auto;padding:0 10px;font-size:12.5px;color:var(--err);border-color:var(--err)" onclick="deleteNamedCart('${cart.id}',this)">
+            <i data-ico="trash" data-s="13"></i>
+          </button>
+        </div>
+      </div>
+      <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+        <span style="font-size:12px;color:var(--muted)">Auto-add:</span>
+        ${["off","daily","weekly"].map(f=>`<button class="pill-tag${freq===f?' sel':''}" style="cursor:pointer;font-size:11.5px" onclick="setCartSchedule('${cart.id}','${f}',this.parentElement)">${_FREQ_LABEL[f]}</button>`).join('')}
+      </div>
+      <div id="nc-items-${cart.id}" style="${itemCount?'':'display:none'}">
+        ${cart.items.map(it=>`
+          <div style="display:flex;align-items:center;gap:8px;padding:5px 0;border-bottom:1px solid var(--card-br)">
+            ${it.image_url?`<img src="${_esc(it.image_url)}" style="width:36px;height:36px;border-radius:8px;object-fit:cover" onerror="this.style.display='none'">`:''}
+            <div style="flex:1;min-width:0">
+              <div style="font-size:12.5px;font-weight:650;overflow:hidden;white-space:nowrap;text-overflow:ellipsis">${_esc(it.name)}</div>
+              <div style="font-size:11px;color:var(--muted)">${_SN4[it.app]||it.app} · ₹${Math.round(it.price)} · ×${it.count}</div>
+            </div>
+            <button class="btn ghost" style="width:auto;padding:0 8px;font-size:11px" onclick="removeCartItem('${cart.id}','${it.id}',this)">✕</button>
+          </div>`).join('')}
+      </div>`;
+    wrap.appendChild(sec);
+  }
+  if (window.s2o) window.s2o.paintIcons(wrap);
+}
+
+function showCreateCartModal(){
+  document.getElementById("create-cart-modal").style.display = "flex";
+  setTimeout(()=>document.getElementById("create-cart-name").focus(),50);
+}
+
+async function createNamedCart(){
+  const inp = document.getElementById("create-cart-name");
+  const name = inp.value.trim();
+  if (!name) return;
+  try {
+    await fetch("/api/named-carts", {
+      method:"POST", headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({name}),
+    });
+    inp.value = "";
+    document.getElementById("create-cart-modal").style.display = "none";
+    await loadNamedCarts();
+  } catch(e) { alert("Error: "+e.message); }
+}
+
+async function deleteNamedCart(cartId, btn){
+  if (!confirm("Delete this saved cart?")) return;
+  btn.disabled = true;
+  await fetch(`/api/named-carts/${cartId}`, {method:"DELETE"});
+  await loadNamedCarts();
+}
+
+async function runNamedCart(cartId, btn){
+  btn.disabled = true;
+  const orig = btn.innerHTML;
+  btn.innerHTML = "Adding…";
+  try {
+    const r = await fetch(`/api/named-carts/${cartId}/run`, {method:"POST"});
+    const d = await r.json();
+    const lines = Object.entries(d.results||{}).map(([app, res])=>{
+      const added = (res.added||[]).length, failed = (res.failed||[]).length;
+      return `${_SN4[app]||app}: ${added} added${failed?`, ${failed} failed`:''}`;
+    });
+    alert(lines.length ? "Done!\n"+lines.join("\n") : "Nothing to add.");
+  } catch(e) { alert("Error: "+e.message); }
+  btn.innerHTML = orig;
+  btn.disabled = false;
+  if (window.s2o) window.s2o.paintIcons(btn.closest(".card"));
+}
+
+async function setCartSchedule(cartId, frequency, container){
+  await fetch(`/api/named-carts/${cartId}/schedule`, {
+    method:"POST", headers:{"Content-Type":"application/json"},
+    body: JSON.stringify({frequency}),
+  });
+  container.querySelectorAll(".pill-tag").forEach(el=>{
+    el.classList.toggle("sel", el.textContent===_FREQ_LABEL[frequency]);
+  });
+}
+
+async function removeCartItem(cartId, itemId, btn){
+  btn.disabled = true;
+  await fetch(`/api/named-carts/${cartId}/items/${itemId}`, {method:"DELETE"});
+  await loadNamedCarts();
+}
+
+// Allow adding current shop-cart items to a named cart
+window.saveCartToNamed = async function(cartName){
+  const cart = window.s2o.shopCartGet();
+  const allItems = [];
+  for (const [app, items] of Object.entries(cart)){
+    for (const it of Object.values(items||{})){
+      allItems.push({...it, app});
+    }
+  }
+  if (!allItems.length) { alert("Your cart is empty."); return; }
+  const name = cartName || prompt("Save cart as:");
+  if (!name) return;
+  const cr = await fetch("/api/named-carts", {
+    method:"POST", headers:{"Content-Type":"application/json"},
+    body: JSON.stringify({name}),
+  });
+  const {id} = await cr.json();
+  await fetch(`/api/named-carts/${id}/items`, {
+    method:"POST", headers:{"Content-Type":"application/json"},
+    body: JSON.stringify(allItems),
+  });
+  await loadNamedCarts();
+  alert(`Saved as "${name}"!`);
+};
 </script>
 {% endblock %}

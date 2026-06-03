@@ -501,22 +501,25 @@ async def _cart_post_playwright(user_id: str, cart_items: list[dict]) -> dict:
 async def search_item_api(user_id: str, query: str) -> list[dict]:
     """Search Blinkit for *query*.
 
-    Strategy 1 (primary): Blinkit's internal v2 JSON API.
-      GET /v2/search?search_type=keyword&q={query}&start=0&size=20
-      This is the same API the web app calls on every keystroke; it
-      returns a clean JSON payload and does not require HTML parsing.
+    Strategy order (Playwright-primary since httpx is WAF-blocked without
+    fresh Cloudflare cookies):
 
-    Strategy 2 (fallback): __NEXT_DATA__ SSR extraction.
-      GET /s/?q={query} and parse the embedded Next.js JSON blob.
-      Still attempted if Strategy 1 returns no results or fails,
-      in case Blinkit changes the v2 API path in a future release.
+    1. Playwright response interception — most reliable (~2.5s). Navigates to
+       the search page inside a real Chromium with saved session cookies; the
+       React app fires /v1/layout/search itself and we intercept the response.
+       Also captures the derived auth_key for the fast httpx path below.
+       Only skipped if a fresh cached auth_key (< 30 min old) is present.
+
+    2. POST /v1/layout/search via httpx — fast (~200ms) but needs a valid
+       api_auth_key (derived by Playwright or the /v2/accounts/auth_key/
+       endpoint). Used when we have a trusted cached key, falls through to
+       Playwright if it returns nothing.
+
+    3. __NEXT_DATA__ SSR extraction — last resort if both above fail.
 
     Returns [] on complete failure.
     """
     cookies = get_store_cookies(user_id, APP_NAME)
-    # Cookie values are stored URL-encoded by Playwright. Decode them before
-    # sending via httpx — the server expects raw values (e.g. "v2::token",
-    # not "v2%3A%3Atoken"). CF cookies expire immediately so we skip them.
     _CF_COOKIES = {"__cf_bm", "_cfuvid"}
     httpx_cookies = {k: unquote(v) if isinstance(v, str) else v
                      for k, v in cookies.items() if k not in _CF_COOKIES}
@@ -528,49 +531,63 @@ async def search_item_api(user_id: str, query: str) -> list[dict]:
     print(f"\n[blinkit] === API SEARCH: '{query}' ===")
     t_start = time.time()
 
-    # Location context — web relay saves gr_1_lat/gr_1_lon; mobile saves lat/lng.
     lat = (cookies.get("gr_1_lat") or cookies.get("lat") or cookies.get("dlat") or "")
     lng = (cookies.get("gr_1_lon") or cookies.get("lng") or cookies.get("dlng") or "")
     merchant_id = cookies.get("merchant_id") or cookies.get("gr_1_merchantId") or ""
+    api_auth_key = cookies.get("api_auth_key", "")
+    # Treat cached auth_key as stale after 30 minutes — Blinkit rotates them.
+    auth_key_age = time.time() - float(cookies.get("api_auth_key_ts", 0) or 0)
+    auth_key_fresh = bool(api_auth_key and auth_key_age < 1800)
 
-    print(f"[blinkit] location: lat={lat!r} lng={lng!r} merchant_id={merchant_id!r}")
+    print(f"[blinkit] location: lat={lat!r} lng={lng!r} merchant_id={merchant_id!r} "
+          f"auth_key_fresh={auth_key_fresh}")
 
-    # ── Strategy 1: POST /v1/layout/search ───────────────────────────────────
-    # Request shape mirrors a captured working browser request byte-for-byte:
-    #   POST /v1/layout/search?q=<query>&search_type=type_to_search
-    #   headers: lat + lon (BOTH required — serviceability is resolved server-
-    #            side from the coordinate pair; sending only lat → "location
-    #            not serviceable"), access_token (decoded), auth_key, and
-    #            app_client=consumer_web.
-    #   cookies: gr_1_lat / gr_1_lon / gr_1_locality must be present and match
-    #            the lat/lon headers (already in httpx_cookies, URL-decoded).
     products: list[dict] = []
-    try:
-        # Prefer the cached derived key (captured during the login relay). It's
-        # a long-lived 64-hex key; only derive a fresh one if we have none. The
-        # /v2/accounts/auth_key/ derivation endpoint often 400s for standalone
-        # httpx calls, so we don't rely on it when a cached key exists.
-        api_auth_key = cookies.get("api_auth_key", "")
-        if not api_auth_key:
-            derived = await _get_auth_key(access_token, httpx_cookies)
-            if derived and derived != access_token:
-                api_auth_key = derived
-                update_store_cookies(user_id, APP_NAME, {"api_auth_key": derived})
-            else:
-                api_auth_key = access_token
-        print(f"[blinkit] auth_key key_prefix={api_auth_key[:12]!r} "
-              f"(cached={bool(cookies.get('api_auth_key'))})")
 
+    # ── Strategy 1: Playwright response interception (PRIMARY) ───────────────
+    # Playwright lets the real Chromium make the /v1/layout/search request with
+    # its own session cookies + fresh Cloudflare tokens (CF cookies are short-
+    # lived and can't be used from server-side httpx). This is the only approach
+    # that reliably bypasses Blinkit's WAF.
+    # Skip if we have a fresh cached auth_key (< 30 min old) — in that case
+    # try the fast httpx path first and only fall to Playwright on failure.
+    if not auth_key_fresh:
+        print(f"[blinkit] No fresh auth_key → going directly to Playwright")
+        try:
+            products, pw_auth_key = await _search_playwright(user_id, query, cookies)
+            elapsed_ms = int((time.time() - t_start) * 1000)
+            print(f"[blinkit] Strategy 1 (Playwright): {len(products)} products "
+                  f"({elapsed_ms}ms)")
+            if pw_auth_key:
+                update_store_cookies(user_id, APP_NAME, {
+                    "api_auth_key": pw_auth_key,
+                    "api_auth_key_ts": str(int(time.time())),
+                })
+                api_auth_key = pw_auth_key
+                print(f"[blinkit] Cached fresh auth_key prefix={pw_auth_key[:12]!r}")
+        except Exception as e:
+            elapsed_ms = int((time.time() - t_start) * 1000)
+            print(f"[blinkit] Strategy 1 (Playwright) failed after {elapsed_ms}ms: {e}")
+
+        if products:
+            print(f"[blinkit] === API RESULT: {len(products)} products "
+                  f"({int((time.time() - t_start)*1000)}ms) ===\n")
+            return products
+
+    # ── Strategy 2: POST /v1/layout/search via httpx (fast path) ─────────────
+    # Use the cached auth_key obtained from a previous Playwright run. Blinkit
+    # rotates this key so it's only trusted for 30 min. This is a fast ~200ms
+    # path used after Strategy 1 has warmed the auth_key cache.
+    print(f"[blinkit] {'cached auth_key present, trying' if auth_key_fresh else 'Playwright empty → trying'} httpx")
+    try:
         layout_headers = {
             **_API_HEADERS_BASE,
-            "app_client": "consumer_web",   # capture uses consumer_web, not web
-            "access_token": access_token,   # decoded gr_1_accessToken (v2::...)
-            "auth_key": api_auth_key,
+            "app_client": "consumer_web",
+            "access_token": access_token,
+            "auth_key": api_auth_key or access_token,
             "Origin": BASE_URL,
             "Referer": f"{BASE_URL}/s/?q={quote(query)}",
         }
-        # BOTH lat and lon are mandatory headers — this is the fix for the
-        # "location not serviceable" 400 we were getting with lat alone.
         if lat:
             layout_headers["lat"] = str(lat)
         if lng:
@@ -585,74 +602,69 @@ async def search_item_api(user_id: str, query: str) -> list[dict]:
             "similar_entities": None,
             "sort": "",
         }
-        print(f"[blinkit] Strategy 1 headers: "
-              f"lat={layout_headers.get('lat')!r} lon={layout_headers.get('lon')!r} "
-              f"app_client=consumer_web")
-
-        # The actual search term goes in the URL query params (q=...), matching
-        # the captured request; the body only carries pagination/ranking state.
         search_url = (f"{BASE_URL}/v1/layout/search"
                       f"?q={quote(query)}&search_type=type_to_search")
         async with httpx.AsyncClient(timeout=12.0) as client:
             resp = await client.post(
-                search_url,
-                json=layout_body,
-                headers=layout_headers,
-                cookies=httpx_cookies,
+                search_url, json=layout_body,
+                headers=layout_headers, cookies=httpx_cookies,
             )
         elapsed_ms = int((time.time() - t_start) * 1000)
         if resp.status_code == 200:
             try:
                 products = _parse_layout_search_response(resp.json())
-                print(f"[blinkit] Strategy 1 (layout/search): {len(products)} products "
-                      f"({elapsed_ms}ms)")
+                print(f"[blinkit] Strategy 2 (httpx layout/search): {len(products)} "
+                      f"products ({elapsed_ms}ms)")
             except Exception as e:
-                print(f"[blinkit] Strategy 1: parse error: {e} ({elapsed_ms}ms)")
+                print(f"[blinkit] Strategy 2: parse error: {e} ({elapsed_ms}ms)")
         else:
-            print(f"[blinkit] Strategy 1: HTTP {resp.status_code} ({elapsed_ms}ms) "
-                  f"body={resp.text[:300]!r}")
-    except Exception as e:
-        elapsed_ms = int((time.time() - t_start) * 1000)
-        print(f"[blinkit] Strategy 1: request failed: {e} ({elapsed_ms}ms)")
-
-    if products:
-        print(f"[blinkit] === API RESULT: {len(products)} products "
-              f"({int((time.time() - t_start)*1000)}ms) ===\n")
-        return products
-
-    # ── Strategy 2: __NEXT_DATA__ SSR fallback ───────────────────────────────
-    print(f"[blinkit] Strategy 1 empty → trying SSR fallback")
-    ssr_url = f"{BASE_URL}/s/?q={quote(query)}"
-    try:
-        async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
-            resp = await client.get(ssr_url, headers=_SSR_HEADERS, cookies=cookies)
-        elapsed_ms = int((time.time() - t_start) * 1000)
-        if resp.status_code == 200:
-            products = _parse_ssr_response(resp.text)
-            print(f"[blinkit] Strategy 2 (SSR): {len(products)} products ({elapsed_ms}ms)")
-        else:
-            print(f"[blinkit] Strategy 2 (SSR): HTTP {resp.status_code} ({elapsed_ms}ms) "
+            print(f"[blinkit] Strategy 2 (httpx): HTTP {resp.status_code} ({elapsed_ms}ms) "
                   f"body={resp.text[:200]!r}")
     except Exception as e:
         elapsed_ms = int((time.time() - t_start) * 1000)
-        print(f"[blinkit] Strategy 2 (SSR): request failed: {e} ({elapsed_ms}ms)")
+        print(f"[blinkit] Strategy 2 (httpx): failed after {elapsed_ms}ms: {e}")
 
     if products:
         print(f"[blinkit] === API RESULT: {len(products)} products "
               f"({int((time.time() - t_start)*1000)}ms) ===\n")
         return products
 
-    # ── Strategy 3: Playwright response interception ─────────────────────────
-    print(f"[blinkit] SSR fallback empty → trying Playwright strategy")
-    try:
-        products, pw_auth_key = await _search_playwright(user_id, query, cookies)
-        print(f"[blinkit] Strategy 3 (Playwright): {len(products)} products "
-              f"({int((time.time() - t_start)*1000)}ms)")
-        if pw_auth_key:
-            update_store_cookies(user_id, APP_NAME, {"api_auth_key": pw_auth_key})
-            print(f"[blinkit] Cached derived auth key for future Strategy 1 use")
-    except Exception as e:
-        print(f"[blinkit] Strategy 3 failed: {e}")
+    # ── Strategy 3: Playwright (retry if httpx fast-path missed) ─────────────
+    # Only runs when auth_key_fresh was True (we skipped Strategy 1) and httpx
+    # still returned nothing — auth_key may have expired mid-window.
+    if auth_key_fresh:
+        print(f"[blinkit] httpx empty (auth_key may have expired) → retrying Playwright")
+        try:
+            products, pw_auth_key = await _search_playwright(user_id, query, cookies)
+            elapsed_ms = int((time.time() - t_start) * 1000)
+            print(f"[blinkit] Strategy 3 (Playwright retry): {len(products)} products "
+                  f"({elapsed_ms}ms)")
+            if pw_auth_key:
+                update_store_cookies(user_id, APP_NAME, {
+                    "api_auth_key": pw_auth_key,
+                    "api_auth_key_ts": str(int(time.time())),
+                })
+                print(f"[blinkit] Refreshed auth_key from retry Playwright run")
+        except Exception as e:
+            elapsed_ms = int((time.time() - t_start) * 1000)
+            print(f"[blinkit] Strategy 3 (Playwright retry) failed after {elapsed_ms}ms: {e}")
+
+    # ── Strategy 4: __NEXT_DATA__ SSR (last resort) ───────────────────────────
+    if not products:
+        print(f"[blinkit] All Playwright/httpx paths empty → trying SSR last resort")
+        ssr_url = f"{BASE_URL}/s/?q={quote(query)}"
+        try:
+            async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
+                resp = await client.get(ssr_url, headers=_SSR_HEADERS, cookies=cookies)
+            elapsed_ms = int((time.time() - t_start) * 1000)
+            if resp.status_code == 200:
+                products = _parse_ssr_response(resp.text)
+                print(f"[blinkit] Strategy 4 (SSR): {len(products)} products ({elapsed_ms}ms)")
+            else:
+                print(f"[blinkit] Strategy 4 (SSR): HTTP {resp.status_code} ({elapsed_ms}ms)")
+        except Exception as e:
+            elapsed_ms = int((time.time() - t_start) * 1000)
+            print(f"[blinkit] Strategy 4 (SSR) failed after {elapsed_ms}ms: {e}")
 
     print(f"[blinkit] === API RESULT: {len(products)} products "
           f"({int((time.time() - t_start)*1000)}ms) ===\n")

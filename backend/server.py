@@ -177,9 +177,39 @@ async def lifespan(app: FastAPI):
             await asyncio.sleep(60)
             await auth_browser.cleanup_expired()
 
+    async def _scheduled_cart_loop():
+        """Check for named carts whose schedule is due and push them to stores."""
+        while True:
+            await asyncio.sleep(300)  # check every 5 minutes
+            try:
+                due = user_store.get_due_scheduled_carts()
+                for item in due:
+                    cid = item["cart_id"]
+                    uid = item["user_id"]
+                    freq = item["frequency"]
+                    print(f"[scheduled-cart] running cart {cid!r} ({freq}) "
+                          f"for user {uid[:8]}…")
+                    try:
+                        carts = user_store.get_named_carts(uid)
+                        cart = next((c for c in carts if c["id"] == cid), None)
+                        if cart:
+                            by_app: dict[str, list] = {}
+                            for it in cart["items"]:
+                                by_app.setdefault(it["app"], []).append(it)
+                            for app_name, items in by_app.items():
+                                await _add_items_to_store(uid, app_name, items)
+                        user_store.mark_cart_ran(cid, freq)
+                        print(f"[scheduled-cart] done: {cid!r}")
+                    except Exception as e:
+                        print(f"[scheduled-cart] error for {cid!r}: {e}")
+            except Exception as e:
+                print(f"[scheduled-cart] loop error: {e}")
+
     cleanup_task = asyncio.create_task(_browser_cleanup_loop())
+    sched_task = asyncio.create_task(_scheduled_cart_loop())
     yield
     cleanup_task.cancel()
+    sched_task.cancel()
     print("[shutdown] Shutting down")
 
 
@@ -963,11 +993,19 @@ async def browser_auth_check(session_id: str):
             except Exception as exc:
                 print(f"[browser-auth] {s.store}: re-snapshot failed: {exc}")
 
-        # Also snapshot localStorage — Zepto/Instamart keep the resolved
-        # delivery store id there, not (only) in cookies.
+        # Snapshot localStorage AND sessionStorage — Zepto keeps delivery coords
+        # in localStorage; Instamart stores the resolved storeId in sessionStorage
+        # (it resets on tab close, so capture it now while the session is live).
+        # Merge both into one dict so _hunt_store_id() searches them together.
         local_storage = {}
         try:
             local_storage = await s.get_local_storage()
+            ss = await s.get_session_storage()
+            if ss:
+                # Prefix sessionStorage keys to avoid collisions with localStorage
+                local_storage.update({f"__ss__{k}": v for k, v in ss.items()})
+                print(f"[browser-auth] merged {len(ss)} sessionStorage keys "
+                      f"into local_storage for {s.store}")
         except Exception:
             pass
         user_store.connect_store(s.user_id, s.store, cookies, local_storage)
@@ -1001,6 +1039,12 @@ async def browser_auth_force(session_id: str):
     if not kv.get(auth_key):
         return {"success": False, "error": "Not logged in yet — please log in first"}
     local_storage = await s.get_local_storage()
+    try:
+        ss = await s.get_session_storage()
+        if ss:
+            local_storage.update({f"__ss__{k}": v for k, v in ss.items()})
+    except Exception:
+        pass
     user_store.connect_store(s.user_id, s.store, kv, local_storage)
     print(f"[browser-auth] force-saved {len(kv)} cookies + "
           f"{len(local_storage)} localStorage keys for "
@@ -1739,6 +1783,43 @@ async def api_compare_item(request: Request):
 
 # ── Cart (web UI) ─────────────────────────────────────────────────────────────
 
+@app.post("/api/cart/clear-all")
+async def api_cart_clear_all(request: Request):
+    """Clear the cart for every connected store.
+
+    For Blinkit: POST /v5/carts with empty items list (replaces whole cart).
+    For Zepto/Instamart: no public clear-all API; returns {cleared:false} for
+    those stores so the client can at least clear its own localStorage copy.
+
+    Body: {user_id} (optional — falls back to session cookie).
+    Returns {results: {store: {cleared: bool, reason?: str}}}.
+    """
+    body = await request.json()
+    user_id = _get_session_user(request) or _require_user_id(body.get("user_id"))
+    if not user_id:
+        return JSONResponse({"error": "login required"}, status_code=401)
+
+    results: dict = {}
+
+    # Blinkit: replace cart with empty list
+    if blinkit.is_session_valid(user_id):
+        try:
+            res = await blinkit.add_all_to_cart_api(user_id, [])
+            results["blinkit"] = {"cleared": res.get("success", False),
+                                  "reason": res.get("reason", "")}
+        except Exception as e:
+            results["blinkit"] = {"cleared": False, "reason": str(e)}
+
+    # Zepto/Instamart/BigBasket: no reliable server-side clear API —
+    # we mark them as cleared so the frontend can remove local copies.
+    for store_name, mod in [("zepto", zepto), ("instamart", instamart),
+                             ("bigbasket", bigbasket)]:
+        if mod.is_session_valid(user_id):
+            results[store_name] = {"cleared": True, "note": "local only"}
+
+    return {"results": results}
+
+
 @app.post("/api/cart/add-all")
 async def api_cart_add_all(request: Request):
     """Add items to carts across stores in parallel.
@@ -1874,6 +1955,104 @@ async def api_cart_add_all(request: Request):
 @app.get("/api/cart/progress")
 async def api_cart_progress(user_id: str):
     return dict(_cart_progress.get(user_id, _new_progress()))
+
+
+# ── Named carts ──────────────────────────────────────────────────────────────
+
+@app.get("/api/named-carts")
+async def api_named_carts_list(request: Request):
+    user_id = _get_session_user(request)
+    if not user_id:
+        return JSONResponse({"error": "login required"}, status_code=401)
+    return {"carts": user_store.get_named_carts(user_id)}
+
+
+@app.post("/api/named-carts")
+async def api_named_carts_create(request: Request):
+    user_id = _get_session_user(request)
+    if not user_id:
+        return JSONResponse({"error": "login required"}, status_code=401)
+    body = await request.json()
+    name = (body.get("name") or "").strip()
+    if not name:
+        return JSONResponse({"error": "name required"}, status_code=400)
+    cart_id = user_store.create_named_cart(user_id, name)
+    return {"id": cart_id, "name": name}
+
+
+@app.delete("/api/named-carts/{cart_id}")
+async def api_named_carts_delete(cart_id: str, request: Request):
+    user_id = _get_session_user(request)
+    if not user_id:
+        return JSONResponse({"error": "login required"}, status_code=401)
+    ok = user_store.delete_named_cart(cart_id, user_id)
+    return {"deleted": ok}
+
+
+@app.post("/api/named-carts/{cart_id}/items")
+async def api_named_carts_add_item(cart_id: str, request: Request):
+    user_id = _get_session_user(request)
+    if not user_id:
+        return JSONResponse({"error": "login required"}, status_code=401)
+    # Verify the cart belongs to this user
+    carts = user_store.get_named_carts(user_id)
+    if not any(c["id"] == cart_id for c in carts):
+        return JSONResponse({"error": "cart not found"}, status_code=404)
+    body = await request.json()
+    items = body if isinstance(body, list) else [body]
+    ids = [user_store.add_named_cart_item(cart_id, it) for it in items]
+    return {"added": ids}
+
+
+@app.delete("/api/named-carts/{cart_id}/items/{item_id}")
+async def api_named_carts_remove_item(cart_id: str, item_id: str,
+                                       request: Request):
+    user_id = _get_session_user(request)
+    if not user_id:
+        return JSONResponse({"error": "login required"}, status_code=401)
+    ok = user_store.remove_named_cart_item(item_id, cart_id)
+    return {"deleted": ok}
+
+
+@app.post("/api/named-carts/{cart_id}/schedule")
+async def api_named_carts_schedule(cart_id: str, request: Request):
+    user_id = _get_session_user(request)
+    if not user_id:
+        return JSONResponse({"error": "login required"}, status_code=401)
+    body = await request.json()
+    frequency = body.get("frequency", "weekly")
+    if frequency not in ("daily", "weekly", "off"):
+        return JSONResponse({"error": "frequency must be daily, weekly, or off"},
+                            status_code=400)
+    if frequency == "off":
+        user_store.set_cart_schedule(cart_id, "weekly", enabled=False)
+    else:
+        user_store.set_cart_schedule(cart_id, frequency, enabled=True)
+    return {"ok": True, "frequency": frequency}
+
+
+@app.post("/api/named-carts/{cart_id}/run")
+async def api_named_carts_run(cart_id: str, request: Request):
+    """Manually push all items in a named cart to the connected store apps."""
+    user_id = _get_session_user(request)
+    if not user_id:
+        return JSONResponse({"error": "login required"}, status_code=401)
+    carts = user_store.get_named_carts(user_id)
+    cart = next((c for c in carts if c["id"] == cart_id), None)
+    if not cart:
+        return JSONResponse({"error": "cart not found"}, status_code=404)
+
+    # Group items by app
+    by_app: dict[str, list] = {}
+    for it in cart["items"]:
+        by_app.setdefault(it["app"], []).append(it)
+
+    results: dict = {}
+    for app_name, items in by_app.items():
+        result = await _add_items_to_store(user_id, app_name, items)
+        results[app_name] = result
+
+    return {"results": results, "cart": cart["name"]}
 
 
 # ── Log viewer ───────────────────────────────────────────────────────────────
