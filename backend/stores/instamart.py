@@ -117,7 +117,17 @@ def _get_instamart_session(user_id: str) -> dict:
     device_cookie = raw_cookies.get("deviceId", "")
     device_id = _raw_device_id(device_cookie)
 
-    store_id = _hunt_store_id(local_storage, raw_cookies)
+    # Priority 1: relay-captured storeId persisted as _s2o_store_id in the
+    # saved cookies dict (set by auth_browser during/after the relay). This is
+    # the most reliable source because Swiggy holds the active storeId in
+    # in-memory state and sends it on API request headers, which the relay
+    # interceptor sniffs — it is NOT reliably stored in cookies or localStorage.
+    store_id = (unquote(raw_cookies.get("_s2o_store_id", "") or "")).strip()
+
+    # Priority 2: deep scan of local_storage and cookie blobs for known key names.
+    # Used when the relay didn't capture headers (e.g. session was very short).
+    if not store_id:
+        store_id = _hunt_store_id(local_storage, raw_cookies)
 
     return {
         "cookies": raw_cookies,

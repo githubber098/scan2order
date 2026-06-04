@@ -1018,17 +1018,31 @@ async def browser_auth_check(session_id: str):
                       "request during the relay — search may return empty. The "
                       "user may have closed before the store feed loaded.")
         elif s.store == "instamart":
-            # Instamart's resolved storeId settles in sessionStorage ~1-3 s after
-            # the address is set; a short grace + re-snapshot captures it.
-            await asyncio.sleep(3.0)
+            # Instamart: same capture approach as Zepto. The storeId is held
+            # in-memory by Swiggy and appears on request headers/URL params/
+            # response bodies — NOT in cookies or localStorage. The interceptor
+            # in auth_browser.start() records it in page._instamart_captured.
+            # Give the post-address home-feed re-fetch time to fire, then poll.
+            await asyncio.sleep(2.0)
+            cap = s.captured_store()
+            for _ in range(12):              # +up to ~6 s
+                if cap.get("store_id"):
+                    break
+                await asyncio.sleep(0.5)
+                cap = s.captured_store()
             try:
                 fresh = await s.get_current_cookies()
                 if fresh:
                     cookies = {**cookies, **fresh}
-                    print(f"[browser-auth] instamart: re-snapshotted cookies after "
-                          f"3s grace period ({len(fresh)} cookies in fresh snapshot)")
             except Exception as exc:
                 print(f"[browser-auth] instamart: re-snapshot failed: {exc}")
+            if cap.get("store_id"):
+                cookies["_s2o_store_id"] = cap["store_id"]
+                print(f"[browser-auth] instamart: persisted captured store_id "
+                      f"{cap['store_id']!r}")
+            else:
+                print("[browser-auth] instamart: WARNING no store_id captured — "
+                      "will fall back to sessionStorage/localStorage scan")
 
         # Snapshot localStorage AND sessionStorage — Zepto keeps delivery coords
         # in localStorage; Instamart stores the resolved storeId in sessionStorage
@@ -1104,6 +1118,16 @@ async def browser_auth_force(session_id: str):
         else:
             print("[browser-auth] zepto (force): no store_id captured yet — "
                   "search may be empty until reconnected with the store loaded.")
+    # Instamart: same header-capture approach as Zepto
+    if s.store == "instamart":
+        cap = s.captured_store()
+        if cap.get("store_id"):
+            kv["_s2o_store_id"] = cap["store_id"]
+            print(f"[browser-auth] instamart (force): persisted captured store_id "
+                  f"{cap['store_id']!r}")
+        else:
+            print("[browser-auth] instamart (force): no store_id captured yet — "
+                  "sessionStorage fallback will be attempted")
     local_storage = await s.get_local_storage()
     try:
         ss = await s.get_session_storage()

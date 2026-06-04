@@ -570,11 +570,18 @@ class _Session:
             return {}
 
     def captured_store(self) -> dict:
-        """Return the Zepto store_id/store_ids/store_etas sniffed from live API
-        request headers during this relay session (see the zepto request
-        interceptor in start()). Empty dict until a Zepto XHR with a store_id
-        header has fired. Used to persist the storeId that Zepto never writes to
-        cookies/localStorage."""
+        """Return store-specific data sniffed from live API requests/responses.
+
+        Zepto: store_id / store_ids / store_etas captured from request headers.
+        Instamart: store_id captured from request headers, URL query-params, and
+                   API response bodies.
+        Both use the same pattern: values are stored on the page object and
+        persisted to the saved cookies as _s2o_store_id (and _s2o_store_ids /
+        _s2o_store_etas for Zepto) so the store module can find them without
+        the relay being open.
+        """
+        if self.store == "instamart":
+            return dict(getattr(self._page, "_instamart_captured", {}) or {})
         return dict(getattr(self._page, "_zepto_captured", {}) or {})
 
     async def get_session_storage(self) -> dict:
@@ -729,6 +736,71 @@ async def start(user_id: str, store: str,
     # After the user confirms a delivery address, Zepto re-fetches the home feed,
     # whose XHR carries these headers, so we grab them then. Mirrors Blinkit's
     # merchant_id capture; persisted as _s2o_store_id on relay close.
+    # For Instamart: intercept API requests to capture the resolved storeId.
+    # Like Zepto, Swiggy holds the storeId in in-memory state and sends it on
+    # request HEADERS (x-store-id or similar Swiggy header names), not in
+    # cookies or localStorage. We sniff it from live API XHRs exactly as we do
+    # for Zepto. The storeId is persisted to _s2o_store_id in the saved cookies
+    # so _hunt_store_id() / _get_instamart_session() can find it without needing
+    # the relay to be open.
+    if store == "instamart":
+        import re as _re_im
+        # Swiggy storeId is a positive integer (not a UUID like Zepto)
+        _SWIGGY_STORE_RE = _re_im.compile(r"^\d{4,}$")
+        _instamart_captured: dict = {}
+
+        def _capture_instamart_request(request):
+            try:
+                url = request.url
+                if "swiggy.com" not in url:
+                    return
+                h = request.headers  # lower-cased by Playwright
+                # Known Swiggy header names for the active store
+                for hname in ("x-store-id", "storeid", "store_id", "store-id",
+                               "primarystoreid", "primary-store-id"):
+                    val = (h.get(hname) or "").strip()
+                    if val and _SWIGGY_STORE_RE.match(val):
+                        if _instamart_captured.get("store_id") != val:
+                            print(f"[browser] instamart: captured store_id={val!r} "
+                                  f"from header {hname!r} on {url.split('?')[0]}")
+                        _instamart_captured["store_id"] = val
+                        break
+                # Also check query-param storeId (some Swiggy endpoints use ?storeId=)
+                if not _instamart_captured.get("store_id") and "storeId=" in url:
+                    m = _re_im.search(r"[?&]storeId=(\d{4,})", url)
+                    if m:
+                        val = m.group(1)
+                        if _instamart_captured.get("store_id") != val:
+                            print(f"[browser] instamart: captured store_id={val!r} "
+                                  f"from URL query-param on {url.split('?')[0]}")
+                        _instamart_captured["store_id"] = val
+            except Exception:
+                pass
+
+        # Also sniff from API responses (some Swiggy endpoints return storeId in body)
+        async def _capture_instamart_response(response):
+            try:
+                url = response.url
+                if "swiggy.com" not in url or "instamart" not in url:
+                    return
+                ct = response.headers.get("content-type", "")
+                if "json" not in ct:
+                    return
+                body_str = str(await response.text())[:2000]
+                m = _re_im.search(r'"(?:storeId|store_id|primaryStoreId)"\s*:\s*"?(\d{4,})"?', body_str)
+                if m:
+                    val = m.group(1)
+                    if _instamart_captured.get("store_id") != val:
+                        print(f"[browser] instamart: captured store_id={val!r} "
+                              f"from response body on {url.split('?')[0]}")
+                    _instamart_captured["store_id"] = val
+            except Exception:
+                pass
+
+        page.on("request", _capture_instamart_request)
+        page.on("response", _capture_instamart_response)
+        page._instamart_captured = _instamart_captured  # type: ignore[attr-defined]
+
     if store == "zepto":
         import re as _re_z
         _ZID_RE = _re_z.compile(

@@ -355,16 +355,37 @@ async def _search_playwright(
             user_agent=_MOBILE_UA,
             is_mobile=True, has_touch=True,
             locale="en-IN", timezone_id="Asia/Kolkata",
+            extra_http_headers={
+                "Sec-CH-UA": '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"',
+                "Sec-CH-UA-Mobile": "?1",
+                "Sec-CH-UA-Platform": '"Android"',
+            },
         )
+        # Use dot-prefix domain (.blinkit.com) so cookies apply to all
+        # subdomains, matching how a real browser sets them. Without the dot
+        # the cookies only apply to the bare "blinkit.com" host and are NOT
+        # sent to API subdomains like api.blinkit.com or cdn.blinkit.com.
+        # Skip CF cookies (__cf_bm / _cfuvid) — they're device-tied and short-lived;
+        # Playwright gets new ones on first request automatically.
+        # Skip api_auth_key — it's a local cache value, not a real browser cookie.
         pw_cookies = [
-            {"name": k, "value": v, "domain": "blinkit.com", "path": "/",
+            {"name": k, "value": v, "domain": ".blinkit.com", "path": "/",
              "httpOnly": False, "secure": True, "sameSite": "Lax"}
             for k, v in cookies.items()
-            if k not in ("__cf_bm", "_cfuvid", "api_auth_key")
+            if k not in ("__cf_bm", "_cfuvid", "api_auth_key", "api_auth_key_ts")
         ]
         await ctx.add_cookies(pw_cookies)
 
         page = await ctx.new_page()
+
+        # Apply same stealth patches as the login relay — Blinkit's WAF checks
+        # the same signals during search as during login.
+        try:
+            from playwright_stealth import stealth_async
+            await stealth_async(page)
+        except ImportError:
+            pass
+        await page.add_init_script(_ab._STEALTH_SCRIPT)
 
         async def on_response(resp):
             try:
@@ -377,12 +398,18 @@ async def _search_playwright(
                 body = await resp.json()
                 if "/v2/accounts/auth_key/" in u and body.get("auth_key"):
                     captured["auth_key"] = body["auth_key"]
+                    print(f"[blinkit] Playwright captured auth_key "
+                          f"prefix={body['auth_key'][:12]!r}")
+                # Accept is_success=True OR is_success missing (older API shape)
                 if ("/v1/layout/search" in u and resp.status == 200
-                        and body.get("is_success") and not captured["products"]):
+                        and body.get("is_success") is not False
+                        and not captured["products"]):
                     try:
-                        captured["products"] = _parse_layout_search_response(body)
-                        print(f"[blinkit] Playwright captured "
-                              f"{len(captured['products'])} products from response")
+                        parsed = _parse_layout_search_response(body)
+                        if parsed:
+                            captured["products"] = parsed
+                            print(f"[blinkit] Playwright intercepted layout/search: "
+                                  f"{len(parsed)} products")
                     except Exception as pe:
                         print(f"[blinkit] Playwright product parse error: {pe}")
             except Exception:
@@ -391,9 +418,10 @@ async def _search_playwright(
         page.on("response", on_response)
 
         await page.goto(f"{BASE_URL}/s/?q={quote(query)}",
-                        wait_until="domcontentloaded", timeout=25000)
+                        wait_until="domcontentloaded", timeout=30000)
 
-        for _ in range(30):
+        # Wait up to 8 s for the React app to fire the search API call
+        for _ in range(40):
             if captured["products"]:
                 break
             await page.wait_for_timeout(200)
@@ -401,13 +429,16 @@ async def _search_playwright(
         if captured["products"]:
             return captured["products"], captured["auth_key"]
 
+        # DOM scraping fallback — only if the response interceptor found nothing.
+        # Wait for product cards to actually render (up to 6 more seconds).
         try:
             await page.wait_for_selector(
-                'div[role="button"][tabindex="0"][id]', timeout=8000)
+                'div[role="button"][tabindex="0"][id]', timeout=6000)
         except Exception:
             pass
-        await page.wait_for_timeout(1500)
+        await page.wait_for_timeout(1000)
         products = await page.evaluate(_PW_SEARCH_SCRIPT)
+        print(f"[blinkit] Playwright DOM scrape fallback: {len(products)} products")
         return [p for p in products if p.get("product_id")], captured["auth_key"]
     finally:
         await browser.close()
