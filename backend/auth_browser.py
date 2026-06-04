@@ -105,10 +105,17 @@ _STORE_CONFIG = {
         # After login the user must save a delivery address so the pincode is
         # stored; without a pincode the BFF search API returns an empty listing.
         #
-        # NOTE: Akamai protects Flipkart's web app. We navigate to the Minutes
-        # PWA homepage so the sensor SDK runs (same approach as Blinkit/Zepto).
-        # BigBasket-style hard-block is NOT present on minutes.flipkart.com.
-        "url": "https://minutes.flipkart.com/",
+        # IMPORTANT: there is NO "minutes.flipkart.com" host (DNS: non-existent).
+        # Flipkart Minutes lives on the main www.flipkart.com domain under
+        # marketplace=HYPERLOCAL. We land on the homepage (not a deep link) so
+        # Akamai's sensor SDK runs before any login, same as Blinkit/Zepto.
+        #
+        # CAVEAT: www.flipkart.com is Akamai-protected (returns 403 to bare
+        # bots). Whether stealth-Playwright passes (like Blinkit/Zepto) or is
+        # hard-blocked (like BigBasket, which is mobile-only for this reason) can
+        # only be confirmed on the India-hosted server. If it hard-blocks,
+        # Flipkart Minutes will need the mobile-app WebView path like BigBasket.
+        "url": "https://www.flipkart.com/",
         "auth_cookie": "flid",
         # Flipkart Minutes saves the selected delivery address in localStorage
         # under various keys depending on the app build. We scan for any blob
@@ -744,11 +751,31 @@ async def start(user_id: str, store: str,
     # we hand the session back.  "domcontentloaded" is too early — the sensor
     # SDK fires on window.onload and later, so Akamai sees no telemetry and
     # immediately hard-blocks.  Timeout raised to 30 s for slow networks.
-    await page.goto(
-        _STORE_CONFIG[store]["url"],
-        wait_until="load",
-        timeout=30000,
-    )
+    #
+    # Wrap the navigation so a failure (DNS error, connection refused, nav
+    # timeout) does NOT bubble up as an HTTP 500 from /browser/start. Instead we
+    # tear down the just-launched browser and raise a clean ValueError, which
+    # the start endpoint turns into {"success": False, "error": ...} so the UI
+    # can show a real message. (A bad store URL used to leak a Chromium process
+    # and 500 the request.)
+    try:
+        await page.goto(
+            _STORE_CONFIG[store]["url"],
+            wait_until="load",
+            timeout=30000,
+        )
+    except Exception as exc:
+        print(f"[browser] {store}: navigation to "
+              f"{_STORE_CONFIG[store]['url']} failed: {exc}")
+        for obj in (context, browser):
+            try:
+                await obj.close()
+            except Exception:
+                pass
+        raise ValueError(
+            f"Could not open {store} login page ({type(exc).__name__}). "
+            f"Please try again."
+        )
 
     # Brief idle period: Akamai's sensor continues collecting interaction data
     # for ~2 s after load.  A small random mouse drift mimics real touch input.

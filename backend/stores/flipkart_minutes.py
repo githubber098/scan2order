@@ -3,7 +3,7 @@
 Auth model
 ──────────
 Flipkart Minutes shares the main Flipkart account system. After the user logs in
-via the Playwright browser relay (minutes.flipkart.com) and saves a delivery
+via the Playwright browser relay (www.flipkart.com) and saves a delivery
 address, the session is captured as cookies + localStorage.
 
 Key cookies
@@ -47,15 +47,19 @@ from stores._common import MOBILE_UA as _MOBILE_UA
 
 APP_NAME = "flipkart_minutes"
 DISPLAY_NAME = "Flipkart Minutes"
-BASE_URL = "https://minutes.flipkart.com"
+# NOTE: there is NO minutes.flipkart.com host (DNS: non-existent). Flipkart
+# Minutes lives on the main www.flipkart.com domain under marketplace=HYPERLOCAL.
+# 2.flipkart.com is ALSO non-existent — the web app's BFF is served from
+# www.flipkart.com itself (relative /api/… paths); the mobile BFF host is
+# 1.rome.api.flipkart.com. We use the web BFF since we capture a web session.
+BASE_URL = "https://www.flipkart.com"
 _FK_DOMAIN = "https://www.flipkart.com"
-_BFF_BASE = "https://2.flipkart.com"
 
-# Search: Flipkart BFF page-fetch for hyperlocal search results.
-# REPLACE this URL if the response interceptor logs a different endpoint.
-_FM_SEARCH_URL = (
-    _BFF_BASE + "/api/3/page/fetch"
-)
+# Search: Flipkart web BFF "page fetch" — the same endpoint the web search page
+# calls. POST with a pageUri body. The exact api version (/api/3 vs /api/4) and
+# body shape are best-guess; the relay interceptor logs the real call on the
+# first India run — look for "[fm-interceptor]" lines and update if different.
+_FM_SEARCH_URL = _FK_DOMAIN + "/api/4/page/fetch"
 _FM_SEARCH_MARKETPLACE = "HYPERLOCAL"
 
 # Cart endpoint (best-guess — update from interceptor logs if needed).
@@ -114,16 +118,36 @@ def _get_fm_session(user_id: str) -> dict:
 def _hunt_pincode(local_storage: dict, raw_cookies: dict) -> str:
     """Recursively search stored blobs for a delivery pincode (6 digits).
 
-    Flipkart stores the selected address in various localStorage keys depending
-    on the app version; we scan every JSON blob and return the first 6-digit
-    value associated with a pincode-related key.
+    Two passes, precise → fuzzy:
+
+    Pass 1 (precise): walk every stored JSON blob and return the first 6-digit
+        value held by a pincode-named key (pinCode/deliveryPincode/…). This is
+        unambiguous, so it runs first.
+
+    Pass 2 (fuzzy fallback): Flipkart often stores the address as a single
+        formatted string ("12 MG Road, Bangalore 560034") with no dedicated
+        pincode field. So we scan address-like blobs (those containing an
+        address marker word) for a standalone Indian PIN token — [1-8]\\d{5}
+        not glued to other digits. Guarded by the marker check so a random
+        6-digit number in an unrelated blob (order id, timestamp) can't be
+        mistaken for a pincode.
+
+    Returns the first hit, or "" if none. The relay's broader location_scan in
+    auth_browser.py decides when to CLOSE the session; this stricter probe only
+    drives the page-load health indicator, so over-strictness here is at worst a
+    spurious "no address" warning, never a wrong pincode sent to the API.
     """
     _PIN_KEYS = frozenset([
         "pinCode", "pin_code", "pincode", "pin", "deliveryPincode",
         "selectedPincode", "locationPincode",
     ])
+    # Indian PIN: 6 digits, first 1-8, not part of a longer number.
+    _PIN_TOKEN = re.compile(r"(?<!\d)[1-8]\d{5}(?!\d)")
+    # An address blob is one mentioning any of these (case-insensitive).
+    _ADDR_MARKERS = ("address", "pincode", "pin", "city", "locality",
+                     "landmark", "delivery", "addressline", "state")
 
-    def _search(obj) -> str:
+    def _search_keyed(obj) -> str:
         if isinstance(obj, dict):
             for k, v in obj.items():
                 if k in _PIN_KEYS and isinstance(v, (str, int)):
@@ -131,28 +155,44 @@ def _hunt_pincode(local_storage: dict, raw_cookies: dict) -> str:
                     if re.fullmatch(r"\d{6}", s):
                         return s
             for v in obj.values():
-                r = _search(v)
+                r = _search_keyed(v)
                 if r:
                     return r
         elif isinstance(obj, list):
             for item in obj:
-                r = _search(item)
+                r = _search_keyed(item)
                 if r:
                     return r
         return ""
 
+    decoded_blobs: list[tuple[str, str]] = []   # (key, decoded_value)
     for source in (local_storage, raw_cookies):
-        for val in (source or {}).values():
-            if not isinstance(val, str) or "{" not in val:
+        for key, val in (source or {}).items():
+            if not isinstance(val, str) or not val:
                 continue
             raw = unquote(val) if "%" in val else val
+            decoded_blobs.append((str(key), raw))
+            if "{" not in raw:
+                continue
             try:
                 parsed = json.loads(raw)
             except Exception:
                 continue
-            got = _search(parsed)
+            got = _search_keyed(parsed)
             if got:
                 return got
+
+    # Pass 2: fuzzy fallback over address-like blobs only. A blob qualifies if
+    # EITHER its storage key (e.g. "deliveryAddress") OR its value text mentions
+    # an address marker — so a raw address-string cookie with no marker words in
+    # the value is still recognised by its key.
+    for key, raw in decoded_blobs:
+        hay = (key + " " + raw).lower()
+        if not any(m in hay for m in _ADDR_MARKERS):
+            continue
+        m = _PIN_TOKEN.search(raw)
+        if m:
+            return m.group(0)
     return ""
 
 
@@ -312,13 +352,14 @@ def _parse_response(data) -> list[dict]:
 async def search_item_api(user_id: str, query: str) -> list[dict]:
     """Search Flipkart Minutes. Returns [] on any failure.
 
-    Makes a BFF page-fetch call to 2.flipkart.com with the hyperlocal
-    marketplace parameter. Logs the full top-level response structure on the
-    first run (when no products are found) so the correct endpoint/parser can
-    be confirmed and refined.
+    POSTs to Flipkart's web BFF page-fetch endpoint (www.flipkart.com/api/…)
+    with a pageUri pointing at the hyperlocal search page. Logs the full
+    top-level response structure on the first run (when no products are found)
+    so the correct endpoint/parser can be confirmed and refined.
 
-    NOTE: This endpoint is best-guess and geo-restricted to India.
-          Check server.log for "[fm]" lines after the first live run.
+    NOTE: endpoint path + body shape are best-guess and the API is geo-restricted
+          to India. Check server.log for "[fm]" / "[fm-interceptor]" lines after
+          the first live run and update _FM_SEARCH_URL / the body if needed.
     """
     sess = _get_fm_session(user_id)
     if not sess.get("flid"):
@@ -328,20 +369,17 @@ async def search_item_api(user_id: str, query: str) -> list[dict]:
     print(f"\n[fm] === SEARCH: '{query}' (pincode={sess.get('pincode') or 'MISSING'}) ===")
     t_start = time.time()
 
-    search_page_url = (
-        f"{_FK_DOMAIN}/search?q={quote(query, safe='')}"
+    page_uri = (
+        f"/search?q={quote(query, safe='')}"
         f"&marketplace={_FM_SEARCH_MARKETPLACE}"
-        f"&otracker=search&otracker1=search"
+        f"&otracker=search"
     )
-    params = {
-        "url": search_page_url,
-        "type": "fetch_seo_data",
-    }
+    body = {"pageUri": page_uri, "pageContext": {}}
     headers = _api_headers(sess)
 
     try:
         async with httpx.AsyncClient(timeout=12.0, follow_redirects=True) as client:
-            resp = await client.get(_FM_SEARCH_URL, params=params, headers=headers)
+            resp = await client.post(_FM_SEARCH_URL, json=body, headers=headers)
 
         elapsed_ms = int((time.time() - t_start) * 1000)
         print(f"[fm] search HTTP {resp.status_code} ({elapsed_ms}ms)")
@@ -462,4 +500,6 @@ async def add_to_cart_api(user_id: str, product_id: str, count: int = 1) -> dict
 
 
 def checkout_url() -> str:
-    return BASE_URL + "/cart"
+    # Flipkart's cart lives at /viewcart (not /cart); scope it to the hyperlocal
+    # (Minutes) marketplace so it opens the Minutes basket.
+    return BASE_URL + "/viewcart?marketplace=HYPERLOCAL"
