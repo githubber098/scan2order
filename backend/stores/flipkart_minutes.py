@@ -338,6 +338,23 @@ def _num_value(value) -> float:
     return 0.0
 
 
+def _resolve_image_url(url: str) -> str:
+    """Replace Flipkart image template variables with concrete pixel values.
+
+    Flipkart's BFF returns image URLs containing template placeholders that
+    their web app resolves before rendering, e.g.:
+        https://rukminim1.flixcart.com/image/{@width}/{@height}/xif0q/.../nandini.jpeg?q={@quality}
+    We substitute concrete values so the URL is usable directly in <img src>.
+    Using 200x200 px @ quality 70 — matches Flipkart's own thumbnail size.
+    """
+    if not url:
+        return url
+    url = url.replace("{@width}", "200")
+    url = url.replace("{@height}", "200")
+    url = url.replace("{@quality}", "70")
+    return url
+
+
 def _scan_for_cdn_url(obj, depth: int = 0) -> str:
     """Recursively scan for any rukminim*.flixcart.com image URL.
 
@@ -399,7 +416,7 @@ def _image_url(obj: dict, parent: dict | None = None) -> str:
 
     for item in _candidates_from(obj) + (_candidates_from(parent) if parent else []):
         if isinstance(item, str) and item.strip():
-            return item.strip()
+            return _resolve_image_url(item.strip())
         if isinstance(item, dict):
             # objectUrls elements: {"type": "IMAGE", "url": "https://rukminim2..."}
             got = _first_text(
@@ -407,13 +424,13 @@ def _image_url(obj: dict, parent: dict | None = None) -> str:
                 item.get("src"), item.get("value"), item.get("image"),
             )
             if got:
-                return got
+                return _resolve_image_url(got)
 
     # Fallback: scan both dicts for any rukminim CDN string
     for d in ([obj] + ([parent] if parent else [])):
         url = _scan_for_cdn_url(d)
         if url:
-            return url
+            return _resolve_image_url(url)
     return ""
 
 

@@ -168,12 +168,16 @@
   .browser-done-btn:active{ opacity:.8; }
   .browser-done-msg{ font-size:12px; color:var(--err); }
   #browser-loc-step{ min-height:calc(430px * 700 / 430); } /* match relay aspect */
+  /* confirm dialog: hide by default via CSS so the .open class can override it.
+     (inline style="display:none" has higher specificity than any CSS rule, so
+     the previous approach of only having .open{ display:flex } never worked.) */
+  #s2o-confirm-overlay{ display:none; }
   #s2o-confirm-overlay.open{ display:flex; }
 </style>
 
 
 <!-- ===== Custom confirm dialog (themed, replaces native confirm()) ===== -->
-<div id="s2o-confirm-overlay" style="display:none;position:fixed;inset:0;z-index:2000;background:rgba(0,0,0,.55);align-items:center;justify-content:center;padding:16px">
+<div id="s2o-confirm-overlay" style="position:fixed;inset:0;z-index:2000;background:rgba(0,0,0,.55);align-items:center;justify-content:center;padding:16px">
   <div class="card stack" style="max-width:320px;width:100%;padding:22px 20px;border-radius:16px;gap:10px">
     <div id="s2o-confirm-title" style="font-weight:800;font-size:16px;font-family:var(--font-head)"></div>
     <div id="s2o-confirm-sub" style="font-size:13px;color:var(--muted);line-height:1.45"></div>
