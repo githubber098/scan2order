@@ -133,6 +133,7 @@
 
   const _STORE_LABEL = { bigbasket: "BigBasket", blinkit: "Blinkit", zepto: "Zepto", instamart: "Instamart", flipkart_minutes: "Flipkart Minutes" };
   let _browserSessionId = null;
+  let _currentStore = null;      // store name for the active relay session
   let _screenshotLoopActive = false;
   let _checkTimer = null;
   let _browserStartToken = 0;       // bumped on close/cancel to abort an in-flight start
@@ -287,12 +288,22 @@
         if (d.message) statusEl.textContent = d.message;
         else if (d.error) statusEl.textContent = "⚠ " + d.error;
       }
-      // Show the manual "Done" button once the user is past login phase
-      // (status message changes from "Waiting for login…" to the wait_hint).
-      if (!_doneBtnShown && d.message && !d.message.startsWith("Waiting")) {
+      // Show the manual "Done" button:
+      //  - For all stores: once phase-1 passes (message stops starting "Waiting").
+      //  - For Flipkart Minutes: immediately from the start, because the flid
+      //    cookie detection is unreliable (timing / name variation); the user must
+      //    be able to force-save after completing the OTP flow manually.
+      const _alwaysShowDone = _currentStore === "flipkart_minutes";
+      if (!_doneBtnShown && (_alwaysShowDone || (d.message && !d.message.startsWith("Waiting")))) {
         _doneBtnShown = true;
         const bar = document.getElementById("browser-done-bar");
+        const btn = document.getElementById("browser-done-btn");
         if (bar) bar.style.display = "flex";
+        // For FM: phase 1 may not have been detected yet, so label should reflect
+        // that the user needs to complete both login AND address steps.
+        if (_alwaysShowDone && btn && d.message && d.message.startsWith("Waiting")) {
+          btn.textContent = "✓ Done — I've logged in & set address";
+        }
       }
     } catch (_) { /* transient — keep polling */ }
   }
@@ -340,6 +351,7 @@
     _checkTimer = null; _typeFlushTimer = null; _typeBuffer = "";
     _browserSessionId = null;
     _doneBtnShown = false;
+    _currentStore = null;
     document.removeEventListener("keydown", _browserKeyHandler);
     const loading = document.getElementById("browser-loading");
     if (loading) loading.classList.remove("show");
@@ -367,6 +379,7 @@
   // PUBLIC: called by Connect/Reconnect buttons across the app.
   window.connectStore = async function (store, btn) {
     const label = _STORE_LABEL[store] || store;
+    _currentStore = store;          // track for Done-button & phase-1 logic
     if (_browserSessionId) await _closeBrowserSession(false);
 
     // Open the modal IMMEDIATELY with a loading state — launching Chromium +

@@ -480,7 +480,21 @@ class _Session:
         cookies = await self._context.cookies()
         kv = {c["name"]: c["value"] for c in cookies}
 
-        if not kv.get(auth_key):
+        # Case-insensitive auth cookie lookup — some stores (Flipkart) may use
+        # a capitalisation variant (FLID, fn_at) that differs from our config key.
+        auth_val = kv.get(auth_key) or next(
+            (v for k, v in kv.items() if k.lower() == auth_key.lower() and v), None
+        )
+        if not auth_val:
+            if self.store == "flipkart_minutes":
+                # Diagnostic: log all cookie names so we can identify the real
+                # auth cookie name after the first real login attempt.
+                names = [c["name"] for c in cookies]
+                print(
+                    f"[browser] flipkart_minutes: phase-1 waiting — {auth_key!r} "
+                    f"not found (case-insensitive). Cookie names present "
+                    f"({len(names)}): {names[:40]}"
+                )
             return None                     # phase 1: not logged in yet
 
         if not await self._location_ready(kv):
@@ -510,7 +524,11 @@ class _Session:
         cookies = await self._context.cookies()
         kv = {c["name"]: c["value"] for c in cookies}
 
-        if not kv.get(auth_key):
+        # Case-insensitive auth cookie lookup (mirrors get_auth_cookies).
+        auth_val = kv.get(auth_key) or next(
+            (v for k, v in kv.items() if k.lower() == auth_key.lower() and v), None
+        )
+        if not auth_val:
             return "Waiting for login…"
 
         if not await self._location_ready(kv):

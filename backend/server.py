@@ -44,7 +44,7 @@ from storage import user_store
 from stores import bigbasket, blinkit, zepto, instamart, flipkart_minutes
 
 BASE_DIR = Path(__file__).parent
-APP_VERSION = "1.7.2"
+APP_VERSION = "1.7.3"
 _TEMPLATES_DIR = BASE_DIR / "templates"
 _STATIC_DIR    = BASE_DIR / "static"
 _404_HTML      = BASE_DIR / "templates" / "404.html"
@@ -1073,7 +1073,29 @@ async def browser_auth_force(session_id: str):
     auth_key = cfg.get("auth_cookie", "")
     raw = await s._context.cookies()
     kv = {c["name"]: c["value"] for c in raw}
-    if not kv.get(auth_key):
+    # Case-insensitive auth cookie check — some stores (Flipkart) may use a
+    # capitalisation variant (e.g. FLID) that differs from our config key.
+    auth_val = kv.get(auth_key) or next(
+        (v for k, v in kv.items() if k.lower() == auth_key.lower() and v), None
+    )
+    # Flipkart Minutes fallback: accept fn_at / FNFD / fk_auth_token as
+    # alternative auth signals if flid is absent. These cookies are only
+    # present on authenticated Flipkart sessions.
+    if not auth_val and s.store == "flipkart_minutes":
+        _fm_fallbacks = ("fn_at", "FNFD", "fk_auth_token", "fn_uid")
+        for _fb in _fm_fallbacks:
+            auth_val = kv.get(_fb) or next(
+                (v for k, v in kv.items() if k.lower() == _fb.lower() and v), None
+            )
+            if auth_val:
+                print(f"[browser-auth] flipkart_minutes (force): flid absent, "
+                      f"accepted fallback cookie {_fb!r}")
+                break
+    if not auth_val:
+        all_names = [c["name"] for c in raw]
+        if s.store == "flipkart_minutes":
+            print(f"[browser-auth] flipkart_minutes (force): no auth cookie found. "
+                  f"All cookie names: {all_names[:30]}")
         return {"success": False, "error": "Not logged in yet — please log in first"}
     # Zepto: persist the store_id sniffed from live API request headers (it is
     # never in cookies/localStorage). Mirrors the auto-close path in /check.
