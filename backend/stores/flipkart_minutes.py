@@ -20,15 +20,17 @@ Location
 
 Search API
   NOTE: Flipkart's internal BFF API is geo-restricted (India only) and
-  undocumented. The endpoint below is derived from known Flipkart patterns
-  (marketplace=HYPERLOCAL on 2.flipkart.com). On the first live deployment the
+  undocumented. Flipkart Minutes is served from the main www.flipkart.com
+  domain under marketplace=HYPERLOCAL (there is NO minutes.flipkart.com host,
+  and 2.flipkart.com does not exist either — both fail DNS). The web app's BFF
+  is served from www.flipkart.com itself. On the first live deployment the
   response interceptor in auth_browser.py logs all JSON API calls made during
-  the relay session; look for "[fm]" lines in server.log and update
-  _FM_SEARCH_URL if the endpoint differs.
+  the relay session; look for "[fm-interceptor]" / "[fm]" lines in server.log
+  and update _FM_SEARCH_URL or the request body if they differ.
 
   Current best-guess:
-    GET https://2.flipkart.com/api/3/page/fetch
-        ?url=https://www.flipkart.com/search?q={query}&marketplace=HYPERLOCAL
+    POST https://www.flipkart.com/api/4/page/fetch
+         {"pageUri": "/search?q={query}&marketplace=HYPERLOCAL", "pageContext": {}}
 
 Cart API
   Best-guess based on Flipkart web cart patterns; will be refined from logs.

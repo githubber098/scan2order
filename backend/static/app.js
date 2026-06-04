@@ -131,7 +131,7 @@
      own caret shows in the stream.
      =================================================================== */
 
-  const _STORE_LABEL = { bigbasket: "BigBasket", blinkit: "Blinkit", zepto: "Zepto", instamart: "Instamart" };
+  const _STORE_LABEL = { bigbasket: "BigBasket", blinkit: "Blinkit", zepto: "Zepto", instamart: "Instamart", flipkart_minutes: "Flipkart Minutes" };
   let _browserSessionId = null;
   let _screenshotLoopActive = false;
   let _checkTimer = null;
