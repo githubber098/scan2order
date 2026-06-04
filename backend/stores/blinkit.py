@@ -853,6 +853,69 @@ async def add_to_cart_api(user_id: str, product_id: str, count: int = 1) -> dict
     return {"success": False, "reason": r.get("reason", "unknown")}
 
 
+async def clear_cart_api(user_id: str) -> dict:
+    """Clear the Blinkit cart by posting an empty items list to /v5/carts.
+
+    /v5/carts is a replace-all endpoint: sending {"items": []} replaces the
+    entire cart with nothing.  add_all_to_cart_api() short-circuits on an empty
+    list before sending any request, so this dedicated function is needed for
+    the clear-cart flow.
+    Returns {"success": bool, "reason": str}.
+    """
+    cookies = get_store_cookies(user_id, APP_NAME)
+    _CF_COOKIES = {"__cf_bm", "_cfuvid"}
+    httpx_cookies = {k: unquote(v) if isinstance(v, str) else v
+                     for k, v in cookies.items() if k not in _CF_COOKIES}
+    access_token = httpx_cookies.get("gr_1_accessToken", "")
+    if not access_token:
+        return {"success": False, "reason": "not logged in (no gr_1_accessToken)"}
+
+    lat = cookies.get("gr_1_lat") or cookies.get("lat") or cookies.get("dlat") or ""
+    lng = cookies.get("gr_1_lon") or cookies.get("lng") or cookies.get("dlng") or ""
+    device_id = (cookies.get("gr_1_deviceId") or cookies.get("device_id")
+                 or cookies.get("deviceId") or "")
+    api_auth_key = cookies.get("api_auth_key") or access_token
+
+    headers = {
+        **_API_HEADERS_BASE,
+        "app_client": "consumer_web",
+        "access_token": access_token,
+        "auth_key": api_auth_key,
+        "platform": "mobile_web",
+        "qd_sdk_request": "true",
+        "x-age-consent-granted": "false",
+        "app_version": "52434333",
+        "rn_bundle_version": "1009003012",
+        "web_app_version": "1008010016",
+        "session_uuid": str(uuid.uuid4()),
+        "Origin": BASE_URL,
+        "Referer": f"{BASE_URL}/cart",
+    }
+    if lat:
+        headers["lat"] = str(lat)
+    if lng:
+        headers["lon"] = str(lng)
+    if device_id:
+        headers["device_id"] = str(device_id)
+
+    print(f"\n[blinkit] === CLEAR CART (POST /v5/carts empty) ===")
+    try:
+        async with httpx.AsyncClient(timeout=12.0) as client:
+            resp = await client.post(
+                f"{BASE_URL}/v5/carts",
+                json={"items": [], "promo_codes": [""]},
+                headers=headers, cookies=httpx_cookies,
+            )
+        if resp.status_code == 200:
+            print(f"[blinkit] clear cart OK")
+            return {"success": True, "reason": ""}
+        print(f"[blinkit] clear cart HTTP {resp.status_code}: {resp.text[:120]!r}")
+        return {"success": False, "reason": f"HTTP {resp.status_code}"}
+    except Exception as e:
+        print(f"[blinkit] clear cart exception: {e}")
+        return {"success": False, "reason": str(e)}
+
+
 def checkout_url() -> str:
     return f"{BASE_URL}/cart"
 

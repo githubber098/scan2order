@@ -1987,19 +1987,20 @@ async def api_cart_clear_all(request: Request):
 
     results: dict = {}
 
-    # Blinkit: replace cart with empty list
+    # Blinkit: POST /v5/carts with empty items list — replace-all clears the cart.
+    # Must use clear_cart_api(); add_all_to_cart_api short-circuits on empty list.
     if blinkit.is_session_valid(user_id):
         try:
-            res = await blinkit.add_all_to_cart_api(user_id, [])
+            res = await blinkit.clear_cart_api(user_id)
             results["blinkit"] = {"cleared": res.get("success", False),
                                   "reason": res.get("reason", "")}
         except Exception as e:
             results["blinkit"] = {"cleared": False, "reason": str(e)}
 
-    # Zepto/Instamart/BigBasket: no reliable server-side clear API —
-    # we mark them as cleared so the frontend can remove local copies.
+    # Zepto/Instamart/BigBasket/FM: no batch-clear API documented.
+    # Local localStorage copy is cleared by the frontend; mark cleared=True.
     for store_name, mod in [("zepto", zepto), ("instamart", instamart),
-                             ("bigbasket", bigbasket)]:
+                             ("bigbasket", bigbasket), ("flipkart_minutes", flipkart_minutes)]:
         if mod.is_session_valid(user_id):
             results[store_name] = {"cleared": True, "note": "local only"}
 
