@@ -73,7 +73,7 @@
 <section class="card tight stack" style="gap:0" id="store-section">
   <!-- Zepto -->
   <div class="srow" data-store="zepto" style="padding:11px 2px">
-    <img class="slogo" src="/static/icons/zepto.webp" alt="Zepto">
+    <img class="slogo" src="/static/icons/zepto.webp?v={{ asset_v }}" alt="Zepto">
     <div style="flex:1"><div class="sname">Zepto</div><div class="smeta">{{ 'Connected' if stores.zepto else 'Not connected' }}</div></div>
     <div class="row" style="gap:6px">
       {% if stores.zepto %}<span class="pill-tag ok"><i data-ico="check" data-s="13" data-w="3"></i>Connected</span>{% endif %}
@@ -85,7 +85,7 @@
   <div class="hr"></div>
   <!-- Blinkit -->
   <div class="srow" data-store="blinkit" style="padding:11px 2px">
-    <img class="slogo" src="/static/icons/blinkit.svg" alt="Blinkit">
+    <img class="slogo" src="/static/icons/blinkit.svg?v={{ asset_v }}" alt="Blinkit">
     <div style="flex:1"><div class="sname">Blinkit</div><div class="smeta">{{ 'Connected' if stores.blinkit else 'Not connected' }}</div></div>
     <div class="row" style="gap:6px">
       {% if stores.blinkit %}<span class="pill-tag ok"><i data-ico="check" data-s="13" data-w="3"></i>Connected</span>{% endif %}
@@ -97,7 +97,7 @@
   <div class="hr"></div>
   <!-- Instamart -->
   <div class="srow" data-store="instamart" style="padding:11px 2px">
-    <img class="slogo" src="/static/icons/swiggy.png" alt="Instamart">
+    <img class="slogo" src="/static/icons/swiggy.png?v={{ asset_v }}" alt="Instamart">
     <div style="flex:1"><div class="sname">Instamart</div><div class="smeta">{{ 'Connected' if stores.instamart else 'Not connected' }}</div></div>
     <div class="row" style="gap:6px">
       {% if stores.instamart %}<span class="pill-tag ok"><i data-ico="check" data-s="13" data-w="3"></i>Connected</span>{% endif %}
@@ -110,7 +110,7 @@
   <div class="hr"></div>
   <!-- Flipkart Minutes -->
   <div class="srow" data-store="flipkart_minutes" style="padding:11px 2px">
-    <img class="slogo" src="/static/icons/flipkart.png" alt="Flipkart Minutes">
+    <img class="slogo" src="/static/icons/flipkart.png?v={{ asset_v }}" alt="Flipkart Minutes">
     <div style="flex:1"><div class="sname">Flipkart Minutes</div><div class="smeta">{{ 'Connected' if stores.flipkart_minutes else 'Not connected' }}</div></div>
     <div class="row" style="gap:6px">
       {% if stores.flipkart_minutes %}<span class="pill-tag ok"><i data-ico="check" data-s="13" data-w="3"></i>Connected</span>{% endif %}
@@ -122,7 +122,7 @@
   <div class="hr"></div>
   <!-- BigBasket (mobile only) -->
   <div class="srow" style="padding:11px 2px">
-    <img class="slogo" src="/static/icons/bigbasket.webp" alt="BigBasket">
+    <img class="slogo" src="/static/icons/bigbasket.webp?v={{ asset_v }}" alt="BigBasket">
     <div style="flex:1"><div class="sname">BigBasket</div><div class="smeta">Mobile app only</div></div>
     <span class="pill-tag"><i data-ico="phone" data-s="12"></i>Mobile</span>
   </div>

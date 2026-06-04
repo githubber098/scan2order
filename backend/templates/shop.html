@@ -119,11 +119,11 @@ const POPULAR = [
 ];
 const _SN  = { bigbasket:"BigBasket", blinkit:"Blinkit", zepto:"Zepto", instamart:"Instamart", flipkart_minutes:"Flipkart" };
 const _SFAV = {
-  bigbasket:        '/static/icons/bigbasket.webp',
-  blinkit:          '/static/icons/blinkit.svg',
-  zepto:            '/static/icons/zepto.webp',
-  instamart:        '/static/icons/swiggy.png',
-  flipkart_minutes: '/static/icons/flipkart.png',
+  bigbasket:        '/static/icons/bigbasket.webp?v={{ asset_v }}',
+  blinkit:          '/static/icons/blinkit.svg?v={{ asset_v }}',
+  zepto:            '/static/icons/zepto.webp?v={{ asset_v }}',
+  instamart:        '/static/icons/swiggy.png?v={{ asset_v }}',
+  flipkart_minutes: '/static/icons/flipkart.png?v={{ asset_v }}',
 };
 let _shopBusy = false;
 let _debounceTimer = null;
