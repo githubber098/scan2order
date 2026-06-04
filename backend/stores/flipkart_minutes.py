@@ -199,25 +199,27 @@ def _hunt_pincode(local_storage: dict, raw_cookies: dict) -> str:
 
 
 def is_session_valid(user_id: str) -> bool:
-    """True when a Flipkart session has been saved.
+    """True when a Flipkart session has been explicitly connected.
 
     Primary signal: flid cookie (Flipkart user identity, definitive).
-    Fallback: any saved cookies at all — this covers the case where Flipkart
-    uses a different auth cookie name than 'flid' (or stores auth in
-    localStorage). The real cookie name will be confirmed from server.log
-    after the first successful connect, then added to the explicit check.
+    Fallback: the session has a 'T' cookie (Flipkart session JWT) with a
+    value longer than 20 chars — short/absent T = guest/no-auth; long T = a
+    real browser session was captured. This prevents Akamai-only cookie sets
+    (captured during a nav timeout) from being treated as valid sessions.
     """
     sess = _get_fm_session(user_id)
     if sess.get("flid"):
         return True
-    # Non-empty cookies = session was explicitly saved by the user
-    return bool(sess.get("cookies"))
+    # T cookie present with a JWT-length value → real session was captured.
+    # (Guest sessions may also have T, but the value is typically very short.)
+    t_val = sess.get("t_token", "")
+    return bool(t_val and len(t_val) > 20)
 
 
 def session_health(user_id: str) -> dict:
     """Static health probe (no network call) for page-load status indicator."""
     sess = _get_fm_session(user_id)
-    has_auth = bool(sess.get("flid") or sess.get("cookies"))
+    has_auth = is_session_valid(user_id)  # reuse the same logic
     if not has_auth:
         return {"ok": False, "reason": "Session expired — reconnect Flipkart Minutes."}
     if not sess.get("pincode"):
@@ -375,8 +377,8 @@ async def search_item_api(user_id: str, query: str) -> list[dict]:
           the first live run and update _FM_SEARCH_URL / the body if needed.
     """
     sess = _get_fm_session(user_id)
-    if not sess.get("flid") and not sess.get("cookies"):
-        print(f"[fm] search: no session for {user_id[:8]}")
+    if not is_session_valid(user_id):
+        print(f"[fm] search: no valid session for {user_id[:8]}")
         return []
 
     print(f"\n[fm] === SEARCH: '{query}' (pincode={sess.get('pincode') or 'MISSING'}) ===")
@@ -391,7 +393,10 @@ async def search_item_api(user_id: str, query: str) -> list[dict]:
     headers = _api_headers(sess)
 
     try:
-        async with httpx.AsyncClient(timeout=12.0, follow_redirects=True) as client:
+        # 5 s timeout: HYPERLOCAL BFF is fast when it works; if the endpoint or
+        # auth is wrong it returns quickly too. Keeping this short prevents FM
+        # from blocking the asyncio.gather that also runs Blinkit/Zepto searches.
+        async with httpx.AsyncClient(timeout=5.0, follow_redirects=True) as client:
             resp = await client.post(_FM_SEARCH_URL, json=body, headers=headers)
 
         elapsed_ms = int((time.time() - t_start) * 1000)
@@ -448,8 +453,8 @@ async def add_all_to_cart_api(user_id: str, items: list[dict]) -> dict:
         return {"success": True, "items": []}
 
     sess = _get_fm_session(user_id)
-    if not sess.get("flid") and not sess.get("cookies"):
-        return {"success": False, "reason": "no session"}
+    if not is_session_valid(user_id):
+        return {"success": False, "reason": "no valid session"}
 
     print(f"\n[fm] === CART ADD: {len(items)} items ===")
     t_start = time.time()

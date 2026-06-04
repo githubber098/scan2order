@@ -107,8 +107,9 @@ class TestSessionHealth:
         assert cs["zepto"]["healthy"] is False
         # Instamart (no store_id) → unhealthy.
         assert cs["instamart"]["healthy"] is False
-        # Flipkart Minutes (flid present but no pincode in fm_cookies) → unhealthy.
-        assert cs["flipkart_minutes"]["healthy"] is False
+        # Flipkart Minutes: connected_user_all now stores FM with fm_ls_with_pincode
+        # (pincode 560034) so the session is fully healthy (flid + pincode both present).
+        assert cs["flipkart_minutes"]["healthy"] is True
 
 
 # ── Comparison history ────────────────────────────────────────────────────────

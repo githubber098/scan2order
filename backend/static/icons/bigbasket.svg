@@ -1,0 +1,7 @@
+<svg width="200" height="200" viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg">
+  <rect width="200" height="200" rx="42" fill="#84C225"/>
+  <text x="58" y="130" font-family="Arial Black, sans-serif" font-size="80" font-weight="900"
+        text-anchor="middle" fill="#E31E30">b</text>
+  <text x="142" y="130" font-family="Arial Black, sans-serif" font-size="80" font-weight="900"
+        text-anchor="middle" fill="#231F20">b</text>
+</svg>

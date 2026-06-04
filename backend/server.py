@@ -44,7 +44,7 @@ from storage import user_store
 from stores import bigbasket, blinkit, zepto, instamart, flipkart_minutes
 
 BASE_DIR = Path(__file__).parent
-APP_VERSION = "1.7.4"
+APP_VERSION = "1.7.5"
 _TEMPLATES_DIR = BASE_DIR / "templates"
 _STATIC_DIR    = BASE_DIR / "static"
 _404_HTML      = BASE_DIR / "templates" / "404.html"
@@ -256,7 +256,13 @@ def _new_progress() -> dict:
 # ── Store session helpers ────────────────────────────────────────────────────
 
 def _get_available_stores(user_id: str) -> list[str]:
-    """Return list of store names that have valid auth for this user."""
+    """Return list of store names that have valid auth for this user.
+
+    Flipkart Minutes is only included when a delivery pincode is also present.
+    HYPERLOCAL search returns nothing without a pincode, and the HTTP request
+    still takes up to 5 s to time out — blocking ALL store results via
+    asyncio.gather until it finishes. Skip it early to keep search fast.
+    """
     stores = []
     if bigbasket.is_session_valid(user_id):
         stores.append("bigbasket")
@@ -266,8 +272,11 @@ def _get_available_stores(user_id: str) -> list[str]:
         stores.append("zepto")
     if instamart.is_session_valid(user_id):
         stores.append("instamart")
+    # Only include FM when it is both session-valid AND has a pincode.
     if flipkart_minutes.is_session_valid(user_id):
-        stores.append("flipkart_minutes")
+        fm_h = flipkart_minutes.session_health(user_id)
+        if fm_h.get("ok"):
+            stores.append("flipkart_minutes")
     return stores
 
 

@@ -186,14 +186,20 @@ def fm_ls_with_pincode() -> dict:
 
 @pytest.fixture()
 def connected_user_all(clean_db, user_id, bb_cookies, bl_cookies, zepto_cookies,
-                       im_cookies, fm_cookies):
-    """User with all five stores connected."""
+                       im_cookies, fm_cookies, fm_ls_with_pincode):
+    """User with all five stores connected.
+
+    FM is connected with both cookies (flid) AND a pincode in local_storage so
+    that session_health() returns ok=True and _get_available_stores() includes
+    flipkart_minutes. Without a pincode the HYPERLOCAL search returns nothing
+    and _get_available_stores() skips FM to avoid blocking other results.
+    """
     from storage import user_store
     user_store.connect_store(user_id, "bigbasket", bb_cookies)
     user_store.connect_store(user_id, "blinkit", bl_cookies)
     user_store.connect_store(user_id, "zepto", zepto_cookies)
     user_store.connect_store(user_id, "instamart", im_cookies)
-    user_store.connect_store(user_id, "flipkart_minutes", fm_cookies)
+    user_store.connect_store(user_id, "flipkart_minutes", fm_cookies, fm_ls_with_pincode)
     return user_id
 
 

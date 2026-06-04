@@ -1,0 +1,6 @@
+<svg width="200" height="200" viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg">
+  <rect width="200" height="200" rx="42" fill="#FC8019"/>
+  <!-- Swiggy S logo path -->
+  <text x="100" y="148" font-family="Arial Black, sans-serif" font-size="130" font-weight="900"
+        text-anchor="middle" fill="#fff">S</text>
+</svg>
