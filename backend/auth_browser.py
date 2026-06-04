@@ -768,6 +768,16 @@ async def start(user_id: str, store: str,
                 if "swiggy.com" not in url:
                     return
                 h = request.headers  # lower-cased by Playwright
+                # Log ALL headers on instamart API calls so we can see exactly
+                # what Swiggy sends — helps identify the right header name.
+                if "instamart" in url or "/api/" in url:
+                    relevant = {k: v for k, v in h.items()
+                                if any(x in k for x in
+                                       ("store", "Store", "sid", "id", "location",
+                                        "lat", "lon", "geo", "city", "area"))}
+                    if relevant:
+                        print(f"[browser] instamart req headers on "
+                              f"{url.split('?')[0]}: {relevant}")
                 # Known Swiggy header names for the active store
                 for hname in ("x-store-id", "storeid", "store_id", "store-id",
                                "primarystoreid", "primary-store-id"):

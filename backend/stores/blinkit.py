@@ -350,6 +350,10 @@ async def _search_playwright(
               "--disable-blink-features=AutomationControlled"],
     )
     captured: dict = {"auth_key": "", "products": []}
+    print(f"[blinkit] _search_playwright: starting for query={query!r} "
+          f"cookie_count={len(cookies)} "
+          f"has_lat={'gr_1_lat' in cookies or 'lat' in cookies} "
+          f"has_token={'gr_1_accessToken' in cookies}")
     try:
         ctx = await browser.new_context(
             user_agent=_MOBILE_UA,
@@ -417,8 +421,12 @@ async def _search_playwright(
 
         page.on("response", on_response)
 
-        await page.goto(f"{BASE_URL}/s/?q={quote(query)}",
-                        wait_until="domcontentloaded", timeout=30000)
+        print(f"[blinkit] _search_playwright: injected {len(pw_cookies)} cookies "
+              f"with domain .blinkit.com; stealth applied")
+        goto_url = f"{BASE_URL}/s/?q={quote(query)}"
+        print(f"[blinkit] _search_playwright: navigating to {goto_url}")
+        await page.goto(goto_url, wait_until="domcontentloaded", timeout=30000)
+        print(f"[blinkit] _search_playwright: page loaded, title={await page.title()!r}")
 
         # Wait up to 8 s for the React app to fire the search API call
         for _ in range(40):
@@ -427,7 +435,20 @@ async def _search_playwright(
             await page.wait_for_timeout(200)
 
         if captured["products"]:
+            print(f"[blinkit] _search_playwright: response-interceptor SUCCESS "
+                  f"{len(captured['products'])} products")
             return captured["products"], captured["auth_key"]
+
+        # Log what happened — no products captured from response interception
+        page_url = page.url
+        print(f"[blinkit] _search_playwright: no products from response intercept "
+              f"(waited 8s). page_url={page_url!r}")
+        try:
+            page_text = await page.evaluate(
+                "() => document.body ? document.body.innerText.slice(0,200) : 'no body'")
+            print(f"[blinkit] _search_playwright: page body snippet: {page_text!r}")
+        except Exception as pe:
+            print(f"[blinkit] _search_playwright: page body read error: {pe}")
 
         # DOM scraping fallback — only if the response interceptor found nothing.
         # Wait for product cards to actually render (up to 6 more seconds).
@@ -438,7 +459,8 @@ async def _search_playwright(
             pass
         await page.wait_for_timeout(1000)
         products = await page.evaluate(_PW_SEARCH_SCRIPT)
-        print(f"[blinkit] Playwright DOM scrape fallback: {len(products)} products")
+        print(f"[blinkit] _search_playwright: DOM scrape fallback "
+              f"{len(products)} products")
         return [p for p in products if p.get("product_id")], captured["auth_key"]
     finally:
         await browser.close()
