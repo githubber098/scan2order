@@ -208,13 +208,9 @@ async function clearAllCarts(){
   if (!ok) return;
   const btn = document.getElementById("cart-clear-all");
   btn.disabled = true;
-  // First clear local cart (no second confirm — already asked once above)
-  const cart = window.s2o.shopCartGet();
-  for (const app of Object.keys(cart)){
-    for (const pid of Object.keys(cart[app]||{})){
-      window.s2o.shopCartSetQty({app, product_id: pid}, 0);
-    }
-  }
+  // Atomically replace the entire cart with an empty object — one write,
+  // no per-item iteration that could silently miss items with unusual IDs.
+  window.s2o.shopCartSet({});
   render();
   // Then call each store's clear-all API
   try {
