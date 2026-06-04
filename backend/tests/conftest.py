@@ -162,13 +162,38 @@ def im_cookies() -> dict:
 
 
 @pytest.fixture()
-def connected_user_all(clean_db, user_id, bb_cookies, bl_cookies, zepto_cookies, im_cookies):
-    """User with all four stores connected."""
+def fm_cookies() -> dict:
+    """Minimal valid Flipkart Minutes session (flid = user identity)."""
+    return {
+        "flid": "fake-flipkart-flid-longerthan20chars",
+        "T":    "fake-flipkart-T-session-token",
+        "SN":   "1",
+    }
+
+
+@pytest.fixture()
+def fm_ls_with_pincode() -> dict:
+    """localStorage blob that includes a 6-digit delivery pincode."""
+    import json
+    return {
+        "fkUserSelectedAddress": json.dumps({
+            "addressId": "addr-001",
+            "pinCode": "560034",
+            "city": "Bangalore",
+        })
+    }
+
+
+@pytest.fixture()
+def connected_user_all(clean_db, user_id, bb_cookies, bl_cookies, zepto_cookies,
+                       im_cookies, fm_cookies):
+    """User with all five stores connected."""
     from storage import user_store
     user_store.connect_store(user_id, "bigbasket", bb_cookies)
     user_store.connect_store(user_id, "blinkit", bl_cookies)
     user_store.connect_store(user_id, "zepto", zepto_cookies)
     user_store.connect_store(user_id, "instamart", im_cookies)
+    user_store.connect_store(user_id, "flipkart_minutes", fm_cookies)
     return user_id
 
 
@@ -230,7 +255,7 @@ def mock_stores(monkeypatch):
     Returns a namespace object whose attributes can be inspected in tests
     (e.g. mock_stores.bb_search.call_count).
     """
-    from stores import bigbasket, blinkit, zepto, instamart
+    from stores import bigbasket, blinkit, zepto, instamart, flipkart_minutes
 
     class _Mocks:
         pass
@@ -317,6 +342,34 @@ def mock_stores(monkeypatch):
     m.im_cart = AsyncMock(side_effect=_im_cart)
     monkeypatch.setattr(instamart, "search_item_api", m.im_search)
     monkeypatch.setattr(instamart, "add_all_to_cart_api", m.im_cart)
+
+    # --- Flipkart Minutes ---
+    FM_PRODUCTS = [
+        {
+            "product_id": "fm-001",
+            "name": "Amul Butter 100g",
+            "unit": "100g",
+            "sale_price": 57.0,
+            "price": 60.0,
+            "app": "flipkart_minutes",
+            "app_name": "Flipkart Minutes",
+        },
+    ]
+
+    async def _fm_search(user_id, query):
+        return [p for p in FM_PRODUCTS if "amul butter" in query.lower()]
+
+    async def _fm_cart(user_id, items):
+        return {
+            "success": True,
+            "items": [{"success": True, "count_added": i.get("count", 1)}
+                      for i in items],
+        }
+
+    m.fm_search = AsyncMock(side_effect=_fm_search)
+    m.fm_cart = AsyncMock(side_effect=_fm_cart)
+    monkeypatch.setattr(flipkart_minutes, "search_item_api", m.fm_search)
+    monkeypatch.setattr(flipkart_minutes, "add_all_to_cart_api", m.fm_cart)
 
     return m
 

@@ -9,7 +9,7 @@ since the test suite was last updated:
 """
 
 import auth
-from stores import bigbasket, blinkit, zepto, instamart
+from stores import bigbasket, blinkit, zepto, instamart, flipkart_minutes
 
 
 def _login(client, user_id):
@@ -65,13 +65,37 @@ class TestSessionHealth:
         assert h["ok"] is False
         assert "reconnect" in h["reason"].lower()
 
+    # ── Flipkart Minutes ──────────────────────────────────────────────────────
+
+    def test_flipkart_minutes_healthy_when_flid_and_pincode(
+            self, clean_db, user_id, fm_cookies, fm_ls_with_pincode):
+        from storage import user_store
+        user_store.connect_store(user_id, "flipkart_minutes",
+                                 fm_cookies, fm_ls_with_pincode)
+        h = flipkart_minutes.session_health(user_id)
+        assert h["ok"] is True
+        assert h["reason"] == ""
+
+    def test_flipkart_minutes_unhealthy_no_pincode(self, clean_db, user_id, fm_cookies):
+        # flid present but no delivery address/pincode
+        from storage import user_store
+        user_store.connect_store(user_id, "flipkart_minutes", fm_cookies)
+        h = flipkart_minutes.session_health(user_id)
+        assert h["ok"] is False
+        assert h["reason"]
+
+    def test_flipkart_minutes_unhealthy_not_connected(self, clean_db, user_id):
+        h = flipkart_minutes.session_health(user_id)
+        assert h["ok"] is False
+        assert "reconnect" in h["reason"].lower()
+
     # ── API endpoint ──────────────────────────────────────────────────────────
 
     def test_auth_status_exposes_healthy_and_reason(self, client, connected_user_all, user_id):
         data = client.get(f"/api/auth/status/{user_id}").json()
         cs = data["connected_stores"]
-        # All 4 connected stores carry the health fields.
-        for store in ("bigbasket", "blinkit", "zepto", "instamart"):
+        # All 5 connected stores carry the health fields.
+        for store in ("bigbasket", "blinkit", "zepto", "instamart", "flipkart_minutes"):
             assert "healthy" in cs[store], f"{store} missing 'healthy'"
             assert "reason" in cs[store], f"{store} missing 'reason'"
         # BigBasket (token present, no location required) → healthy.
@@ -83,6 +107,8 @@ class TestSessionHealth:
         assert cs["zepto"]["healthy"] is False
         # Instamart (no store_id) → unhealthy.
         assert cs["instamart"]["healthy"] is False
+        # Flipkart Minutes (flid present but no pincode in fm_cookies) → unhealthy.
+        assert cs["flipkart_minutes"]["healthy"] is False
 
 
 # ── Comparison history ────────────────────────────────────────────────────────

@@ -236,6 +236,7 @@ a{ color:inherit; text-decoration:none; }
 .slogo.zp{ background:linear-gradient(135deg,#a04ff0,#6b18c4); color:#fff; }
 .slogo.bb{ background:#fff; color:#d8232a; border:1px solid var(--card-br); }
 .slogo.im{ background:linear-gradient(135deg,#ff7eb3,#c92f74); color:#fff; }
+.slogo.fm{ background:linear-gradient(135deg,#2874f0,#0057d9); color:#fff; font-size:13px; }
 .sname{ font-weight:700; font-size:15px; font-family:var(--font-head); }
 .smeta{ font-size:12px; color:var(--muted); margin-top:1px; }
 

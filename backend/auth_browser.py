@@ -99,6 +99,35 @@ _STORE_CONFIG = {
             "The window closes automatically once an address is set."
         ),
     },
+    "flipkart_minutes": {
+        # Flipkart Minutes (hyperlocal quick-commerce). Shares the main Flipkart
+        # account system. Cookie auth: flid = Flipkart user identity (long-lived).
+        # After login the user must save a delivery address so the pincode is
+        # stored; without a pincode the BFF search API returns an empty listing.
+        #
+        # NOTE: Akamai protects Flipkart's web app. We navigate to the Minutes
+        # PWA homepage so the sensor SDK runs (same approach as Blinkit/Zepto).
+        # BigBasket-style hard-block is NOT present on minutes.flipkart.com.
+        "url": "https://minutes.flipkart.com/",
+        "auth_cookie": "flid",
+        # Flipkart Minutes saves the selected delivery address in localStorage
+        # under various keys depending on the app build. We scan for any blob
+        # containing a 6-digit pincode or lat/lng coordinates. The location_scan
+        # list is ordered from most-specific to most-general.
+        "location_scan": [
+            "pinCode", "pincode", "pin_code", "deliveryPincode",
+            "selectedPincode", "selectedAddress", "savedAddresses",
+            "userAddress", "deliveryAddress", "addressList",
+            "\"lat\"", "\"latitude\"", "\"longitude\"",
+            "fkUserSelectedAddress", "fkDeliveryAddress",
+            "savedAddress", "currentAddress",
+        ],
+        "wait_hint": (
+            "✅ Login detected!  Now tap the location bar at the top and "
+            "save/confirm your delivery address. The window will close "
+            "automatically once an address is set."
+        ),
+    },
 }
 
 _MOBILE_UA = (
@@ -627,6 +656,35 @@ async def start(user_id: str, store: str,
     context = await browser.new_context(**ctx_kwargs)
 
     page = await context.new_page()
+
+    # For Flipkart Minutes: intercept all JSON API responses so the actual
+    # search/cart endpoint URLs are visible in server.log on first deployment.
+    # Flipkart's BFF API is geo-restricted to India and undocumented; the
+    # interceptor captures any /api/ or /v1/ call made by the web app so the
+    # correct search endpoint can be confirmed.
+    if store == "flipkart_minutes":
+        async def _capture_fm_response(response):
+            try:
+                ct = response.headers.get("content-type", "")
+                if "json" not in ct:
+                    return
+                url = response.url
+                # Skip analytics/CDN noise — only log actual API calls
+                if not any(x in url for x in ("/api/", "/v1/", "/v2/", "/v3/",
+                                               "/bff/", "/cart/", "/search",
+                                               "/listing", "/page/fetch")):
+                    return
+                try:
+                    body = await response.json()
+                except Exception:
+                    return
+                snippet = json.dumps(body)[:300]
+                print(f"[fm-interceptor] {response.status}: {url.split('?')[0]}"
+                      f" → {snippet}")
+            except Exception:
+                pass
+
+        page.on("response", _capture_fm_response)
 
     # For Blinkit: intercept all JSON API responses to capture merchant_id.
     # Blinkit's web app automatically calls a store-discovery endpoint after

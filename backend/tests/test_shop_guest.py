@@ -69,8 +69,8 @@ class TestShopSearch:
         assert data["can_add"] is True
         assert data["is_guest"] is False
         prods = data["products"]
-        # 2 BB + 1 BL + 2 Z = 5 mocked "amul butter" products
-        assert len(prods) == 5
+        # 2 BB + 1 BL + 2 Z + 1 FM = 6 mocked "amul butter" products
+        assert len(prods) == 6
         # Sorted ascending by price-per-unit (cheapest per gram first).
         ppus = [p["price_per_unit"] for p in prods if p["price_per_unit"] is not None]
         assert ppus == sorted(ppus)
@@ -101,7 +101,7 @@ class TestShopSearch:
         data = r.json()
         assert data["is_guest"] is True
         assert data["can_add"] is False          # still cannot add to cart
-        assert len(data["products"]) == 5
+        assert len(data["products"]) == 6
 
 
 # ── Shop add (login-gated) ──────────────────────────────────────────────────────
