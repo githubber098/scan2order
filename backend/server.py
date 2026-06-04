@@ -21,6 +21,7 @@ Mobile auth is unchanged: user_id is sent in the request body.
 
 import asyncio
 import json
+import mimetypes
 import os
 import time
 import uuid
@@ -44,11 +45,12 @@ from storage import user_store
 from stores import bigbasket, blinkit, zepto, instamart, flipkart_minutes
 
 BASE_DIR = Path(__file__).parent
-APP_VERSION = "1.7.6"
+APP_VERSION = "1.7.7"
 _TEMPLATES_DIR = BASE_DIR / "templates"
 _STATIC_DIR    = BASE_DIR / "static"
 _404_HTML      = BASE_DIR / "templates" / "404.html"
 templates = Jinja2Templates(directory=str(_TEMPLATES_DIR))
+mimetypes.add_type("image/webp", ".webp")
 
 
 def _asset_version() -> str:
