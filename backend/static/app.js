@@ -575,13 +575,14 @@
       rec.lang = "en-IN";
       rec.interimResults = true;
       rec.continuous = false;
-      let finalText = "";
+      // Snapshot the textarea value at the moment recording starts so that
+      // interim results overwrite the draft line rather than appending each time.
+      const baseValue = input.value;
       rec.onstart = () => { listening = true; btn.classList.add("listening"); };
       rec.onend = () => { listening = false; btn.classList.remove("listening"); };
       rec.onerror = () => { listening = false; btn.classList.remove("listening"); };
       rec.onresult = (ev) => {
-        let interim = "";
-        finalText = "";
+        let interim = "", finalText = "";
         for (let i = 0; i < ev.results.length; i++) {
           const t = ev.results[i][0].transcript;
           if (ev.results[i].isFinal) finalText += t;
@@ -589,8 +590,9 @@
         }
         const text = (finalText || interim).trim();
         if (opts.onText) { opts.onText(text, !!finalText); return; }
-        if (opts.append && input.value.trim()) {
-          input.value = input.value.replace(/\s*$/, "") + "\n" + text;
+        // Replace from baseValue each time so interim updates don't stack up.
+        if (opts.append && baseValue.trim()) {
+          input.value = baseValue.replace(/\s*$/, "") + "\n" + text;
         } else {
           input.value = text;
         }
