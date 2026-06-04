@@ -30,6 +30,7 @@ from pathlib import Path
 
 from fastapi import FastAPI, Request, UploadFile, File, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from fastapi.staticfiles import StaticFiles
@@ -45,12 +46,31 @@ from storage import user_store
 from stores import bigbasket, blinkit, zepto, instamart, flipkart_minutes
 
 BASE_DIR = Path(__file__).parent
-APP_VERSION = "1.7.10"
+APP_VERSION = "1.7.11"
 _TEMPLATES_DIR = BASE_DIR / "templates"
 _STATIC_DIR    = BASE_DIR / "static"
 _404_HTML      = BASE_DIR / "templates" / "404.html"
 templates = Jinja2Templates(directory=str(_TEMPLATES_DIR))
 mimetypes.add_type("image/webp", ".webp")
+
+
+class _CachedStaticFiles(StaticFiles):
+    """StaticFiles that adds long-lived Cache-Control headers.
+
+    Assets whose URL carries a cache-busting token (?v=...) are safe to cache
+    forever — the token changes on every deploy that touches app.js or theme.css,
+    so browsers always fetch the new file.  Everything else (favicon, unversioned
+    requests) gets a one-hour cache so they benefit from caching without going stale.
+    """
+
+    async def get_response(self, path: str, scope) -> Response:
+        resp = await super().get_response(path, scope)
+        qs: bytes = scope.get("query_string", b"")
+        if b"v=" in qs:
+            resp.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+        else:
+            resp.headers["Cache-Control"] = "public, max-age=3600"
+        return resp
 
 
 def _asset_version() -> str:
@@ -229,9 +249,16 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Static files (theme.css, app.js)
+# GZip compression for all text responses ≥ 500 bytes.
+# HTML pages go from ~100 KB to ~18 KB; app.js from ~90 KB to ~22 KB;
+# theme.css from ~35 KB to ~8 KB; JSON API responses from ~5–50 KB to 1–10 KB.
+# minimum_size=500 avoids wasting CPU on tiny responses (health check, OTP ACK).
+app.add_middleware(GZipMiddleware, minimum_size=500)
+
+# Static files (theme.css, app.js, icons, …) — served with long-lived cache
+# headers so browsers skip the round-trip on every page load.
 if _STATIC_DIR.exists():
-    app.mount("/static", StaticFiles(directory=str(_STATIC_DIR)), name="static")
+    app.mount("/static", _CachedStaticFiles(directory=str(_STATIC_DIR)), name="static")
 
 
 @app.exception_handler(StarletteHTTPException)
