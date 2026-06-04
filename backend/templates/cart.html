@@ -105,11 +105,9 @@ const _SFAV = {
   flipkart_minutes: '/static/icons/flipkart.png?v={{ asset_v }}',
 };
 const _STORE_CART_URL = {
-  blinkit:          "https://blinkit.com/cart",
-  zepto:            "https://www.zeptonow.com/cart",
-  bigbasket:        "https://www.bigbasket.com/basket/",
-  instamart:        "https://www.swiggy.com/instamart/checkout",
-  flipkart_minutes: "https://www.flipkart.com/viewcart?marketplace=HYPERLOCAL",
+  blinkit:   "https://blinkit.com/cart",
+  zepto:     "https://www.zeptonow.com/cart",
+  bigbasket: "https://www.bigbasket.com/basket/",
 };
 function _esc(s){ const d=document.createElement("div"); d.textContent=s==null?"":s; return d.innerHTML; }
 function _price(p){ return p.sale_price || p.price || 0; }
@@ -202,31 +200,13 @@ async function changeQty(product, delta){
 async function clearAllCarts(){
   const ok = await window.s2o_confirm(
     "Clear cart?",
-    "Removes all items from your scan2order cart and sends a clear request to each connected store.",
+    "This removes all items from your scan2order cart.",
     "Clear"
   );
   if (!ok) return;
-  const btn = document.getElementById("cart-clear-all");
-  btn.disabled = true;
-  // Atomically replace the entire cart with an empty object — one write,
-  // no per-item iteration that could silently miss items with unusual IDs.
   window.s2o.shopCartSet({});
   render();
-  // Then call each store's clear-all API
-  try {
-    const r = await fetch("/api/cart/clear-all", {
-      method: "POST", headers: {"Content-Type":"application/json"},
-      body: JSON.stringify({ user_id: userId }),
-    });
-    const d = await r.json();
-    const lines = Object.entries(d.results||{}).map(([store, res]) =>
-      `${_SN[store]||store}: ${res.cleared ? "✓ cleared" : "✗ " + (res.reason||"failed")}`
-    );
-    if (lines.length) window.s2o.toast("Store carts: " + lines.join(" · "), "ok");
-  } catch(e) {
-    window.s2o.toast("Could not clear store carts: " + e.message, "err");
-  }
-  btn.disabled = false;
+  window.s2o.toast("Cart cleared", "ok");
 }
 
 document.addEventListener("DOMContentLoaded", () => { render(); loadNamedCarts(); });

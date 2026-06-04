@@ -731,15 +731,6 @@ function _rebuildCarts() {
   }
 }
 
-// ── Checkout URLs (open the store's cart/checkout page) ────────────────────
-const _CHECKOUT_URLS = {
-  blinkit:          'https://blinkit.com/cart',
-  zepto:            'https://www.zeptonow.com/cart',
-  bigbasket:        'https://www.bigbasket.com/basket/',
-  instamart:        'https://www.swiggy.com/instamart/checkout',
-  flipkart_minutes: 'https://www.flipkart.com/viewcart?marketplace=HYPERLOCAL',
-};
-
 // ── Add to carts ────────────────────────────────────────────
 async function addAllToCarts() {
   if (!comparisonData) return;
@@ -761,9 +752,8 @@ async function addAllToCarts() {
       const statusText = failedItems.length
         ? `${addedItems.length} added, ${failedItems.length} failed`
         : `${unitsAdded} item${unitsAdded===1?'':'s'} added`;
-      const checkoutUrl = _CHECKOUT_URLS[store] || '#';
       const div=document.createElement('div'); div.className='card tight srow';
-      div.innerHTML=`<img class="slogo" src="${_SFAV[store]||_SFAV.bigbasket}" alt="${_SN[store]||store}"><div style="flex:1"><div class="sname">${_SN[store]||store}</div><div class="smeta">${statusText}</div></div>${ok?`<a href="${checkoutUrl}" target="_blank" rel="noopener" class="btn" style="width:auto;padding:0 11px;font-size:12px;text-decoration:none">Open →</a>`:'<i data-ico="x" data-s="16" style="color:var(--err)"></i>'}`;
+      div.innerHTML=`<img class="slogo" src="${_SFAV[store]||_SFAV.bigbasket}" alt="${_SN[store]||store}"><div style="flex:1"><div class="sname">${_SN[store]||store}</div><div class="smeta">${statusText}</div></div>${ok?'<i data-ico="check" data-s="16" style="color:var(--ok)"></i>':'<i data-ico="x" data-s="16" style="color:var(--err)"></i>'}`;
       res.appendChild(div);
     }
     if (window.s2o) window.s2o.paintIcons(res);
