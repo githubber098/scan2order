@@ -379,6 +379,19 @@ class _Session:
         if not wait_for and not wait_for_ls:
             return True
 
+        # For Instamart/Zepto: check if the request/response interceptor has
+        # already captured a storeId from live API traffic. This is the most
+        # reliable signal — the storeId is never written to cookies or localStorage,
+        # but it appears on API request headers/URLs within seconds of the user
+        # confirming a delivery address. Checking it here lets _location_ready()
+        # return True without needing to find storeId in persistent storage.
+        if self.store in ("instamart", "zepto"):
+            cap = self.captured_store()
+            if cap.get("store_id"):
+                print(f"[browser] {self.store}: phase-2 passed via captured "
+                      f"store_id={cap['store_id']!r}")
+                return True
+
         def _cookie_ok(k: str) -> bool:
             raw = kv.get(k, "")
             if not raw:
