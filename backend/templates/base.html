@@ -167,8 +167,22 @@
     font-weight:700; cursor:pointer; transition:opacity .15s; }
   .browser-done-btn:active{ opacity:.8; }
   .browser-done-msg{ font-size:12px; color:var(--err); }
+  #browser-loc-step{ min-height:calc(430px * 700 / 430); } /* match relay aspect */
+  #s2o-confirm-overlay.open{ display:flex; }
 </style>
 
+
+<!-- ===== Custom confirm dialog (themed, replaces native confirm()) ===== -->
+<div id="s2o-confirm-overlay" style="display:none;position:fixed;inset:0;z-index:2000;background:rgba(0,0,0,.55);align-items:center;justify-content:center;padding:16px">
+  <div class="card stack" style="max-width:320px;width:100%;padding:22px 20px;border-radius:16px;gap:10px">
+    <div id="s2o-confirm-title" style="font-weight:800;font-size:16px;font-family:var(--font-head)"></div>
+    <div id="s2o-confirm-sub" style="font-size:13px;color:var(--muted);line-height:1.45"></div>
+    <div style="display:flex;gap:10px;margin-top:6px">
+      <button class="btn ghost" style="flex:1" onclick="s2o_confirmAnswer(false)">Cancel</button>
+      <button class="btn" id="s2o-confirm-ok" style="flex:1" onclick="s2o_confirmAnswer(true)">Confirm</button>
+    </div>
+  </div>
+</div>
 
 <!-- ===== Browser-relay connect modal (near full-screen live Chromium) ===== -->
 <div class="browser-modal" id="connect-modal">
@@ -177,7 +191,23 @@
       <span class="browser-title" id="connect-modal-title">Connect store</span>
       <button class="browser-close-btn" onclick="closeConnectModal()">✕ Cancel</button>
     </div>
-    <img id="browser-screenshot" src="" alt="Loading…" tabindex="0" />
+    <!-- Step 1: pincode collection (shown before relay starts) -->
+    <div id="browser-loc-step" style="display:none;flex-direction:column;align-items:center;gap:14px;padding:28px 22px;text-align:center;flex:1;justify-content:center">
+      <div style="font-size:34px;line-height:1">📍</div>
+      <div style="font-weight:800;font-size:15px;font-family:var(--font-head)">Where's your delivery address?</div>
+      <p style="font-size:13px;color:var(--muted);margin:0;line-height:1.5;max-width:280px">Enter your 6-digit pincode so the store opens to your area. You can skip this and set the address manually inside the store.</p>
+      <input id="browser-pincode-input" type="text" inputmode="numeric" pattern="[0-9]*" maxlength="6"
+             placeholder="e.g. 560034" class="input"
+             style="width:170px;text-align:center;font-size:20px;font-weight:800;letter-spacing:3px;padding:10px"
+             onkeydown="if(event.key==='Enter')s2o_startRelayFromStep()">
+      <div id="browser-loc-msg" style="font-size:12px;color:var(--muted);min-height:16px"></div>
+      <div style="display:flex;gap:10px;width:100%;max-width:280px">
+        <button class="btn ghost sm" style="flex:1" onclick="s2o_startRelayFromStep(true)">Skip</button>
+        <button class="btn sm" style="flex:2" onclick="s2o_startRelayFromStep()">Start →</button>
+      </div>
+    </div>
+    <!-- Step 2: live relay (shown after relay starts) -->
+    <img id="browser-screenshot" src="" alt="Loading…" tabindex="0" style="display:none" />
     <div class="browser-loading" id="browser-loading">
       <div class="spinner"></div>
       <div id="browser-loading-text">Starting browser…</div>

@@ -199,15 +199,26 @@ def _hunt_pincode(local_storage: dict, raw_cookies: dict) -> str:
 
 
 def is_session_valid(user_id: str) -> bool:
-    """True when flid (Flipkart user ID) cookie is present."""
+    """True when a Flipkart session has been saved.
+
+    Primary signal: flid cookie (Flipkart user identity, definitive).
+    Fallback: any saved cookies at all — this covers the case where Flipkart
+    uses a different auth cookie name than 'flid' (or stores auth in
+    localStorage). The real cookie name will be confirmed from server.log
+    after the first successful connect, then added to the explicit check.
+    """
     sess = _get_fm_session(user_id)
-    return bool(sess.get("flid"))
+    if sess.get("flid"):
+        return True
+    # Non-empty cookies = session was explicitly saved by the user
+    return bool(sess.get("cookies"))
 
 
 def session_health(user_id: str) -> dict:
     """Static health probe (no network call) for page-load status indicator."""
     sess = _get_fm_session(user_id)
-    if not sess.get("flid"):
+    has_auth = bool(sess.get("flid") or sess.get("cookies"))
+    if not has_auth:
         return {"ok": False, "reason": "Session expired — reconnect Flipkart Minutes."}
     if not sess.get("pincode"):
         # Authenticated but no delivery pincode → searches return empty.
@@ -364,8 +375,8 @@ async def search_item_api(user_id: str, query: str) -> list[dict]:
           the first live run and update _FM_SEARCH_URL / the body if needed.
     """
     sess = _get_fm_session(user_id)
-    if not sess.get("flid"):
-        print(f"[fm] search: no flid cookie for {user_id[:8]}")
+    if not sess.get("flid") and not sess.get("cookies"):
+        print(f"[fm] search: no session for {user_id[:8]}")
         return []
 
     print(f"\n[fm] === SEARCH: '{query}' (pincode={sess.get('pincode') or 'MISSING'}) ===")
@@ -437,8 +448,8 @@ async def add_all_to_cart_api(user_id: str, items: list[dict]) -> dict:
         return {"success": True, "items": []}
 
     sess = _get_fm_session(user_id)
-    if not sess.get("flid"):
-        return {"success": False, "reason": "no session (flid missing)"}
+    if not sess.get("flid") and not sess.get("cookies"):
+        return {"success": False, "reason": "no session"}
 
     print(f"\n[fm] === CART ADD: {len(items)} items ===")
     t_start = time.time()

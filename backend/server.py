@@ -44,7 +44,7 @@ from storage import user_store
 from stores import bigbasket, blinkit, zepto, instamart, flipkart_minutes
 
 BASE_DIR = Path(__file__).parent
-APP_VERSION = "1.7.3"
+APP_VERSION = "1.7.4"
 _TEMPLATES_DIR = BASE_DIR / "templates"
 _STATIC_DIR    = BASE_DIR / "static"
 _404_HTML      = BASE_DIR / "templates" / "404.html"
@@ -1078,24 +1078,17 @@ async def browser_auth_force(session_id: str):
     auth_val = kv.get(auth_key) or next(
         (v for k, v in kv.items() if k.lower() == auth_key.lower() and v), None
     )
-    # Flipkart Minutes fallback: accept fn_at / FNFD / fk_auth_token as
-    # alternative auth signals if flid is absent. These cookies are only
-    # present on authenticated Flipkart sessions.
     if not auth_val and s.store == "flipkart_minutes":
-        _fm_fallbacks = ("fn_at", "FNFD", "fk_auth_token", "fn_uid")
-        for _fb in _fm_fallbacks:
-            auth_val = kv.get(_fb) or next(
-                (v for k, v in kv.items() if k.lower() == _fb.lower() and v), None
-            )
-            if auth_val:
-                print(f"[browser-auth] flipkart_minutes (force): flid absent, "
-                      f"accepted fallback cookie {_fb!r}")
-                break
-    if not auth_val:
+        # Flipkart may store auth in localStorage rather than cookies, or under
+        # a cookie name we haven't identified yet. Trust the user's explicit Done
+        # click — save whatever cookies are present and let is_session_valid()
+        # determine validity after save. Diagnostic log will show the real names.
         all_names = [c["name"] for c in raw]
-        if s.store == "flipkart_minutes":
-            print(f"[browser-auth] flipkart_minutes (force): no auth cookie found. "
-                  f"All cookie names: {all_names[:30]}")
+        print(f"[browser-auth] flipkart_minutes (force): flid absent — saving "
+              f"{len(kv)} cookies anyway (user clicked Done). "
+              f"All cookie names: {all_names[:40]}")
+        # fall through to save
+    elif not auth_val:
         return {"success": False, "error": "Not logged in yet — please log in first"}
     # Zepto: persist the store_id sniffed from live API request headers (it is
     # never in cookies/localStorage). Mirrors the auto-close path in /check.
@@ -1124,6 +1117,36 @@ async def browser_auth_force(session_id: str):
           f"{s.store} user {s.user_id[:8]}… (manual Done button)")
     await auth_browser.close(session_id)
     return {"success": True, "user_id": s.user_id, "store": s.store}
+
+
+@app.post("/api/auth/browser/location/{session_id}")
+async def browser_set_location(session_id: str, request: Request):
+    """Update the Playwright context's GPS coordinates mid-session.
+
+    Called by the JS after geocoding the user's entered pincode. Setting
+    geolocation AFTER context creation means the next navigator.geolocation call
+    (triggered when the store page's JS asks for "use my location") returns the
+    correct user coordinates, overriding the server's IP-based location.
+    """
+    s = auth_browser.get(session_id)
+    if not s:
+        return {"success": False, "error": "session not found"}
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    try:
+        lat = float(body.get("latitude", 0))
+        lon = float(body.get("longitude", 0))
+        if lat == 0 and lon == 0:
+            return {"success": False, "error": "no coordinates"}
+        await s._context.set_geolocation({"latitude": lat, "longitude": lon})
+        await s._context.grant_permissions(["geolocation"])
+        print(f"[browser] {s.store}: geolocation updated to ({lat:.4f}, {lon:.4f})")
+        return {"success": True}
+    except Exception as exc:
+        print(f"[browser] set_geolocation failed: {exc}")
+        return {"success": False, "error": str(exc)}
 
 
 @app.delete("/api/auth/browser/session/{session_id}")

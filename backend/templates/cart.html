@@ -99,9 +99,14 @@
 {% block extra_scripts %}
 <script>
 const userId = window._SERVER_USER_ID;
-const _SL = { bigbasket:"bb", blinkit:"bk", zepto:"zp" };
-const _SLT = { bigbasket:"bb", blinkit:"b", zepto:"Z" };
-const _SN = { bigbasket:"BigBasket", blinkit:"Blinkit", zepto:"Zepto" };
+const _SN = { bigbasket:"BigBasket", blinkit:"Blinkit", zepto:"Zepto", instamart:"Instamart", flipkart_minutes:"Flipkart" };
+const _SFAV = {
+  bigbasket:        'https://www.google.com/s2/favicons?domain=bigbasket.com&sz=64',
+  blinkit:          'https://www.google.com/s2/favicons?domain=blinkit.com&sz=64',
+  zepto:            'https://www.google.com/s2/favicons?domain=zeptonow.com&sz=64',
+  instamart:        'https://www.google.com/s2/favicons?domain=www.swiggy.com&sz=64',
+  flipkart_minutes: 'https://www.google.com/s2/favicons?domain=flipkart.com&sz=64',
+};
 const _STORE_CART_URL = {
   blinkit: "https://blinkit.com/cart",
   zepto: "https://www.zeptonow.com/cart",
@@ -137,10 +142,9 @@ function render(){
     let sub = 0;
     const sec = document.createElement("div");
     sec.className = "card tight stack"; sec.style.gap = "2px";
-    const ab = _SL[app] || "bb";
     const openUrl = _STORE_CART_URL[app] || "#";
     sec.innerHTML = `<div class="app-head">
-        <div class="app-head-l"><span class="slogo ${ab}" style="width:20px;height:20px;font-size:10px">${_SLT[app]||"?"}</span>${_SN[app]||app}</div>
+        <div class="app-head-l"><img class="slogo" src="${_SFAV[app]||_SFAV.bigbasket}" style="width:20px;height:20px" alt="${_SN[app]||app}"> ${_SN[app]||app}</div>
         <a class="app-open" href="${openUrl}" target="_blank" rel="noopener">Open ${_SN[app]||app} →</a>
       </div>`;
     for (const it of items){
@@ -196,8 +200,9 @@ async function changeQty(product, delta){
   } catch(_){}
 }
 
-function clearCart(){
-  if (!confirm("Remove all items from your cart?")) return;
+async function clearCart(){
+  const ok = await window.s2o_confirm("Remove all items?", "Your local cart will be cleared.", "Clear");
+  if (!ok) return;
   const cart = window.s2o.shopCartGet();
   for (const app of Object.keys(cart)){
     for (const pid of Object.keys(cart[app]||{})){
@@ -208,11 +213,22 @@ function clearCart(){
 }
 
 async function clearAllCarts(){
-  if (!confirm("This will clear your cart here AND send a clear request to each connected store app. Continue?")) return;
+  const ok = await window.s2o_confirm(
+    "Clear all carts?",
+    "This removes all items here and sends a clear request to each connected store app.",
+    "Clear all"
+  );
+  if (!ok) return;
   const btn = document.getElementById("cart-clear-all");
   btn.disabled = true;
-  // First clear local cart
-  clearCart();
+  // First clear local cart (no second confirm — already asked once above)
+  const cart = window.s2o.shopCartGet();
+  for (const app of Object.keys(cart)){
+    for (const pid of Object.keys(cart[app]||{})){
+      window.s2o.shopCartSetQty({app, product_id: pid}, 0);
+    }
+  }
+  render();
   // Then call each store's clear-all API
   try {
     const r = await fetch("/api/cart/clear-all", {
@@ -221,11 +237,11 @@ async function clearAllCarts(){
     });
     const d = await r.json();
     const lines = Object.entries(d.results||{}).map(([store, res]) =>
-      `${store}: ${res.cleared ? "✓ cleared" : "✗ " + (res.reason||"not cleared")}`
+      `${_SN[store]||store}: ${res.cleared ? "✓ cleared" : "✗ " + (res.reason||"failed")}`
     );
-    if (lines.length) alert("Store carts:\n" + lines.join("\n"));
+    if (lines.length) toast("Store carts: " + lines.join(" · "), "ok");
   } catch(e) {
-    alert("Failed to clear store carts: " + e.message);
+    toast("Could not clear store carts: " + e.message, "err");
   }
   btn.disabled = false;
 }

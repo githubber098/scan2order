@@ -269,6 +269,74 @@
     _screenshotLoopActive = false;
   }
 
+  // ── Custom confirm dialog (themed, replaces native confirm()) ──────────────
+  let _confirmResolve = null;
+  window.s2o_confirm = function (title, sub, okLabel) {
+    return new Promise((resolve) => {
+      _confirmResolve = resolve;
+      const overlay = document.getElementById('s2o-confirm-overlay');
+      const tEl = document.getElementById('s2o-confirm-title');
+      const sEl = document.getElementById('s2o-confirm-sub');
+      const okEl = document.getElementById('s2o-confirm-ok');
+      if (tEl) tEl.textContent = title || '';
+      if (sEl) sEl.textContent = sub || '';
+      if (okEl) okEl.textContent = okLabel || 'Confirm';
+      if (overlay) overlay.classList.add('open');
+    });
+  };
+  window.s2o_confirmAnswer = function (answer) {
+    const overlay = document.getElementById('s2o-confirm-overlay');
+    if (overlay) overlay.classList.remove('open');
+    const r = _confirmResolve; _confirmResolve = null;
+    if (r) r(answer);
+  };
+
+  // ── Location step (pincode → geocode before relay starts) ─────────────────
+  let _locStepResolve = null;   // resolves with geolocation|null when user commits
+
+  window.s2o_startRelayFromStep = async function (skip) {
+    const msgEl = document.getElementById('browser-loc-msg');
+    const pinEl = document.getElementById('browser-pincode-input');
+    const pincode = (pinEl ? pinEl.value : '').trim();
+
+    if (skip || !pincode || !/^\d{6}$/.test(pincode)) {
+      // No pincode or skip — fall back to GPS or null
+      let geo = null;
+      if (!skip && pincode && !/^\d{6}$/.test(pincode)) {
+        if (msgEl) msgEl.textContent = 'Enter a valid 6-digit pincode or skip.';
+        return;
+      }
+      if (navigator.geolocation) {
+        geo = await new Promise(r =>
+          navigator.geolocation.getCurrentPosition(
+            p => r({ latitude: p.coords.latitude, longitude: p.coords.longitude }),
+            () => r(null), { timeout: 3000, maximumAge: 60000 }
+          )
+        );
+      }
+      if (_locStepResolve) { const fn = _locStepResolve; _locStepResolve = null; fn(geo); }
+      return;
+    }
+
+    // Geocode the pincode via Nominatim (free, CORS-enabled, no API key)
+    if (msgEl) msgEl.textContent = 'Looking up location…';
+    try {
+      const url = `https://nominatim.openstreetmap.org/search?postalcode=${encodeURIComponent(pincode)}&country=India&format=json&limit=1`;
+      const resp = await fetch(url, { headers: { 'Accept-Language': 'en' } });
+      const data = await resp.json();
+      if (data && data[0]) {
+        const geo = { latitude: parseFloat(data[0].lat), longitude: parseFloat(data[0].lon) };
+        if (msgEl) msgEl.textContent = `📍 ${data[0].display_name.split(',').slice(0,2).join(', ')}`;
+        await new Promise(r => setTimeout(r, 600));  // brief visual confirmation
+        if (_locStepResolve) { const fn = _locStepResolve; _locStepResolve = null; fn(geo); }
+      } else {
+        if (msgEl) msgEl.textContent = 'Pincode not found — try skipping.';
+      }
+    } catch (_) {
+      if (msgEl) msgEl.textContent = 'Could not geocode — try skipping.';
+    }
+  };
+
   let _doneBtnShown = false;
 
   async function _checkBrowserAuth() {
@@ -352,6 +420,16 @@
     _browserSessionId = null;
     _doneBtnShown = false;
     _currentStore = null;
+    _locStepResolve = null;
+    // Reset location step for next open
+    const locStep = document.getElementById("browser-loc-step");
+    if (locStep) { locStep.style.display = "none"; }
+    const scr = document.getElementById("browser-screenshot");
+    if (scr) { scr.style.display = "none"; }
+    const locPin = document.getElementById("browser-pincode-input");
+    if (locPin) locPin.value = "";
+    const locMsg = document.getElementById("browser-loc-msg");
+    if (locMsg) locMsg.textContent = "";
     document.removeEventListener("keydown", _browserKeyHandler);
     const loading = document.getElementById("browser-loading");
     if (loading) loading.classList.remove("show");
@@ -382,30 +460,28 @@
     _currentStore = store;          // track for Done-button & phase-1 logic
     if (_browserSessionId) await _closeBrowserSession(false);
 
-    // Open the modal IMMEDIATELY with a loading state — launching Chromium +
-    // loading the store page takes a few seconds; showing the spinner at once
-    // stops the user re-clicking (which used to spawn duplicate sessions).
     const token = ++_browserStartToken;
     const setText = (id, t) => { const e = document.getElementById(id); if (e) e.textContent = t; };
     setText("connect-modal-title", "Connect " + label);
-    setText("browser-auth-status", "Starting…");
-    setText("browser-loading-text", "Starting " + label + "…");
-    const img0 = document.getElementById("browser-screenshot"); if (img0) img0.src = "";
-    document.getElementById("browser-loading").classList.add("show");
-    document.getElementById("connect-modal").classList.add("open");
+    setText("browser-auth-status", "Waiting for login…");
 
-    // Forward the user's real GPS so the store's location prompt resolves.
-    let geolocation = null;
-    if (navigator.geolocation) {
-      geolocation = await new Promise((resolve) => {
-        navigator.geolocation.getCurrentPosition(
-          (p) => resolve({ latitude: p.coords.latitude, longitude: p.coords.longitude }),
-          () => resolve(null),
-          { timeout: 4000, maximumAge: 60000 }
-        );
-      });
-    }
-    if (token !== _browserStartToken) return;   // cancelled while waiting on GPS
+    // ── Step 1: collect pincode before starting the relay ─────────────────
+    // Show the location step (not the loading spinner — that comes after).
+    const modal = document.getElementById("connect-modal");
+    modal.classList.add("open");
+    const locStep = document.getElementById("browser-loc-step");
+    if (locStep) locStep.style.display = "flex";
+
+    // Wait for the user to click "Start →" or "Skip"
+    const geolocation = await new Promise(resolve => { _locStepResolve = resolve; });
+    if (token !== _browserStartToken) return;  // cancelled while waiting
+
+    // ── Step 2: hide location step, show loading spinner, start relay ─────
+    if (locStep) locStep.style.display = "none";
+    const scr = document.getElementById("browser-screenshot");
+    if (scr) { scr.src = ""; scr.style.display = ""; }
+    setText("browser-loading-text", "Starting " + label + "…");
+    document.getElementById("browser-loading").classList.add("show");
 
     try {
       const r = await fetch(`/api/auth/browser/start/${store}`, {
@@ -637,6 +713,9 @@
       setTimeout(() => el.remove(), 320);
     }, ttl);
   }
+
+  // Expose toast globally so template scripts (cart.html etc.) can use it.
+  window.toast = toast;
 
   /* ---- greeting toast (Shop / Compare) --------------------------------- */
   // Friendly "Hi, <name>" — shown ONLY on the first tab load of a session

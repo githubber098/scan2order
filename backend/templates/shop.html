@@ -117,9 +117,14 @@ const POPULAR = [
   "Paneer", "Rice", "Atta", "Dal", "Sugar", "Tea", "Coffee", "Oil",
   "Chicken", "Yogurt", "Cheese", "Soap",
 ];
-const _SL  = { bigbasket:"bb", blinkit:"bk", zepto:"zp", instamart:"im" };
-const _SLT = { bigbasket:"bb", blinkit:"b",  zepto:"Z",  instamart:"im" };
-const _SN  = { bigbasket:"BigBasket", blinkit:"Blinkit", zepto:"Zepto", instamart:"Instamart" };
+const _SN  = { bigbasket:"BigBasket", blinkit:"Blinkit", zepto:"Zepto", instamart:"Instamart", flipkart_minutes:"Flipkart" };
+const _SFAV = {
+  bigbasket:        'https://www.google.com/s2/favicons?domain=bigbasket.com&sz=64',
+  blinkit:          'https://www.google.com/s2/favicons?domain=blinkit.com&sz=64',
+  zepto:            'https://www.google.com/s2/favicons?domain=zeptonow.com&sz=64',
+  instamart:        'https://www.google.com/s2/favicons?domain=www.swiggy.com&sz=64',
+  flipkart_minutes: 'https://www.google.com/s2/favicons?domain=flipkart.com&sz=64',
+};
 let _shopBusy = false;
 let _debounceTimer = null;
 
@@ -222,7 +227,6 @@ function _card(p, canAdd){
   card.className = "pcard";
   const sale = p.sale_price || p.price || 0;
   const mrp = (p.price && p.price > sale) ? p.price : 0;
-  const ab = _SL[p.app] || "bb";
   const img = p.image_url
     ? `<img class="pcard-img" src="${_esc(p.image_url)}" alt="" loading="lazy" onerror="this.replaceWith(Object.assign(document.createElement('div'),{className:'pcard-img ph',innerHTML:'<i data-ico=\\'cart\\' data-s=\\'22\\'></i>'}))">`
     : `<div class="pcard-img ph"><i data-ico="cart" data-s="22"></i></div>`;
@@ -232,7 +236,7 @@ function _card(p, canAdd){
     <div class="pcard-body">
       <div class="pcard-name">${_esc(p.name)}</div>
       <div class="pcard-meta">
-        <span class="slogo ${ab}" style="width:18px;height:18px;font-size:9px">${_SLT[p.app]||"?"}</span>
+        <img class="slogo" src="${_SFAV[p.app]||_SFAV.bigbasket}" style="width:18px;height:18px" alt="${_SN[p.app]||p.app}">
         <span>${_SN[p.app]||p.app}</span>
         ${p.unit ? "· <span>"+_esc(p.unit)+"</span>" : ""}
       </div>
