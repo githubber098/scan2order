@@ -338,38 +338,82 @@ def _num_value(value) -> float:
     return 0.0
 
 
-def _image_url(obj: dict) -> str:
-    # Scalar candidates: direct string fields, common Flipkart names.
-    candidates = [
-        obj.get("imageUrl"), obj.get("image_url"), obj.get("image"),
-        obj.get("primaryImage"), obj.get("defaultImage"), obj.get("searchImage"),
-        _nested(obj, "media", "imageUrl"), _nested(obj, "media", "image"),
-        _nested(obj, "media", "primaryImage"), _nested(obj, "media", "defaultImage"),
-        _nested(obj, "titles", "image"),
-    ]
-    # List-of-image-dicts sources: each element may be a string URL or a dict
-    # with a "url"/"imageUrl"/"src" key (Flipkart's typical {"url": "...", "ghType": "..."}).
-    for source in (
-        obj.get("images"),
-        _nested(obj, "media", "images"),
-        obj.get("imageUrls"),
-        _nested(obj, "media", "imageList"),
-    ):
-        if isinstance(source, list):
-            candidates.extend(source)
-        elif source:
-            candidates.append(source)
+def _scan_for_cdn_url(obj, depth: int = 0) -> str:
+    """Recursively scan for any rukminim*.flixcart.com image URL.
 
-    for item in candidates:
+    Flipkart CDN images always contain 'rukminim' in the hostname
+    (rukminim2.flixcart.com, rukminim1.flixcart.com, etc.). This fallback
+    catches image URLs regardless of what field name Flipkart uses, so a
+    BFF schema change can't silently break image extraction.
+    """
+    if depth > 12:
+        return ""
+    if isinstance(obj, str):
+        if "rukminim" in obj and "flixcart.com" in obj:
+            return obj
+        return ""
+    if isinstance(obj, dict):
+        for v in obj.values():
+            found = _scan_for_cdn_url(v, depth + 1)
+            if found:
+                return found
+    if isinstance(obj, list):
+        for item in obj:
+            found = _scan_for_cdn_url(item, depth + 1)
+            if found:
+                return found
+    return ""
+
+
+def _image_url(obj: dict, parent: dict | None = None) -> str:
+    """Extract the first product image URL.
+
+    Searches known Flipkart BFF field names in both the inner product dict
+    (obj) and the outer wrapper dict (parent, e.g. the dict that contained
+    productInfo before unwrapping). Falls back to scanning every string value
+    in both dicts for any rukminim*.flixcart.com CDN URL so that field-name
+    changes in the BFF never silently break image extraction.
+    """
+    def _candidates_from(d: dict) -> list:
+        result = [
+            d.get("imageUrl"), d.get("image_url"), d.get("image"),
+            d.get("primaryImage"), d.get("defaultImage"), d.get("searchImage"),
+            d.get("thumbnailUrl"),
+            _nested(d, "media", "imageUrl"), _nested(d, "media", "image"),
+            _nested(d, "media", "primaryImage"), _nested(d, "media", "defaultImage"),
+            _nested(d, "titles", "image"),
+        ]
+        for source in (
+            d.get("images"),
+            d.get("objectUrls"),
+            d.get("thumbnailImages"),
+            _nested(d, "media", "images"),
+            d.get("imageUrls"),
+            _nested(d, "media", "imageList"),
+        ):
+            if isinstance(source, list):
+                result.extend(source)
+            elif source:
+                result.append(source)
+        return result
+
+    for item in _candidates_from(obj) + (_candidates_from(parent) if parent else []):
         if isinstance(item, str) and item.strip():
             return item.strip()
         if isinstance(item, dict):
+            # objectUrls elements: {"type": "IMAGE", "url": "https://rukminim2..."}
             got = _first_text(
                 item.get("url"), item.get("imageUrl"),
                 item.get("src"), item.get("value"), item.get("image"),
             )
             if got:
                 return got
+
+    # Fallback: scan both dicts for any rukminim CDN string
+    for d in ([obj] + ([parent] if parent else [])):
+        url = _scan_for_cdn_url(d)
+        if url:
+            return url
     return ""
 
 
@@ -448,7 +492,7 @@ def _extract_product(obj: dict) -> dict | None:
         _nested(obj, "attributes", "packSize"),
     )
 
-    img_url = _image_url(obj)
+    img_url = _image_url(obj, parent)
     listing_id = _listing_id(obj, parent)
 
     return {
