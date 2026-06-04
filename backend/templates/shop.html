@@ -13,7 +13,6 @@
     <button id="shop-mic" class="mic-btn" type="button" aria-label="Voice search" style="width:38px;height:38px">
       <i data-ico="mic" data-s="19"></i>
     </button>
-    <button id="shop-go" class="btn" type="button" style="width:auto;padding:0 16px" onclick="shopSearch()">Search</button>
   </div>
 
   {% if guest %}
@@ -127,8 +126,14 @@ const _SFAV = {
 };
 let _shopBusy = false;
 let _debounceTimer = null;
+let _recentTimer = null;
+const RECENT_SAVE_IDLE_MS = 1600;
+const RECENT_AUTO_MIN_CHARS = 3;
 
 function _esc(s){ const d=document.createElement("div"); d.textContent=s==null?"":s; return d.innerHTML; }
+function _attr(s){
+  return _esc(s).replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+}
 
 // ── Recommended (popular chips + recent searches) ───────────────────────
 function _recent(){ try { return JSON.parse(localStorage.getItem("s2o-recent")||"[]"); } catch(_){ return []; } }
@@ -136,28 +141,56 @@ function _pushRecent(q){
   let r = _recent().filter(x => x.toLowerCase() !== q.toLowerCase());
   r.unshift(q); r = r.slice(0,8);
   try { localStorage.setItem("s2o-recent", JSON.stringify(r)); } catch(_){}
+  renderRecent();
+}
+function _scheduleTypedRecent(q){
+  clearTimeout(_recentTimer);
+  if (!q || q.length < RECENT_AUTO_MIN_CHARS) return;
+  _recentTimer = setTimeout(() => {
+    const input = document.getElementById("shop-q");
+    if (input && input.value.trim() === q) _pushRecent(q);
+  }, RECENT_SAVE_IDLE_MS);
+}
+function _searchChip(p){
+  return `<button class="chip" type="button" data-shop-search="${_attr(p)}">${_esc(p)}</button>`;
+}
+function _wireSearchChips(root){
+  (root || document).querySelectorAll("[data-shop-search]").forEach((btn) => {
+    if (btn.dataset.wired) return;
+    btn.dataset.wired = "1";
+    btn.addEventListener("click", () => shopSearch(btn.dataset.shopSearch, { saveRecent: true }));
+  });
 }
 function renderReco(){
   const pop = document.getElementById("shop-popular");
-  pop.innerHTML = POPULAR.map(p => `<button class="chip" onclick="shopSearch('${_esc(p)}')">${_esc(p)}</button>`).join("");
+  pop.innerHTML = POPULAR.map(_searchChip).join("");
+  _wireSearchChips(pop);
+  renderRecent();
+  if (window.s2o) window.s2o.paintIcons(document);
+}
+function renderRecent(){
   const rec = _recent();
   const wrap = document.getElementById("shop-recent-wrap");
   if (rec.length){
     wrap.style.display = "";
-    document.getElementById("shop-recent").innerHTML =
-      rec.map(p => `<button class="chip" onclick="shopSearch('${_esc(p)}')">${_esc(p)}</button>`).join("");
+    const recentEl = document.getElementById("shop-recent");
+    recentEl.innerHTML = rec.map(_searchChip).join("");
+    _wireSearchChips(recentEl);
   } else { wrap.style.display = "none"; }
-  if (window.s2o) window.s2o.paintIcons(document);
 }
 
 // ── Search ───────────────────────────────────────────────────────────────
-async function shopSearch(preset){
+async function shopSearch(preset, opts){
+  opts = opts || {};
   const input = document.getElementById("shop-q");
   if (preset) input.value = preset;
   const q = input.value.trim();
   if (!q || _shopBusy) return;
   _shopBusy = true;
-  _pushRecent(q);
+  if (opts.saveRecent) {
+    clearTimeout(_recentTimer);
+    _pushRecent(q);
+  }
 
   document.getElementById("shop-reco").style.display = "none";
   const results = document.getElementById("shop-results");
@@ -367,6 +400,7 @@ document.addEventListener("DOMContentLoaded", () => {
     clearTimeout(_debounceTimer);
     const q = input.value.trim();
     if (!q) {
+      clearTimeout(_recentTimer);
       // Input cleared — show recommended page, hide results
       document.getElementById("shop-reco").style.display = "";
       document.getElementById("shop-results").innerHTML = "";
@@ -378,13 +412,22 @@ document.addEventListener("DOMContentLoaded", () => {
       return;
     }
     _debounceTimer = setTimeout(() => shopSearch(), 350);
+    _scheduleTypedRecent(q);
   });
-  input.addEventListener("keydown", (e) => { if (e.key === "Enter") { clearTimeout(_debounceTimer); shopSearch(); } });
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      clearTimeout(_debounceTimer);
+      shopSearch(null, { saveRecent: true });
+    }
+  });
 
   // Voice search: reuse the shared voice helper; auto-run on a final result.
   if (window.s2o){
     window.s2o.attachVoice(input, document.getElementById("shop-mic"), {
-      onText: (text, isFinal) => { input.value = text; if (isFinal && text) shopSearch(); },
+      onText: (text, isFinal) => {
+        input.value = text;
+        if (isFinal && text) shopSearch(null, { saveRecent: true });
+      },
     });
   }
 });

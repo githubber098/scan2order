@@ -31,6 +31,13 @@ class TestGuestPages:
         assert "shop-q" in r.text                 # search box present
         assert "_SERVER_GUEST   = true" in r.text  # guest flag injected
 
+    def test_shop_search_recents_are_debounced_and_button_removed(self, client):
+        body = client.get("/shop").text
+        assert 'id="shop-go"' not in body
+        assert "RECENT_SAVE_IDLE_MS" in body
+        assert "RECENT_AUTO_MIN_CHARS" in body
+        assert "saveRecent: true" in body
+
     def test_home_renders_for_guest_no_redirect(self, client):
         # Guests get the Compare page directly (not a redirect to /login).
         r = client.get("/", follow_redirects=False)
