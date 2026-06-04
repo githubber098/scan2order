@@ -1688,7 +1688,12 @@ async def _add_items_to_store(user_id: str, store_name: str,
 
 
 # Curated trending queries shown as product cards on the Shop landing.
-_TRENDING_QUERIES = ["Milk", "Bread", "Eggs", "Bananas", "Tomato", "Onion", "Paneer", "Curd"]
+_TRENDING_QUERIES = [
+    "Milk", "Bread", "Eggs", "Bananas", "Tomato", "Onion",
+    "Paneer", "Curd", "Butter", "Rice", "Atta", "Dal",
+    "Chicken", "Cooking Oil", "Sugar", "Tea", "Coffee",
+    "Spinach", "Potato", "Cheese",
+]
 # Cache: search_uid -> (timestamp, products). Avoids re-hitting the stores on
 # every Shop page load (trending changes slowly; a 10-min cache is plenty).
 _trending_cache: dict = {}

@@ -370,3 +370,70 @@ class TestMobileScanEndpoint:
         data = r.json()
         assert "success" in data
         assert "items" in data
+
+
+# ── _correct_items — regression tests ────────────────────────────────────────
+
+class TestCorrectItems:
+    pytestmark = pytest.mark.asyncio
+
+    async def _run(self, items, response_text, monkeypatch):
+        """Helper: mock Groq chat to return response_text, run correction."""
+        import ocr
+
+        async def _fake_groq_chat(messages, keys, *, model, max_tokens, timeout=30.0):
+            return response_text, ""
+
+        monkeypatch.setattr(ocr, "_groq_chat", _fake_groq_chat)
+        monkeypatch.setenv("GROQ_API_KEY", "gsk_test")
+        return await ocr._correct_items(items, ["gsk_test"], host=None)
+
+    async def test_pint_removed_as_bare_unit_word(self, monkeypatch):
+        """'Pint' (a unit of measure, not a grocery item) must be dropped."""
+        raw = ["Milk", "Pint", "2 Bread", "Eggs"]
+        # Correction LLM correctly drops the bare unit word
+        corrected = await self._run(raw, "Milk\n2 Bread\nEggs", monkeypatch)
+        assert "Pint" not in corrected
+        assert "Milk" in corrected
+        assert "Eggs" in corrected
+
+    async def test_valid_items_not_dropped(self, monkeypatch):
+        """Correction must not drop real grocery items."""
+        raw = ["Tomato", "Onion", "Spinach", "Coriander leaves", "Potato"]
+        same = "\n".join(raw)
+        corrected = await self._run(raw, same, monkeypatch)
+        assert corrected == raw
+
+    async def test_misread_fixed(self, monkeypatch):
+        """Common OCR misread corrected (Green Yogurt → Greek Yogurt)."""
+        raw = ["Milk", "Green Yogurt", "Bread"]
+        corrected = await self._run(raw, "Milk\nGreek Yogurt\nBread", monkeypatch)
+        assert "Greek Yogurt" in corrected
+        assert "Green Yogurt" not in corrected
+
+    async def test_degenerate_result_rejected(self, monkeypatch):
+        """If correction guts the list, fall back to the raw input."""
+        raw = ["Milk", "Bread", "Eggs", "Butter", "Onion"]
+        # LLM returns only 1 item — clearly degenerate; original list is kept
+        corrected = await self._run(raw, "Milk", monkeypatch)
+        assert corrected == raw
+
+    async def test_correction_disabled(self, monkeypatch):
+        """OCR_CONTEXT_CORRECTION=0 must return items unchanged without any LLM call."""
+        import ocr
+        monkeypatch.setenv("OCR_CONTEXT_CORRECTION", "0")
+        called = {}
+
+        async def _fake_groq_chat(*a, **kw):
+            called["hit"] = True
+            return "whatever", ""
+
+        monkeypatch.setattr(ocr, "_groq_chat", _fake_groq_chat)
+        result = await ocr._correct_items(["Milk", "Bread"], ["gsk_test"], host=None)
+        assert result == ["Milk", "Bread"]
+        assert "hit" not in called
+
+    async def test_empty_list_returns_empty(self, monkeypatch):
+        import ocr
+        result = await ocr._correct_items([], ["gsk_test"], host=None)
+        assert result == []

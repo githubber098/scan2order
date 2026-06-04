@@ -248,6 +248,44 @@ class TestExtractProduct:
         assert p["listing_id"] == "LSTP4"
         assert p["unit"] == "500 g"
         assert p["sale_price"] == 28.0 and p["price"] == 32.0
+        # media.images[0].url must be extracted
+        assert p["image_url"] == "http://img/4"
+
+    def test_image_url_flat_images_list(self):
+        """images: [{"url": "..."}] at the top level (no media wrapper)."""
+        obj = {
+            "id": "P10", "title": "Butter", "mrp": 55,
+            "images": [{"url": "http://img/flat"}],
+        }
+        p = fm._extract_product(obj)
+        assert p["image_url"] == "http://img/flat"
+
+    def test_image_url_direct_string(self):
+        """imageUrl as a plain string field."""
+        obj = {"id": "P11", "title": "Ghee", "mrp": 200, "imageUrl": "http://img/str"}
+        p = fm._extract_product(obj)
+        assert p["image_url"] == "http://img/str"
+
+    def test_image_url_primary_image(self):
+        """primaryImage string field (Flipkart alternate key)."""
+        obj = {"id": "P12", "title": "Oil", "mrp": 99, "primaryImage": "http://img/primary"}
+        p = fm._extract_product(obj)
+        assert p["image_url"] == "http://img/primary"
+
+    def test_image_url_media_primary_image(self):
+        """media.primaryImage nested field."""
+        obj = {
+            "id": "P13", "title": "Dal", "mrp": 120,
+            "media": {"primaryImage": "http://img/media_primary"},
+        }
+        p = fm._extract_product(obj)
+        assert p["image_url"] == "http://img/media_primary"
+
+    def test_image_url_missing_returns_empty(self):
+        """No image fields → image_url is empty string, not None."""
+        obj = {"id": "P14", "title": "Salt", "mrp": 20}
+        p = fm._extract_product(obj)
+        assert p["image_url"] == ""
 
     def test_sale_falls_back_to_mrp(self):
         obj = {"id": "P3", "title": "X", "mrp": 50}

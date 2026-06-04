@@ -33,9 +33,6 @@
       Items are added to each app's own cart — open the app to check out.
     </p>
     <div style="display:flex;gap:10px;margin-top:2px;flex-wrap:wrap">
-      <button class="btn ghost" id="cart-clear" type="button" style="flex:1" onclick="clearCart()">
-        <i data-ico="trash" data-s="16"></i>Clear cart
-      </button>
       <button class="btn ghost" id="cart-clear-all" type="button" style="flex:1;color:var(--err);border-color:var(--err)" onclick="clearAllCarts()">
         <i data-ico="trash" data-s="16"></i>Clear all store carts
       </button>
@@ -108,9 +105,11 @@ const _SFAV = {
   flipkart_minutes: '/static/icons/flipkart.png?v={{ asset_v }}',
 };
 const _STORE_CART_URL = {
-  blinkit: "https://blinkit.com/cart",
-  zepto: "https://www.zeptonow.com/cart",
-  bigbasket: "https://www.bigbasket.com/basket/",
+  blinkit:          "https://blinkit.com/cart",
+  zepto:            "https://www.zeptonow.com/cart",
+  bigbasket:        "https://www.bigbasket.com/basket/",
+  instamart:        "https://www.swiggy.com/instamart/checkout",
+  flipkart_minutes: "https://www.flipkart.com/viewcart?marketplace=HYPERLOCAL",
 };
 function _esc(s){ const d=document.createElement("div"); d.textContent=s==null?"":s; return d.innerHTML; }
 function _price(p){ return p.sale_price || p.price || 0; }
@@ -239,9 +238,9 @@ async function clearAllCarts(){
     const lines = Object.entries(d.results||{}).map(([store, res]) =>
       `${_SN[store]||store}: ${res.cleared ? "✓ cleared" : "✗ " + (res.reason||"failed")}`
     );
-    if (lines.length) toast("Store carts: " + lines.join(" · "), "ok");
+    if (lines.length) window.s2o.toast("Store carts: " + lines.join(" · "), "ok");
   } catch(e) {
-    toast("Could not clear store carts: " + e.message, "err");
+    window.s2o.toast("Could not clear store carts: " + e.message, "err");
   }
   btn.disabled = false;
 }

@@ -62,7 +62,7 @@
   .swap-opt-price{ font-weight:800; font-size:14px; flex-shrink:0; }
   .swap-opt-price.sel{ color:var(--accent2); }
   .swap-tick{ color:var(--ok); font-size:14px; flex-shrink:0; }
-  #items.textarea{ min-height:calc(2 * 1.6em + 28px); max-height:calc(10 * 1.6em + 28px); resize:none; overflow-y:hidden; }
+  #items.textarea{ min-height:calc(2 * 1.6em + 28px); max-height:calc(20 * 1.6em + 28px); resize:none; overflow-y:hidden; }
   [data-theme="brutal"] .swap-opt{ border-width:2px; }
   [data-theme="brutal"] .swap-sheet{ border-width:2.5px; }
 </style>
@@ -228,7 +228,7 @@ function setupItemsAutosize() {
     const pad = (parseFloat(cs.paddingTop) || 0) + (parseFloat(cs.paddingBottom) || 0);
     const border = (parseFloat(cs.borderTopWidth) || 0) + (parseFloat(cs.borderBottomWidth) || 0);
     const minH = (line * 2) + pad + border;
-    const maxH = (line * 10) + pad + border;
+    const maxH = (line * 20) + pad + border;
     ta.style.height = 'auto';
     const needed = ta.scrollHeight + border;
     ta.style.height = Math.max(minH, Math.min(needed, maxH)) + 'px';
@@ -731,6 +731,15 @@ function _rebuildCarts() {
   }
 }
 
+// ── Checkout URLs (open the store's cart/checkout page) ────────────────────
+const _CHECKOUT_URLS = {
+  blinkit:          'https://blinkit.com/cart',
+  zepto:            'https://www.zeptonow.com/cart',
+  bigbasket:        'https://www.bigbasket.com/basket/',
+  instamart:        'https://www.swiggy.com/instamart/checkout',
+  flipkart_minutes: 'https://www.flipkart.com/viewcart?marketplace=HYPERLOCAL',
+};
+
 // ── Add to carts ────────────────────────────────────────────
 async function addAllToCarts() {
   if (!comparisonData) return;
@@ -745,7 +754,6 @@ async function addAllToCarts() {
     });
     const data = await resp.json();
     for (const [store, r] of Object.entries(data.results||{})) {
-      // r.added / r.failed are arrays of items; sum units (count) actually added.
       const addedItems = Array.isArray(r.added) ? r.added : [];
       const failedItems = Array.isArray(r.failed) ? r.failed : [];
       const unitsAdded = addedItems.reduce((s,it)=>s+(it.count_added||it.count||1),0);
@@ -753,11 +761,38 @@ async function addAllToCarts() {
       const statusText = failedItems.length
         ? `${addedItems.length} added, ${failedItems.length} failed`
         : `${unitsAdded} item${unitsAdded===1?'':'s'} added`;
+      const checkoutUrl = _CHECKOUT_URLS[store] || '#';
       const div=document.createElement('div'); div.className='card tight srow';
-      div.innerHTML=`<img class="slogo" src="${_SFAV[store]||_SFAV.bigbasket}" alt="${_SN[store]||store}"><div style="flex:1"><div class="sname">${_SN[store]||store}</div><div class="smeta">${statusText}</div></div>${ok?'<i data-ico="check" data-s="16" style="color:var(--ok)"></i>':'<i data-ico="x" data-s="16" style="color:var(--err)"></i>'}`;
+      div.innerHTML=`<img class="slogo" src="${_SFAV[store]||_SFAV.bigbasket}" alt="${_SN[store]||store}"><div style="flex:1"><div class="sname">${_SN[store]||store}</div><div class="smeta">${statusText}</div></div>${ok?`<a href="${checkoutUrl}" target="_blank" rel="noopener" class="btn" style="width:auto;padding:0 11px;font-size:12px;text-decoration:none">Open →</a>`:'<i data-ico="x" data-s="16" style="color:var(--err)"></i>'}`;
       res.appendChild(div);
     }
     if (window.s2o) window.s2o.paintIcons(res);
+
+    // Sync successfully-added items into the local (localStorage) cart so
+    // /cart reflects the compare results without requiring a separate Shop add.
+    if (window.s2o && !window.s2o.isGuest()) {
+      for (const [app, storeCart] of Object.entries(comparisonData.carts || {})) {
+        for (const item of (storeCart.items || [])) {
+          const idx = item.comparison_index;
+          const entry = (idx != null) ? comparisonData.comparison[idx] : null;
+          const storeProd = entry
+            ? (((entry.prices||{})[app]||[]).find(p=>p.product_id===item.product_id)
+               || ((entry.prices||{})[app]||[])[0] || {})
+            : {};
+          window.s2o.shopCartSetQty({
+            app,
+            product_id: item.product_id,
+            store_product_id: item.store_product_id || item.product_id,
+            name: item.matched_name || item.name || '',
+            unit: item.matched_unit || '',
+            price: item.price,
+            sale_price: item.price,
+            image_url: storeProd.image_url || '',
+          }, item.count || 1);
+        }
+      }
+      window.s2o.updateCartBadge();
+    }
   } catch(e) {
     res.innerHTML=`<div class="dim" style="color:var(--err)">Error: ${_esc(e.message)}</div>`;
   }

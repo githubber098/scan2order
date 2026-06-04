@@ -339,12 +339,22 @@ def _num_value(value) -> float:
 
 
 def _image_url(obj: dict) -> str:
+    # Scalar candidates: direct string fields, common Flipkart names.
     candidates = [
         obj.get("imageUrl"), obj.get("image_url"), obj.get("image"),
+        obj.get("primaryImage"), obj.get("defaultImage"), obj.get("searchImage"),
         _nested(obj, "media", "imageUrl"), _nested(obj, "media", "image"),
+        _nested(obj, "media", "primaryImage"), _nested(obj, "media", "defaultImage"),
+        _nested(obj, "titles", "image"),
     ]
-    for source in (obj.get("images"), _nested(obj, "media", "images"),
-                   obj.get("imageUrls")):
+    # List-of-image-dicts sources: each element may be a string URL or a dict
+    # with a "url"/"imageUrl"/"src" key (Flipkart's typical {"url": "...", "ghType": "..."}).
+    for source in (
+        obj.get("images"),
+        _nested(obj, "media", "images"),
+        obj.get("imageUrls"),
+        _nested(obj, "media", "imageList"),
+    ):
         if isinstance(source, list):
             candidates.extend(source)
         elif source:
@@ -354,8 +364,10 @@ def _image_url(obj: dict) -> str:
         if isinstance(item, str) and item.strip():
             return item.strip()
         if isinstance(item, dict):
-            got = _first_text(item.get("url"), item.get("imageUrl"),
-                              item.get("src"), item.get("value"))
+            got = _first_text(
+                item.get("url"), item.get("imageUrl"),
+                item.get("src"), item.get("value"), item.get("image"),
+            )
             if got:
                 return got
     return ""
