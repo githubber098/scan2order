@@ -139,6 +139,23 @@ class TestHistoryPersistence:
                                    savings=0.0, stores=["zepto"])
         assert user_store.get_history("some-other-user") == []
 
+    def test_clear_history_removes_only_that_user(self, clean_db, user_id):
+        from storage import user_store
+        user_store.save_comparison(user_id=user_id, query_text="milk",
+                                   items=[{"name": "milk"}], grand_total=60.0,
+                                   savings=5.0, stores=["zepto"])
+        user_store.save_comparison(user_id=user_id, query_text="bread",
+                                   items=[{"name": "bread"}], grand_total=40.0,
+                                   savings=2.0, stores=["blinkit"])
+        user_store.save_comparison(user_id="other-user", query_text="rice",
+                                   items=[{"name": "rice"}], grand_total=300.0,
+                                   savings=0.0, stores=["bigbasket"])
+
+        assert user_store.clear_history(user_id) == 2
+        assert user_store.get_history(user_id) == []
+        assert len(user_store.get_history("other-user")) == 1
+        assert user_store.clear_history(user_id) == 0
+
     def test_api_history_requires_auth(self, client):
         r = client.get("/api/history")
         assert r.status_code == 401
@@ -154,3 +171,34 @@ class TestHistoryPersistence:
         runs = r.json()
         assert len(runs) == 1
         assert runs[0]["total"] == 300.0
+
+    def test_api_clear_history_requires_auth(self, client):
+        r = client.delete("/api/history")
+        assert r.status_code == 401
+
+    def test_api_clear_history_deletes_logged_in_runs(self, client, clean_db, user_id):
+        from storage import user_store
+        user_store.save_comparison(user_id=user_id, query_text="milk",
+                                   items=[{"name": "milk"}], grand_total=60.0,
+                                   savings=5.0, stores=["zepto"])
+        user_store.save_comparison(user_id=user_id, query_text="bread",
+                                   items=[{"name": "bread"}], grand_total=40.0,
+                                   savings=2.0, stores=["blinkit"])
+        user_store.save_comparison(user_id="other-user", query_text="rice",
+                                   items=[{"name": "rice"}], grand_total=300.0,
+                                   savings=0.0, stores=["bigbasket"])
+
+        _login(client, user_id)
+        r = client.delete("/api/history")
+        assert r.status_code == 200
+        assert r.json() == {"success": True, "deleted": 2}
+        assert user_store.get_history(user_id) == []
+        assert len(user_store.get_history("other-user")) == 1
+
+    def test_history_page_has_clear_all_button(self, client, user_id):
+        _login(client, user_id)
+        r = client.get("/history")
+        assert r.status_code == 200
+        assert 'id="history-clear"' in r.text
+        assert "clearHistory()" in r.text
+        assert "method:'DELETE'" in r.text

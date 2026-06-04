@@ -45,7 +45,7 @@ from storage import user_store
 from stores import bigbasket, blinkit, zepto, instamart, flipkart_minutes
 
 BASE_DIR = Path(__file__).parent
-APP_VERSION = "1.7.9"
+APP_VERSION = "1.7.10"
 _TEMPLATES_DIR = BASE_DIR / "templates"
 _STATIC_DIR    = BASE_DIR / "static"
 _404_HTML      = BASE_DIR / "templates" / "404.html"
@@ -697,6 +697,16 @@ async def api_history(request: Request):
     if not user_id:
         return JSONResponse({"error": "not authenticated"}, status_code=401)
     return user_store.get_history(user_id)
+
+
+@app.delete("/api/history")
+async def api_clear_history(request: Request):
+    """Delete all comparison history for the logged-in user."""
+    user_id = _get_session_user(request)
+    if not user_id:
+        return JSONResponse({"error": "not authenticated"}, status_code=401)
+    deleted = user_store.clear_history(user_id)
+    return {"success": True, "deleted": deleted}
 
 
 # ── Store-session auth endpoints ──────────────────────────────────────────────

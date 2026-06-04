@@ -5,7 +5,14 @@
 {% block content %}
 <div class="spread">
   <h1 class="h1">History</h1>
-  <span class="pill-tag" id="history-count"><i data-ico="history" data-s="13"></i>Loading…</span>
+  <div class="row" style="gap:8px;flex-wrap:wrap;justify-content:flex-end">
+    <button class="btn ghost sm" id="history-clear" type="button"
+            style="display:none;width:auto;padding:0 12px;color:var(--err);border-color:var(--err)"
+            onclick="clearHistory()">
+      <i data-ico="trash" data-s="14"></i>Clear all
+    </button>
+    <span class="pill-tag" id="history-count"><i data-ico="history" data-s="13"></i>Loading…</span>
+  </div>
 </div>
 <p class="lead" style="margin-top:-6px">Every list you've compared. Tap one to re-run it with today's prices.</p>
 
@@ -39,13 +46,29 @@ function _fmtDate(ts) {
   return d.toLocaleDateString('en-IN', { day:'numeric', month:'short' });
 }
 
+function setHistoryCount(n) {
+  document.getElementById('history-count').innerHTML =
+    `<i data-ico="history" data-s="13"></i>${n} scan${n===1?'':'s'}`;
+  const clearBtn = document.getElementById('history-clear');
+  if (clearBtn) clearBtn.style.display = n > 0 ? '' : 'none';
+}
+
+function renderEmptyHistory() {
+  document.getElementById('history-list').innerHTML =
+    '<div class="center dim" style="padding:30px 0">No comparisons yet. Run your first one!</div>';
+  document.getElementById('savings-hero').style.display = 'none';
+  document.getElementById('savings-month').textContent = '₹—';
+  document.getElementById('savings-meta').textContent = '';
+  setHistoryCount(0);
+  if (window.s2o) window.s2o.paintIcons(document);
+}
+
 async function loadHistory() {
   const list = document.getElementById('history-list');
   try {
     const data = await (await fetch('/api/history')).json();
     if (!Array.isArray(data) || !data.length) {
-      list.innerHTML = '<div class="center dim" style="padding:30px 0">No comparisons yet. Run your first one!</div>';
-      document.getElementById('history-count').innerHTML = '<i data-ico="history" data-s="13"></i>0 scans';
+      renderEmptyHistory();
       return;
     }
 
@@ -55,7 +78,7 @@ async function loadHistory() {
     const monthItems = data.filter(h => h.date >= monthStart);
     const monthSavings = monthItems.reduce((s, h) => s + (h.saved || 0), 0);
 
-    document.getElementById('history-count').innerHTML = `<i data-ico="history" data-s="13"></i>${data.length} scan${data.length===1?'':'s'}`;
+    setHistoryCount(data.length);
     if (monthSavings >= 1 || monthItems.length > 0) {
       document.getElementById('savings-hero').style.display = '';
       document.getElementById('savings-month').textContent = '₹' + Math.round(monthSavings);
@@ -84,6 +107,29 @@ async function loadHistory() {
     if (window.s2o) window.s2o.paintIcons(list);
   } catch(e) {
     list.innerHTML = `<div class="center dim" style="color:var(--err)">Could not load history: ${_esc(e.message)}</div>`;
+    const clearBtn = document.getElementById('history-clear');
+    if (clearBtn) clearBtn.style.display = 'none';
+  }
+}
+
+async function clearHistory() {
+  const ok = window.s2o_confirm
+    ? await window.s2o_confirm('Clear all history?', 'This removes every saved comparison from your account.', 'Clear all')
+    : confirm('Clear all history?');
+  if (!ok) return;
+  const btn = document.getElementById('history-clear');
+  if (btn) btn.disabled = true;
+  try {
+    const resp = await fetch('/api/history', { method:'DELETE' });
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok || data.error) throw new Error(data.error || 'Could not clear history');
+    renderEmptyHistory();
+    if (window.s2o) window.s2o.toast('History cleared');
+  } catch(e) {
+    if (window.s2o) window.s2o.toast('Could not clear history: ' + e.message, 'err');
+    else alert('Could not clear history: ' + e.message);
+  } finally {
+    if (btn) btn.disabled = false;
   }
 }
 

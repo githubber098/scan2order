@@ -899,6 +899,21 @@ def get_history(user_id: str, limit: int = 50) -> list[dict]:
     return result
 
 
+def clear_history(user_id: str) -> int:
+    """Delete all saved comparisons for the user and return how many rows were removed."""
+    with _lock:
+        row = _conn.execute(
+            "SELECT COUNT(*) AS n FROM comparisons WHERE user_id=?",
+            (user_id,),
+        ).fetchone()
+        count = int(row["n"] if row else 0)
+        if not count:
+            return 0
+        _conn.execute("DELETE FROM comparisons WHERE user_id=?", (user_id,))
+        _conn.commit()
+    return count
+
+
 # ── Named carts ─────────────────────────────────────────────────────────────────
 
 def create_named_cart(user_id: str, name: str) -> str:
