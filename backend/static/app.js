@@ -577,7 +577,9 @@
       rec.continuous = false;
       // Snapshot the textarea value at the moment recording starts so that
       // interim results overwrite the draft line rather than appending each time.
-      const baseValue = input.value;
+      // After each final result, baseValue advances so the next utterance starts
+      // on a new line instead of overwriting the previous one.
+      let baseValue = input.value;
       rec.onstart = () => { listening = true; btn.classList.add("listening"); };
       rec.onend = () => { listening = false; btn.classList.remove("listening"); };
       rec.onerror = () => { listening = false; btn.classList.remove("listening"); };
@@ -597,6 +599,8 @@
           input.value = text;
         }
         input.dispatchEvent(new Event("input", { bubbles: true }));
+        // Advance baseValue on final so the next utterance appends as a new line.
+        if (finalText) baseValue = input.value;
       };
       try { rec.start(); } catch (_) {}
     });
