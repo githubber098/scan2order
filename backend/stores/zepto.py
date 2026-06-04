@@ -177,12 +177,33 @@ def _get_zepto_session(user_id: str) -> dict:
         except Exception:
             pass
 
-    # Fallback: the serviceability cookie is frequently saved empty
+    # Primary reliable source: the store_id the browser relay sniffed from
+    # Zepto's own API request headers and persisted as _s2o_store_id. Zepto does
+    # NOT write the resolved delivery storeId to any cookie or localStorage key
+    # (the serviceability cookie stays {"timeSaved":…} even with an address set —
+    # verified against a real captured session), so the serviceability parse and
+    # the _hunt_store_id blob scan below almost always come up empty. The relay
+    # captures the value at connect time; we read it back here. Stored as plain
+    # cookies (not normalised through `bag`, whose normkey() would strip the
+    # commas in store_ids and the punctuation in the store_etas JSON).
+    if not store_id:
+        cap_sid = raw_cookies.get("_s2o_store_id", "")
+        if cap_sid:
+            store_id = unquote(cap_sid) if "%" in cap_sid else cap_sid
+            cap_ids = raw_cookies.get("_s2o_store_ids", "")
+            cap_ids = unquote(cap_ids) if "%" in cap_ids else cap_ids
+            store_ids = cap_ids or store_id
+            cap_etas = raw_cookies.get("_s2o_store_etas", "")
+            if cap_etas:
+                store_etas = unquote(cap_etas) if "%" in cap_etas else cap_etas
+            print(f"[zepto] store_id from relay-captured _s2o_store_id: {store_id}")
+
+    # Last resort: the serviceability cookie is frequently saved empty
     # (e.g. {"timeSaved": ...}) even when the user has a delivery address.
-    # The storeId still lives in OTHER stored blobs — userAddresses, the
+    # The storeId MIGHT still live in OTHER stored blobs — userAddresses, the
     # page-layout state, the search/cart state in localStorage. Recursively
-    # hunt for any "storeId" in every stored JSON value as a last resort.
-    # Only runs when the primary path found nothing, so it can't regress.
+    # hunt for any "storeId" in every stored JSON value.
+    # Only runs when the primary paths found nothing, so it can't regress.
     if not store_id:
         found = _hunt_store_id(local_storage, raw_cookies)
         if found:

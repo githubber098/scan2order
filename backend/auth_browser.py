@@ -551,6 +551,14 @@ class _Session:
             print(f"[browser] {self.store}: get_current_cookies failed: {exc}")
             return {}
 
+    def captured_store(self) -> dict:
+        """Return the Zepto store_id/store_ids/store_etas sniffed from live API
+        request headers during this relay session (see the zepto request
+        interceptor in start()). Empty dict until a Zepto XHR with a store_id
+        header has fired. Used to persist the storeId that Zepto never writes to
+        cookies/localStorage."""
+        return dict(getattr(self._page, "_zepto_captured", {}) or {})
+
     async def get_session_storage(self) -> dict:
         """Snapshot the page's sessionStorage (string→string). Returns {} on failure.
 
@@ -692,6 +700,48 @@ async def start(user_id: str, store: str,
                 pass
 
         page.on("response", _capture_fm_response)
+
+    # For Zepto: capture the live store_id from the request HEADERS that Zepto's
+    # own web app attaches to its authenticated API XHRs (search / home-feed /
+    # cart). This is the ONLY reliable source: Zepto holds the resolved delivery
+    # storeId in in-memory state and sends it as the `store_id` / `store_ids` /
+    # `store_etas` headers, but it does NOT persist it in cookies or
+    # localStorage — the `serviceability` cookie is just {"timeSaved":…} even
+    # for a fully set-up address. (Verified against a real captured session.)
+    # After the user confirms a delivery address, Zepto re-fetches the home feed,
+    # whose XHR carries these headers, so we grab them then. Mirrors Blinkit's
+    # merchant_id capture; persisted as _s2o_store_id on relay close.
+    if store == "zepto":
+        import re as _re_z
+        _ZID_RE = _re_z.compile(
+            r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+            _re_z.I,
+        )
+        _zepto_captured: dict = {}
+
+        def _capture_zepto_request(request):
+            try:
+                url = request.url
+                if "zepto" not in url:
+                    return
+                h = request.headers  # header names are lower-cased by Playwright
+                sid = (h.get("store_id") or h.get("storeid") or "").strip()
+                if sid and _ZID_RE.match(sid):
+                    if _zepto_captured.get("store_id") != sid:
+                        print(f"[browser] zepto: captured store_id={sid} "
+                              f"from {url.split('?')[0]}")
+                    _zepto_captured["store_id"] = sid
+                    ids = (h.get("store_ids") or "").strip()
+                    if ids:
+                        _zepto_captured["store_ids"] = ids
+                    etas = (h.get("store_etas") or "").strip()
+                    if etas:
+                        _zepto_captured["store_etas"] = etas
+            except Exception:
+                pass
+
+        page.on("request", _capture_zepto_request)
+        page._zepto_captured = _zepto_captured  # type: ignore[attr-defined]
 
     # For Blinkit: intercept all JSON API responses to capture merchant_id.
     # Blinkit's web app automatically calls a store-discovery endpoint after

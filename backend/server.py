@@ -44,7 +44,7 @@ from storage import user_store
 from stores import bigbasket, blinkit, zepto, instamart, flipkart_minutes
 
 BASE_DIR = Path(__file__).parent
-APP_VERSION = "1.7.1"
+APP_VERSION = "1.7.2"
 _TEMPLATES_DIR = BASE_DIR / "templates"
 _STATIC_DIR    = BASE_DIR / "static"
 _404_HTML      = BASE_DIR / "templates" / "404.html"
@@ -979,25 +979,56 @@ async def browser_auth_check(session_id: str):
         return {"done": False, "error": "session not found or expired"}
     cookies = await s.get_auth_cookies()
     if cookies:
-        # Zepto and Instamart: the serviceability / storeId cookie updates
-        # ~1-3 s AFTER the user-position localStorage key fires (which is what
-        # triggers Phase 2).  If we snapshot immediately we only capture the
-        # empty {"timeSaved":…} form and lose the storeId forever.
-        # Sleeping here keeps the browser open for a brief grace period so both
-        # the serviceability cookie and localStorage are fully settled before we
-        # snapshot and close.  3 s is imperceptible to the user.
-        if s.store in ("zepto", "instamart"):
+        # Zepto: the resolved delivery storeId is NEVER persisted to cookies /
+        # localStorage (the serviceability cookie stays {"timeSaved":…} even with
+        # an address set). Zepto only carries it in-memory and on its API request
+        # HEADERS, which the relay's request interceptor sniffs into
+        # page._zepto_captured. After the user confirms an address Zepto re-fetches
+        # the home feed, so we poll briefly for that header to land, then persist
+        # it as _s2o_store_id/_s2o_store_ids/_s2o_store_etas (read back by
+        # zepto._get_zepto_session). This replaces the old fixed 3 s sleep, which
+        # could not work because the value was never in the snapshot to begin with.
+        if s.store == "zepto":
+            # Brief grace so Zepto's post-address home re-fetch fires and the
+            # interceptor records the store for the address the user just chose
+            # (it keeps the LATEST store_id seen, so we read after the grace).
+            await asyncio.sleep(2.0)
+            cap = s.captured_store()
+            for _ in range(12):              # +up to ~6 s if nothing seen yet
+                if cap.get("store_id"):
+                    break
+                await asyncio.sleep(0.5)
+                cap = s.captured_store()
+            try:
+                fresh = await s.get_current_cookies()
+                if fresh:
+                    cookies = {**cookies, **fresh}
+            except Exception as exc:
+                print(f"[browser-auth] zepto: re-snapshot failed: {exc}")
+            if cap.get("store_id"):
+                cookies["_s2o_store_id"] = cap["store_id"]
+                cookies["_s2o_store_ids"] = cap.get("store_ids", cap["store_id"])
+                if cap.get("store_etas"):
+                    cookies["_s2o_store_etas"] = cap["store_etas"]
+                print(f"[browser-auth] zepto: persisted captured store_id "
+                      f"{cap['store_id'][:8]}… (store_ids="
+                      f"{cap.get('store_ids', '')[:40]})")
+            else:
+                print("[browser-auth] zepto: WARNING no store_id seen on any API "
+                      "request during the relay — search may return empty. The "
+                      "user may have closed before the store feed loaded.")
+        elif s.store == "instamart":
+            # Instamart's resolved storeId settles in sessionStorage ~1-3 s after
+            # the address is set; a short grace + re-snapshot captures it.
             await asyncio.sleep(3.0)
             try:
                 fresh = await s.get_current_cookies()
                 if fresh:
-                    # Merge: fresh values take precedence (more up to date),
-                    # but keep any cookies that may have been removed by the page.
                     cookies = {**cookies, **fresh}
-                    print(f"[browser-auth] {s.store}: re-snapshotted cookies after "
+                    print(f"[browser-auth] instamart: re-snapshotted cookies after "
                           f"3s grace period ({len(fresh)} cookies in fresh snapshot)")
             except Exception as exc:
-                print(f"[browser-auth] {s.store}: re-snapshot failed: {exc}")
+                print(f"[browser-auth] instamart: re-snapshot failed: {exc}")
 
         # Snapshot localStorage AND sessionStorage — Zepto keeps delivery coords
         # in localStorage; Instamart stores the resolved storeId in sessionStorage
@@ -1044,6 +1075,20 @@ async def browser_auth_force(session_id: str):
     kv = {c["name"]: c["value"] for c in raw}
     if not kv.get(auth_key):
         return {"success": False, "error": "Not logged in yet — please log in first"}
+    # Zepto: persist the store_id sniffed from live API request headers (it is
+    # never in cookies/localStorage). Mirrors the auto-close path in /check.
+    if s.store == "zepto":
+        cap = s.captured_store()
+        if cap.get("store_id"):
+            kv["_s2o_store_id"] = cap["store_id"]
+            kv["_s2o_store_ids"] = cap.get("store_ids", cap["store_id"])
+            if cap.get("store_etas"):
+                kv["_s2o_store_etas"] = cap["store_etas"]
+            print(f"[browser-auth] zepto (force): persisted captured store_id "
+                  f"{cap['store_id'][:8]}…")
+        else:
+            print("[browser-auth] zepto (force): no store_id captured yet — "
+                  "search may be empty until reconnected with the store loaded.")
     local_storage = await s.get_local_storage()
     try:
         ss = await s.get_session_storage()

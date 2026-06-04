@@ -432,7 +432,15 @@ class FakeBrowserSession:
     async def get_local_storage(self) -> dict:
         return {}
 
+    async def get_session_storage(self) -> dict:
+        return {}
+
     async def get_current_cookies(self) -> dict:
+        return {}
+
+    def captured_store(self) -> dict:
+        # Mirrors _Session.captured_store(): Zepto store_id sniffed from live
+        # request headers. Empty in tests (no real Playwright traffic).
         return {}
 
     async def close(self) -> None:
