@@ -62,6 +62,7 @@
   .swap-opt-price{ font-weight:800; font-size:14px; flex-shrink:0; }
   .swap-opt-price.sel{ color:var(--accent2); }
   .swap-tick{ color:var(--ok); font-size:14px; flex-shrink:0; }
+  #items.textarea{ min-height:calc(2 * 1.6em + 28px); max-height:calc(10 * 1.6em + 28px); resize:none; overflow-y:hidden; }
   [data-theme="brutal"] .swap-opt{ border-width:2px; }
   [data-theme="brutal"] .swap-sheet{ border-width:2.5px; }
 </style>
@@ -77,7 +78,7 @@
     {% else %}
     <span id="stores-pill" class="pill-tag">
       <span class="dot on" style="width:7px;height:7px"></span>
-      {% set n = (stores.bigbasket | int) + (stores.blinkit | int) + (stores.zepto | int) + (stores.instamart | int) %}
+      {% set n = (stores.bigbasket | int) + (stores.blinkit | int) + (stores.zepto | int) + (stores.instamart | int) + (stores.flipkart_minutes | int) %}
       {{ n }} store{{ 's' if n != 1 else '' }} connected
     </span>
     {% endif %}
@@ -180,6 +181,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (ta) ta.value = rerun;
     sessionStorage.removeItem('s2o_rerun');
   }
+  setupItemsAutosize();
   checkStoreHealth();
   if (window.s2o_greet) window.s2o_greet();
   // Voice input on the list textarea (append mode), via the shared helper.
@@ -198,7 +200,7 @@ async function checkStoreHealth() {
     const banner = document.getElementById('health-warn');
     if (!banner) return;
     const msgs = [];
-    const SN = {bigbasket:'BigBasket', blinkit:'Blinkit', zepto:'Zepto', instamart:'Instamart'};
+    const SN = {bigbasket:'BigBasket', blinkit:'Blinkit', zepto:'Zepto', instamart:'Instamart', flipkart_minutes:'Flipkart Minutes'};
     for (const [store, info] of Object.entries(_storeHealth)) {
       if (info.connected && !info.healthy && info.reason) {
         msgs.push(`${SN[store]||store}: ${info.reason}`);
@@ -214,6 +216,26 @@ async function checkStoreHealth() {
       banner.style.display = 'none';
     }
   } catch(_) {}
+}
+
+// ── Auto-grow grocery-list textarea ─────────────────────────
+function setupItemsAutosize() {
+  const ta = document.getElementById('items');
+  if (!ta) return;
+  const resize = () => {
+    const cs = getComputedStyle(ta);
+    const line = parseFloat(cs.lineHeight) || (parseFloat(cs.fontSize) * 1.6) || 24;
+    const pad = (parseFloat(cs.paddingTop) || 0) + (parseFloat(cs.paddingBottom) || 0);
+    const border = (parseFloat(cs.borderTopWidth) || 0) + (parseFloat(cs.borderBottomWidth) || 0);
+    const minH = (line * 2) + pad + border;
+    const maxH = (line * 10) + pad + border;
+    ta.style.height = 'auto';
+    const needed = ta.scrollHeight + border;
+    ta.style.height = Math.max(minH, Math.min(needed, maxH)) + 'px';
+    ta.style.overflowY = needed > maxH ? 'auto' : 'hidden';
+  };
+  ta.addEventListener('input', resize);
+  requestAnimationFrame(resize);
 }
 
 // ── Parse textarea ──────────────────────────────────────────
@@ -341,13 +363,12 @@ async function startCompare() {
 
 // ── Render ──────────────────────────────────────────────────
 const _SN  = { bigbasket:'BigBasket', blinkit:'Blinkit', zepto:'Zepto', instamart:'Instamart', flipkart_minutes:'Flipkart' };
-// Favicon URLs via Google's favicon service (replaces the old colored-div abbreviations).
 const _SFAV = {
-  bigbasket:        '/static/icons/bigbasket.svg',
+  bigbasket:        '/static/icons/bigbasket.webp',
   blinkit:          '/static/icons/blinkit.svg',
-  zepto:            '/static/icons/zepto.svg',
-  instamart:        '/static/icons/instamart.svg',
-  flipkart_minutes: '/static/icons/flipkart.svg',
+  zepto:            '/static/icons/zepto.webp',
+  instamart:        '/static/icons/swiggy.png',
+  flipkart_minutes: '/static/icons/flipkart.png',
 };
 
 // Guest view: cheapest pick per item only (no cross-store matrix, no cart).
@@ -429,14 +450,24 @@ function renderResults(data) {
   // Skipped
   const skip = document.getElementById('skipped-notice');
   if (data.skipped_apps && data.skipped_apps.length) {
-    skip.textContent = 'Skipped (not connected): ' + data.skipped_apps.join(', ');
+    const unavailable = [];
+    const disconnected = [];
+    for (const store of data.skipped_apps) {
+      const info = _storeHealth && _storeHealth[store];
+      if (info && info.connected) unavailable.push(_SN[store] || store);
+      else disconnected.push(_SN[store] || store);
+    }
+    const parts = [];
+    if (unavailable.length) parts.push('needs reconnect/address: ' + unavailable.join(', '));
+    if (disconnected.length) parts.push('not connected: ' + disconnected.join(', '));
+    skip.textContent = 'Skipped stores: ' + (parts.length ? parts.join(' | ') : data.skipped_apps.join(', '));
     skip.style.display='';
   } else skip.style.display='none';
 
   // Zero-results warning: connected stores that returned nothing across all items
   const zrWarn = document.getElementById('zero-results-warn');
   if (zrWarn && _storeHealth) {
-    const SN = {bigbasket:'BigBasket', blinkit:'Blinkit', zepto:'Zepto', instamart:'Instamart'};
+    const SN = {bigbasket:'BigBasket', blinkit:'Blinkit', zepto:'Zepto', instamart:'Instamart', flipkart_minutes:'Flipkart Minutes'};
     const skipped = new Set(data.skipped_apps || []);
     const zeroStores = [];
     for (const [store, info] of Object.entries(_storeHealth)) {
@@ -677,6 +708,7 @@ function _rebuildCarts() {
       price, count,
       product_id: entry.selected_pid || prod.product_id,
       store_product_id: prod.store_product_id || '',
+      listing_id: prod.listing_id || prod.store_product_id || '',
       fc_id: prod.fc_id || '',
       matched_name: prod.name || '',
       matched_unit: prod.unit || '',

@@ -7,10 +7,11 @@ via the Playwright browser relay (www.flipkart.com) and saves a delivery
 address, the session is captured as cookies + localStorage.
 
 Key cookies
-  flid   — Flipkart user identity (long-lived; login indicator)
-  T      — Encrypted session token (shorter-lived; refreshable)
-  SN     — Session number
-  fn_at  — Authentication token variant (app-level)
+  flid   — Flipkart user identity (when present; not present in every capture)
+  T      — Encrypted session token (present in the June 2026 DevTools captures)
+  ULSN   — Auth/user-state JWT-style cookie
+  at/rt  — Access/refresh JWT-style cookies used by Flipkart's Rome BFF
+  SN/S   — Session-number/session-state cookies
 
 Location
   Unlike the other stores the delivery pincode lives in the stored cookies/
@@ -20,26 +21,30 @@ Location
 
 Search API
   NOTE: Flipkart's internal BFF API is geo-restricted (India only) and
-  undocumented. Flipkart Minutes is served from the main www.flipkart.com
-  domain under marketplace=HYPERLOCAL (there is NO minutes.flipkart.com host,
-  and 2.flipkart.com does not exist either — both fail DNS). The web app's BFF
-  is served from www.flipkart.com itself. On the first live deployment the
-  response interceptor in auth_browser.py logs all JSON API calls made during
-  the relay session; look for "[fm-interceptor]" / "[fm]" lines in server.log
-  and update _FM_SEARCH_URL or the request body if they differ.
+  undocumented. The June 2026 DevTools captures in fm_search.txt and
+  fm_search_2.txt confirm that web search uses the Rome BFF host:
 
-  Current best-guess:
-    POST https://www.flipkart.com/api/4/page/fetch
-         {"pageUri": "/search?q={query}&marketplace=HYPERLOCAL", "pageContext": {}}
+    POST https://2.rome.api.flipkart.com/api/4/page/fetch?cacheFirst=false
+         pageUri=/hyperlocal/pr?q={query}&marketplace=HYPERLOCAL
+                 &sid=search.flipkart.com&as-show=on
+         locationContext.pincode={delivery pincode}
+
+  The captures are cURL request exports only; they do not include response JSON
+  bodies. _parse_response therefore remains defensive across Flipkart's nested
+  page/widget product shapes instead of claiming a single verified response path.
 
 Cart API
-  Best-guess based on Flipkart web cart patterns; will be refined from logs.
-  Cart key: `fk_cart_id` (cookie, set on first add or on page load).
+  The DevTools add captures confirm the browse-cart endpoint:
+
+    POST https://2.rome.api.flipkart.com/api/5/cart/browse
+         browseContext.listings=[listingId]
+         browseCartContext.cartContext[listingId]={productId, quantity, ...}
 """
 
 import json
 import re
 import time
+import uuid
 from urllib.parse import quote, unquote
 
 import httpx
@@ -51,32 +56,31 @@ APP_NAME = "flipkart_minutes"
 DISPLAY_NAME = "Flipkart Minutes"
 # NOTE: there is NO minutes.flipkart.com host (DNS: non-existent). Flipkart
 # Minutes lives on the main www.flipkart.com domain under marketplace=HYPERLOCAL.
-# 2.flipkart.com is ALSO non-existent — the web app's BFF is served from
-# www.flipkart.com itself (relative /api/… paths); the mobile BFF host is
-# 1.rome.api.flipkart.com. We use the web BFF since we capture a web session.
+# 2.flipkart.com is ALSO non-existent. The live web app calls the Rome API host
+# below for page fetches while retaining www.flipkart.com as Origin/Referer.
 BASE_URL = "https://www.flipkart.com"
 _FK_DOMAIN = "https://www.flipkart.com"
+_FK_API_DOMAIN = "https://2.rome.api.flipkart.com"
 
-# Search: Flipkart web BFF "page fetch" — the same endpoint the web search page
-# calls. POST with a pageUri body. The exact api version (/api/3 vs /api/4) and
-# body shape are best-guess; the relay interceptor logs the real call on the
-# first India run — look for "[fm-interceptor]" lines and update if different.
-_FM_SEARCH_URL = _FK_DOMAIN + "/api/4/page/fetch"
+# Search: confirmed from fm_search.txt / fm_search_2.txt DevTools cURL exports.
+_FM_SEARCH_URL = _FK_API_DOMAIN + "/api/4/page/fetch?cacheFirst=false"
 _FM_SEARCH_MARKETPLACE = "HYPERLOCAL"
+_FM_SEARCH_STORE = "search.flipkart.com"
 
-# Cart endpoint (best-guess — update from interceptor logs if needed).
-_FM_CART_URL = _FK_DOMAIN + "/api/1/cart/add"
+# Cart endpoint confirmed from fm_add_1.txt / fm_add_2.txt.
+_FM_CART_URL = _FK_API_DOMAIN + "/api/5/cart/browse"
 
 # Headers sent by the Flipkart web app on every request.
 _WEB_UA = (
-    "Mozilla/5.0 (Linux; Android 14; Pixel 8) "
+    "Mozilla/5.0 (Linux; Android 13; Pixel 7) "
     "AppleWebKit/537.36 (KHTML, like Gecko) "
-    "Chrome/131.0.6778.135 Mobile Safari/537.36"
+    "Chrome/148.0.0.0 Mobile Safari/537.36"
 )
+_X_USER_AGENT = f"{_WEB_UA} FKUA/msite/0.0.3/msite/Mobile"
 _CLIENT_HINTS = {
-    "Sec-CH-UA": '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"',
-    "Sec-CH-UA-Mobile": "?1",
-    "Sec-CH-UA-Platform": '"Android"',
+    "sec-ch-ua": '"Chromium";v="148", "Google Chrome";v="148", "Not/A)Brand";v="99"',
+    "sec-ch-ua-mobile": "?1",
+    "sec-ch-ua-platform": '"Android"',
 }
 
 
@@ -103,6 +107,9 @@ def _get_fm_session(user_id: str) -> dict:
     flid = bag.get("flid", "")
     t_tok = bag.get("t", "")        # Flipkart "T" session token
     sn = bag.get("sn", "")
+    at_tok = bag.get("at", "")
+    rt_tok = bag.get("rt", "")
+    ulsn = bag.get("ulsn", "")
 
     # Try to find a delivery pincode from any stored blob.
     pincode = _hunt_pincode(local_storage, raw_cookies)
@@ -112,6 +119,9 @@ def _get_fm_session(user_id: str) -> dict:
         "local_storage": local_storage,
         "flid": flid,
         "t_token": t_tok,
+        "at_token": at_tok,
+        "rt_token": rt_tok,
+        "ulsn": ulsn,
         "sn": sn,
         "pincode": pincode,
     }
@@ -201,19 +211,20 @@ def _hunt_pincode(local_storage: dict, raw_cookies: dict) -> str:
 def is_session_valid(user_id: str) -> bool:
     """True when a Flipkart session has been explicitly connected.
 
-    Primary signal: flid cookie (Flipkart user identity, definitive).
-    Fallback: the session has a 'T' cookie (Flipkart session JWT) with a
-    value longer than 20 chars — short/absent T = guest/no-auth; long T = a
-    real browser session was captured. This prevents Akamai-only cookie sets
-    (captured during a nav timeout) from being treated as valid sessions.
+    Primary signal: flid cookie (Flipkart user identity, definitive when the
+    browser exposes it). The June 2026 DevTools captures do not include flid,
+    but do include JWT-length T / ULSN / at / rt cookies. Treat any one of
+    those long auth tokens as a connected session while still rejecting short
+    guest/navigation cookie sets captured during a timeout.
     """
     sess = _get_fm_session(user_id)
     if sess.get("flid"):
         return True
-    # T cookie present with a JWT-length value → real session was captured.
-    # (Guest sessions may also have T, but the value is typically very short.)
-    t_val = sess.get("t_token", "")
-    return bool(t_val and len(t_val) > 20)
+    for key in ("t_token", "ulsn", "at_token", "rt_token"):
+        val = sess.get(key, "")
+        if val and len(val) > 20:
+            return True
+    return False
 
 
 def session_health(user_id: str) -> dict:
@@ -239,34 +250,140 @@ def _cookie_header(cookies: dict) -> str:
 
 def _api_headers(sess: dict) -> dict:
     h = {
-        "accept": "application/json",
-        "accept-language": "en-IN,en;q=0.9",
-        "content-type": "application/json",
-        "origin": _FK_DOMAIN,
-        "referer": BASE_URL + "/",
-        "user-agent": _WEB_UA,
+        "Accept": "*/*",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Content-Type": "application/json",
+        "Origin": _FK_DOMAIN,
+        "Referer": BASE_URL + "/",
+        "Sec-Fetch-Dest": "empty",
+        "Sec-Fetch-Mode": "cors",
+        "Sec-Fetch-Site": "same-site",
+        "User-Agent": _WEB_UA,
+        "X-User-Agent": _X_USER_AGENT,
+        "flipkart_secure": "true",
         "cookie": _cookie_header(sess.get("cookies") or {}),
         **_CLIENT_HINTS,
     }
-    # Pass pincode as a header if we have it — Flipkart uses this to route to
-    # the correct hyperlocal dark store.
-    pin = sess.get("pincode", "")
-    if pin:
-        h["x-pincode"] = pin
     return h
 
 
 # ── Search ─────────────────────────────────────────────────────────────────────
+
+def _request_id() -> str:
+    return uuid.uuid4().hex[:16]
+
+
+def _search_page_uri(query: str) -> str:
+    return (
+        f"/hyperlocal/pr?q={quote(query, safe='')}"
+        f"&marketplace={_FM_SEARCH_MARKETPLACE}"
+        f"&sid={_FM_SEARCH_STORE}"
+        f"&as-show=on"
+    )
+
+
+def _location_context(sess: dict) -> dict:
+    pin = str(sess.get("pincode") or "").strip()
+    if not re.fullmatch(r"\d{6}", pin):
+        return {}
+    return {"pincode": int(pin), "changed": False}
+
+
+def _text_value(value) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value.strip()
+    if isinstance(value, (int, float)):
+        return str(value)
+    if isinstance(value, dict):
+        for k in ("text", "value", "title", "subtitle", "name"):
+            got = _text_value(value.get(k))
+            if got:
+                return got
+    return ""
+
+
+def _nested(obj: dict, *path: str):
+    cur = obj
+    for key in path:
+        if not isinstance(cur, dict):
+            return None
+        cur = cur.get(key)
+    return cur
+
+
+def _first_text(*values) -> str:
+    for value in values:
+        got = _text_value(value)
+        if got:
+            return got
+    return ""
+
+
+def _num_value(value) -> float:
+    if value is None:
+        return 0.0
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        s = value.replace(",", "")
+        m = re.search(r"\d+(?:\.\d+)?", s)
+        return float(m.group(0)) if m else 0.0
+    if isinstance(value, dict):
+        for key in ("value", "decimalValue", "amount", "displayValue", "text"):
+            got = _num_value(value.get(key))
+            if got:
+                return got
+    return 0.0
+
+
+def _image_url(obj: dict) -> str:
+    candidates = [
+        obj.get("imageUrl"), obj.get("image_url"), obj.get("image"),
+        _nested(obj, "media", "imageUrl"), _nested(obj, "media", "image"),
+    ]
+    for source in (obj.get("images"), _nested(obj, "media", "images"),
+                   obj.get("imageUrls")):
+        if isinstance(source, list):
+            candidates.extend(source)
+        elif source:
+            candidates.append(source)
+
+    for item in candidates:
+        if isinstance(item, str) and item.strip():
+            return item.strip()
+        if isinstance(item, dict):
+            got = _first_text(item.get("url"), item.get("imageUrl"),
+                              item.get("src"), item.get("value"))
+            if got:
+                return got
+    return ""
+
+
+def _listing_id(obj: dict, parent: dict) -> str:
+    return _first_text(
+        obj.get("listingId"), obj.get("listing_id"), obj.get("lid"),
+        parent.get("listingId"), parent.get("listing_id"), parent.get("lid"),
+        _nested(obj, "listingInfo", "listingId"),
+        _nested(obj, "listingInfo", "value", "listingId"),
+        _nested(parent, "listingInfo", "listingId"),
+        _nested(parent, "listingInfo", "value", "listingId"),
+    )
+
 
 def _extract_product(obj: dict) -> dict | None:
     """Map one Flipkart product dict to the canonical shape.
 
     Flipkart's BFF page response nests products deep inside widget trees;
     this function is called for any dict that looks like a product listing.
-    Accepts two common field-set variants (productInfo.value envelope vs flat).
+    Accepts productInfo.value envelopes, flat product dicts, and nested
+    titles/pricing/media fields seen in Flipkart page widgets.
     """
     if not isinstance(obj, dict):
         return None
+
+    parent = obj
 
     # Variant A: productInfo.value envelope (common in listing widgets)
     if "productInfo" in obj:
@@ -278,40 +395,49 @@ def _extract_product(obj: dict) -> dict | None:
         obj = inner
 
     # Variant B: top-level or already-unwrapped product dict
-    pid = str(obj.get("id") or obj.get("productId") or obj.get("product_id") or "")
+    pid = _first_text(obj.get("id"), obj.get("productId"),
+                      obj.get("product_id"), parent.get("productId"))
     if not pid:
         return None
 
-    title = (
-        obj.get("title") or obj.get("name") or obj.get("productTitle") or ""
+    title = _first_text(
+        obj.get("title"), obj.get("name"), obj.get("productTitle"),
+        _nested(obj, "titles", "title"),
+        _nested(obj, "titles", "productTitle"),
+        _nested(obj, "title", "text"),
     )
     if not title:
         return None
 
     # Pricing: may be in a nested "pricing" dict or flat fields
     pricing = obj.get("pricing") or {}
-    final_p = pricing.get("finalPrice") or {}
-    mrp_p = pricing.get("mrp") or {}
-
-    sale = float(final_p.get("value") or obj.get("finalPrice") or
-                 obj.get("sale_price") or obj.get("offerPrice") or 0)
-    mrp = float(mrp_p.get("value") or obj.get("mrp") or obj.get("price") or sale)
+    sale = (
+        _num_value(pricing.get("finalPrice")) or
+        _num_value(pricing.get("sellingPrice")) or
+        _num_value(obj.get("finalPrice")) or
+        _num_value(obj.get("sale_price")) or
+        _num_value(obj.get("offerPrice"))
+    )
+    mrp = (
+        _num_value(pricing.get("mrp")) or
+        _num_value(obj.get("mrp")) or
+        _num_value(obj.get("price")) or
+        sale
+    )
     if sale <= 0 and mrp <= 0:
         return None
     if sale <= 0:
         sale = mrp
 
     # Unit/size
-    unit = (
-        obj.get("packSize") or obj.get("packType") or obj.get("unit") or
-        obj.get("quantity") or ""
+    unit = _first_text(
+        obj.get("packSize"), obj.get("packType"), obj.get("unit"),
+        obj.get("quantity"), _nested(obj, "titles", "subtitle"),
+        _nested(obj, "attributes", "packSize"),
     )
 
-    # Image URL
-    images = obj.get("images") or []
-    img_url = ""
-    if images and isinstance(images[0], dict):
-        img_url = images[0].get("url") or ""
+    img_url = _image_url(obj)
+    listing_id = _listing_id(obj, parent)
 
     return {
         "name": str(title)[:120],
@@ -320,7 +446,8 @@ def _extract_product(obj: dict) -> dict | None:
         "unit": str(unit),
         "image_url": img_url,
         "product_id": pid,
-        "store_product_id": pid,
+        "store_product_id": listing_id or pid,
+        "listing_id": listing_id,
         "app": APP_NAME,
         "app_name": DISPLAY_NAME,
     }
@@ -329,10 +456,10 @@ def _extract_product(obj: dict) -> dict | None:
 def _parse_response(data) -> list[dict]:
     """Recursively walk a Flipkart BFF JSON response and extract products.
 
-    Flipkart nests products across several different widget/slot shapes. Rather
-    than hard-coding one path we BFS every dict that might be a product
-    (has 'id'/'productId' AND 'title'/'name' AND 'pricing'/price fields) and
-    collect up to 8. This handles minor schema changes across builds.
+    Flipkart nests products across several different widget/slot shapes, and
+    the available DevTools cURL exports do not include response bodies. Rather
+    than hard-coding one unverified path, walk every dict and let
+    _extract_product() accept only complete product/listing records.
     """
     products: list[dict] = []
     seen: set[str] = set()
@@ -341,19 +468,10 @@ def _parse_response(data) -> list[dict]:
         if depth > 15 or len(products) >= 8:
             return
         if isinstance(obj, dict):
-            # Test if this looks like a product
-            has_id = bool(obj.get("id") or obj.get("productId")
-                          or obj.get("product_id") or "productInfo" in obj)
-            has_name = bool(obj.get("title") or obj.get("name")
-                            or obj.get("productTitle"))
-            has_price = bool(obj.get("pricing") or obj.get("finalPrice")
-                             or obj.get("sale_price") or obj.get("offerPrice")
-                             or obj.get("mrp") or obj.get("price"))
-            if has_id and has_name and has_price:
-                p = _extract_product(obj)
-                if p and p["product_id"] not in seen:
-                    seen.add(p["product_id"])
-                    products.append(p)
+            p = _extract_product(obj)
+            if p and p["product_id"] not in seen:
+                seen.add(p["product_id"])
+                products.append(p)
             for v in obj.values():
                 _walk(v, depth + 1)
         elif isinstance(obj, list):
@@ -367,14 +485,8 @@ def _parse_response(data) -> list[dict]:
 async def search_item_api(user_id: str, query: str) -> list[dict]:
     """Search Flipkart Minutes. Returns [] on any failure.
 
-    POSTs to Flipkart's web BFF page-fetch endpoint (www.flipkart.com/api/…)
-    with a pageUri pointing at the hyperlocal search page. Logs the full
-    top-level response structure on the first run (when no products are found)
-    so the correct endpoint/parser can be confirmed and refined.
-
-    NOTE: endpoint path + body shape are best-guess and the API is geo-restricted
-          to India. Check server.log for "[fm]" / "[fm-interceptor]" lines after
-          the first live run and update _FM_SEARCH_URL / the body if needed.
+    POSTs to the confirmed Rome BFF page-fetch endpoint with the same
+    hyperlocal /hyperlocal/pr pageUri shape captured from Flipkart web.
     """
     sess = _get_fm_session(user_id)
     if not is_session_valid(user_id):
@@ -384,12 +496,22 @@ async def search_item_api(user_id: str, query: str) -> list[dict]:
     print(f"\n[fm] === SEARCH: '{query}' (pincode={sess.get('pincode') or 'MISSING'}) ===")
     t_start = time.time()
 
-    page_uri = (
-        f"/search?q={quote(query, safe='')}"
-        f"&marketplace={_FM_SEARCH_MARKETPLACE}"
-        f"&otracker=search"
-    )
-    body = {"pageUri": page_uri, "pageContext": {}}
+    page_uri = _search_page_uri(query)
+    body = {
+        "pageUri": page_uri,
+        "pageContext": {
+            "trackingContext": {"context": {"eVar51": "config", "eVar61": "search"}},
+            "networkSpeed": 10000,
+        },
+        "requestContext": {
+            "type": "BROWSE_PAGE",
+            "ssid": _request_id(),
+            "sqid": _request_id(),
+        },
+    }
+    loc = _location_context(sess)
+    if loc:
+        body["locationContext"] = loc
     headers = _api_headers(sess)
 
     try:
@@ -444,10 +566,9 @@ async def search_item_api(user_id: str, query: str) -> list[dict]:
 async def add_all_to_cart_api(user_id: str, items: list[dict]) -> dict:
     """Add items to Flipkart Minutes cart.
 
-    Uses Flipkart's standard per-item cart-add endpoint. Exposed as a batch
-    API (same shape as Zepto/Instamart) for server-side cart routing.
-
-    NOTE: Cart endpoint is best-guess. Check server.log for "[fm]" lines.
+    Uses the Rome BFF /api/5/cart/browse endpoint captured from Flipkart web.
+    Exposed as a batch API (same shape as Zepto/Instamart) for server-side cart
+    routing.
     """
     if not items:
         return {"success": True, "items": []}
@@ -474,13 +595,31 @@ async def add_all_to_cart_api(user_id: str, items: list[dict]) -> dict:
                 item_results.append({"success": False, "reason": "no product_id"})
                 continue
 
+            listing_id = str(
+                item.get("listing_id") or item.get("listingId") or
+                item.get("store_product_id") or pid
+            )
+            page_uri = item.get("page_uri") or _search_page_uri(
+                str(item.get("search_query") or item.get("name") or "")
+            )
             body = {
-                "item": {
-                    "productId": pid,
-                    "quantity": qty,
-                    "actionType": "ADD",
-                    "source": "search",
-                }
+                "browseContext": {
+                    "marketplace": _FM_SEARCH_MARKETPLACE,
+                    "listings": [listing_id],
+                    "store": _FM_SEARCH_STORE,
+                },
+                "browseCartContext": {
+                    "cartContext": {
+                        listing_id: {
+                            "productId": pid,
+                            "quantity": qty,
+                            "cashifyDiscountApplied": False,
+                            "vulcanDiscountApplied": False,
+                        },
+                    },
+                    "pageType": "SearchPage",
+                    "pageUri": page_uri,
+                },
             }
             try:
                 resp = await client.post(
@@ -489,7 +628,7 @@ async def add_all_to_cart_api(user_id: str, items: list[dict]) -> dict:
                 if resp.status_code in (200, 201):
                     ok_any = True
                     item_results.append({"success": True, "count_added": qty})
-                    print(f"[fm] cart add OK pid={pid} qty={qty}")
+                    print(f"[fm] cart add OK pid={pid} listing={listing_id} qty={qty}")
                 else:
                     print(f"[fm] cart add HTTP {resp.status_code} "
                           f"pid={pid} body={resp.text[:200]!r}")

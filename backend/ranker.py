@@ -583,6 +583,7 @@ def build_carts_from_comparison(comparison: list) -> dict:
             "count": count,
             "product_id": prod.get("product_id"),
             "store_product_id": prod.get("store_product_id", ""),
+            "listing_id": prod.get("listing_id") or prod.get("store_product_id", ""),
             "fc_id": prod.get("fc_id", ""),
             "search_query": entry["search_query"],
             "matched_name": prod.get("name", ""),

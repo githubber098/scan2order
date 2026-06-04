@@ -8,7 +8,8 @@ No network. Covers:
   - _extract_product  (flat + productInfo.value envelope, reject paths)
   - _parse_response   (nested widgets, envelope, empty, dedupe, 8-item cap)
   - search_item_api   (mocked httpx: no-session, 200+products, 200-empty, 302,
-                       401, exception; request construction incl. x-pincode)
+                       401, exception; Rome BFF request construction incl.
+                       locationContext pincode)
   - add_all_to_cart_api (mocked httpx: empty, no-session, all-ok, mixed, no-pid)
 
 The live search/cart endpoints are geo-restricted to India and can only be
@@ -162,6 +163,19 @@ class TestSession:
         _connect(user_id)
         assert fm.is_session_valid(user_id) is True
 
+    @pytest.mark.parametrize("cookie_name", ["T", "ULSN", "at", "rt"])
+    def test_valid_with_captured_auth_cookie_without_flid(
+            self, clean_db, user_id, cookie_name):
+        _connect(user_id, cookies={
+            cookie_name: "fake-" + cookie_name.lower() + "-auth-token-" + "x" * 30,
+            "SN": "1",
+        })
+        assert fm.is_session_valid(user_id) is True
+
+    def test_short_guest_token_without_flid_is_invalid(self, clean_db, user_id):
+        _connect(user_id, cookies={"T": "short", "SN": "1"})
+        assert fm.is_session_valid(user_id) is False
+
     def test_health_warns_when_no_pincode(self, clean_db, user_id):
         _connect(user_id)  # flid present, no address
         h = fm.session_health(user_id)
@@ -216,6 +230,24 @@ class TestExtractProduct:
         p = fm._extract_product(obj)
         assert p["product_id"] == "P2" and p["name"] == "Milk 1L"
         assert p["sale_price"] == 62.0
+
+    def test_nested_titles_and_listing_id(self):
+        obj = {
+            "listingId": "LSTP4",
+            "productInfo": {"value": {
+                "id": "P4",
+                "titles": {"title": "Tomato Local", "subtitle": "500 g"},
+                "pricing": {"finalPrice": {"decimalValue": "28.00"},
+                            "mrp": {"displayValue": "₹32"}},
+                "media": {"images": [{"url": "http://img/4"}]},
+            }},
+        }
+        p = fm._extract_product(obj)
+        assert p["product_id"] == "P4"
+        assert p["store_product_id"] == "LSTP4"
+        assert p["listing_id"] == "LSTP4"
+        assert p["unit"] == "500 g"
+        assert p["sale_price"] == 28.0 and p["price"] == 32.0
 
     def test_sale_falls_back_to_mrp(self):
         obj = {"id": "P3", "title": "X", "mrp": 50}
@@ -290,10 +322,17 @@ class TestSearchApi:
         out = await fm.search_item_api(user_id, "amul butter")
         assert len(out) == 1
         assert out[0]["product_id"] == "P1" and out[0]["sale_price"] == 57.0
-        # Request construction: POST with pincode header + marketplace in pageUri.
+        # Request construction: POST to the confirmed Rome BFF endpoint, with
+        # marketplace/search store in pageUri and pincode in locationContext.
         post = cap["posts"][0]
-        assert post["headers"].get("x-pincode") == "560034"
+        assert post["url"] == fm._FM_SEARCH_URL
+        assert post["headers"].get("flipkart_secure") == "true"
+        assert "FKUA/msite" in post["headers"].get("X-User-Agent", "")
+        assert "x-pincode" not in post["headers"]
+        assert post["json"]["locationContext"] == {"pincode": 560034, "changed": False}
         assert "marketplace=HYPERLOCAL" in post["json"]["pageUri"]
+        assert "sid=search.flipkart.com" in post["json"]["pageUri"]
+        assert post["json"]["pageUri"].startswith("/hyperlocal/pr?")
         assert "amul%20butter" in post["json"]["pageUri"] or "amul+butter" in post["json"]["pageUri"]
 
     async def test_200_empty_body(self, clean_db, user_id, monkeypatch):
@@ -336,12 +375,19 @@ class TestCartApi:
         cap = _install(monkeypatch, post_resps=[_FakeResp(200, {})])
         res = await fm.add_all_to_cart_api(
             user_id,
-            [{"product_id": "P1", "count": 2}, {"product_id": "P2", "count": 1}],
+            [{"product_id": "P1", "listing_id": "LSTP1", "count": 2},
+             {"product_id": "P2", "count": 1}],
         )
         assert res["success"] is True
         assert [i["success"] for i in res["items"]] == [True, True]
         assert res["items"][0]["count_added"] == 2
         assert len(cap["posts"]) == 2
+        post = cap["posts"][0]
+        assert post["url"] == fm._FM_CART_URL
+        assert post["json"]["browseContext"]["listings"] == ["LSTP1"]
+        cart_ctx = post["json"]["browseCartContext"]["cartContext"]["LSTP1"]
+        assert cart_ctx["productId"] == "P1"
+        assert cart_ctx["quantity"] == 2
 
     async def test_mixed_success_and_failure(self, clean_db, user_id, monkeypatch):
         _connect(user_id)

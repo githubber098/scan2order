@@ -537,7 +537,10 @@
       const items = d.items || [];
       if (!items.length) { if (status) status.textContent = "No items found. Try a clearer, well-lit photo."; return; }
       const ta = document.getElementById("items");
-      if (ta) ta.value = items.join("\n");
+      if (ta) {
+        ta.value = items.join("\n");
+        ta.dispatchEvent(new Event("input", { bubbles: true }));
+      }
       if (status) status.textContent = "✓ Found " + items.length + " item" + (items.length===1?"":"s");
     } catch (e) {
       if (e.name === "AbortError") { if (status) status.textContent = "Scan cancelled."; }

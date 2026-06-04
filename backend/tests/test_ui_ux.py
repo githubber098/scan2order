@@ -5,10 +5,11 @@ Covers:
   - GET /         → HTML response with expected content
   - GET /health   → status:ok + version field
   - GET /api/version
-  - GET /api/apps → all three stores present
+  - GET /api/apps → store registry is present
   - GET /api/auth/status/{user_id} → correct shape for new / connected users
 """
 
+import auth
 import pytest
 
 
@@ -102,6 +103,25 @@ class TestAuthStatus:
         assert "bigbasket" in cs
         assert "blinkit" in cs
         assert "zepto" in cs
+
+    def test_compare_header_counts_fm_connected_even_when_unhealthy(
+            self, client, clean_db, user_id, bl_cookies, zepto_cookies):
+        from storage import user_store
+
+        user_store.connect_store(user_id, "blinkit", bl_cookies)
+        user_store.connect_store(user_id, "zepto", zepto_cookies)
+        user_store.connect_store(user_id, "flipkart_minutes", {
+            "at": "fake-flipkart-at-token-" + "x" * 30,
+            "SN": "1",
+        })
+        client.cookies.set(auth.COOKIE_NAME, auth.create_session_token(user_id))
+
+        status = client.get(f"/api/auth/status/{user_id}").json()["connected_stores"]
+        assert status["flipkart_minutes"]["connected"] is True
+        assert status["flipkart_minutes"]["healthy"] is False
+
+        body = client.get("/").text
+        assert "3 stores connected" in body
 
     def test_status_includes_user_id(self, client, user_id, clean_db):
         data = client.get(f"/api/auth/status/{user_id}").json()

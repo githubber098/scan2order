@@ -119,11 +119,11 @@ const POPULAR = [
 ];
 const _SN  = { bigbasket:"BigBasket", blinkit:"Blinkit", zepto:"Zepto", instamart:"Instamart", flipkart_minutes:"Flipkart" };
 const _SFAV = {
-  bigbasket:        '/static/icons/bigbasket.svg',
+  bigbasket:        '/static/icons/bigbasket.webp',
   blinkit:          '/static/icons/blinkit.svg',
-  zepto:            '/static/icons/zepto.svg',
-  instamart:        '/static/icons/instamart.svg',
-  flipkart_minutes: '/static/icons/flipkart.svg',
+  zepto:            '/static/icons/zepto.webp',
+  instamart:        '/static/icons/swiggy.png',
+  flipkart_minutes: '/static/icons/flipkart.png',
 };
 let _shopBusy = false;
 let _debounceTimer = null;
@@ -179,20 +179,20 @@ async function shopSearch(preset){
     if (!products.length){
       if (data.login_required) {
         // No GUEST_STORE_USER_ID configured: show the sign-in CTA, not a dim text note.
-        const cta = document.getElementById(“shop-login-cta”);
-        if (cta) { cta.style.display = “”; if (window.s2o) window.s2o.paintIcons(cta); }
+        const cta = document.getElementById("shop-login-cta");
+        if (cta) { cta.style.display = ""; if (window.s2o) window.s2o.paintIcons(cta); }
       } else {
-        status.style.display = “”;
+        status.style.display = "";
         if (data.note) {
           status.textContent = data.note;
         } else if (userId) {
           // Searched connected stores but found nothing — could be legitimate OR
           // an expired session. Add a reconnect hint so the user knows what to try.
-          status.innerHTML = `No results for “<b>${_esc(q)}</b>”. `+
-            `<span style=”font-size:12px”>If this seems wrong, `+
-            `<a href=”/profile” style=”color:var(--accent2)”>check your store connections</a>.</span>`;
+          status.innerHTML = `No results for "<b>${_esc(q)}</b>". `+
+            `<span style="font-size:12px">If this seems wrong, `+
+            `<a href="/profile" style="color:var(--accent2)">check your store connections</a>.</span>`;
         } else {
-          status.textContent = `No results for “${q}”.`;
+          status.textContent = `No results for "${q}".`;
         }
       }
     } else {
@@ -345,7 +345,7 @@ document.addEventListener("DOMContentLoaded", () => {
         const warn = document.getElementById("shop-health-warn");
         if (!warn) return;
         const msgs = [];
-        const SN = {bigbasket:"BigBasket", blinkit:"Blinkit", zepto:"Zepto", instamart:"Instamart"};
+        const SN = {bigbasket:"BigBasket", blinkit:"Blinkit", zepto:"Zepto", instamart:"Instamart", flipkart_minutes:"Flipkart Minutes"};
         for (const [store, info] of Object.entries(data.connected_stores || {})) {
           if (info.connected && !info.healthy && info.reason)
             msgs.push(`${SN[store]||store}: ${info.reason}`);
