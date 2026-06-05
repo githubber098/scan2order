@@ -1729,7 +1729,10 @@ _TRENDING_QUERIES = [
     "Milk", "Bread", "Eggs", "Bananas", "Tomato", "Onion",
     "Paneer", "Curd", "Butter", "Rice", "Atta", "Dal",
     "Chicken", "Cooking Oil", "Sugar", "Tea", "Coffee",
-    "Spinach", "Potato", "Cheese",
+    "Spinach", "Potato", "Cheese", "Apple", "Orange",
+    "Cucumber", "Carrot", "Capsicum", "Ginger", "Garlic",
+    "Lemon", "Yogurt", "Maggi", "Biscuits", "Chips",
+    "Chocolate", "Ghee", "Honey", "Salt",
 ]
 # Cache: search_uid -> (timestamp, products). Avoids re-hitting the stores on
 # every Shop page load (trending changes slowly; a 10-min cache is plenty).

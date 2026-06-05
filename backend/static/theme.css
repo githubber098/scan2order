@@ -176,6 +176,8 @@ a{ color:inherit; text-decoration:none; }
   .main{ height:100vh; }
   .page{ max-width:920px; padding:34px 40px 60px; gap:20px; }
   .page.narrow{ max-width:560px; }
+  /* wide: pages that benefit from filling the viewport (e.g. Shop grid) */
+  .page.wide{ max-width:1320px; }
 }
 .nav-item{ display:none; }
 @media (min-width:860px){ .nav-item{ display:flex; } }

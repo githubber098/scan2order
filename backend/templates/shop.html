@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% set page = "shop" %}
+{% set page_class = "wide" %}
 {% block title %}Shop{% endblock %}
 
 {% block content %}
@@ -39,6 +40,7 @@
       <div class="sectiontitle">Trending now</div>
       <div id="shop-trending-skel" class="shop-grid" style="display:none"></div>
       <div id="shop-trending" class="shop-grid"></div>
+      <div id="shop-trending-sentinel" style="height:1px"></div>
     </div>
   </div>
 
@@ -71,8 +73,9 @@
   .shop-guest-note a{ color:var(--accent2); font-weight:700; }
 
   .shop-grid{ display:grid; grid-template-columns:1fr; gap:9px; }
-  @media (min-width:560px){ .shop-grid{ grid-template-columns:1fr 1fr; } }
-  @media (min-width:1100px){ .shop-grid{ grid-template-columns:1fr 1fr 1fr; } }
+  @media (min-width:520px){ .shop-grid{ grid-template-columns:1fr 1fr; } }
+  @media (min-width:860px){ .shop-grid{ grid-template-columns:1fr 1fr 1fr; } }
+  @media (min-width:1180px){ .shop-grid{ grid-template-columns:1fr 1fr 1fr 1fr; } }
 
   .pcard{ display:flex; gap:11px; padding:11px; background:var(--card);
     border:1px solid var(--card-br); border-radius:var(--radius, 14px); position:relative; }
@@ -126,9 +129,6 @@ const _SFAV = {
 };
 let _shopBusy = false;
 let _debounceTimer = null;
-let _recentTimer = null;
-const RECENT_SAVE_IDLE_MS = 1600;
-const RECENT_AUTO_MIN_CHARS = 3;
 
 function _esc(s){ const d=document.createElement("div"); d.textContent=s==null?"":s; return d.innerHTML; }
 function _attr(s){
@@ -142,14 +142,6 @@ function _pushRecent(q){
   r.unshift(q); r = r.slice(0,8);
   try { localStorage.setItem("s2o-recent", JSON.stringify(r)); } catch(_){}
   renderRecent();
-}
-function _scheduleTypedRecent(q){
-  clearTimeout(_recentTimer);
-  if (!q || q.length < RECENT_AUTO_MIN_CHARS) return;
-  _recentTimer = setTimeout(() => {
-    const input = document.getElementById("shop-q");
-    if (input && input.value.trim() === q) _pushRecent(q);
-  }, RECENT_SAVE_IDLE_MS);
 }
 function _searchChip(p){
   return `<button class="chip" type="button" data-shop-search="${_attr(p)}">${_esc(p)}</button>`;
@@ -187,10 +179,7 @@ async function shopSearch(preset, opts){
   const q = input.value.trim();
   if (!q || _shopBusy) return;
   _shopBusy = true;
-  if (opts.saveRecent) {
-    clearTimeout(_recentTimer);
-    _pushRecent(q);
-  }
+  if (opts.saveRecent) _pushRecent(q);
 
   document.getElementById("shop-reco").style.display = "none";
   const results = document.getElementById("shop-results");
@@ -347,6 +336,14 @@ async function changeQty(product, delta, foot, canAdd){
 }
 
 // ── Trending product cards (one per popular query, cached server-side) ─────
+// Cards are revealed in batches as the user scrolls (infinite-scroll feel)
+// rather than dumping all ~36 at once.
+const TRENDING_BATCH = 8;
+let _trendingAll = [];        // full product list from the server
+let _trendingShown = 0;       // how many are currently rendered
+let _trendingCanAdd = false;
+let _trendingObserver = null;
+
 async function loadTrending(){
   const wrap = document.getElementById("shop-trending-wrap");
   const skel = document.getElementById("shop-trending-skel");
@@ -358,11 +355,47 @@ async function loadTrending(){
     const prods = data.products || [];
     skel.style.display = "none"; skel.innerHTML = "";
     if (!prods.length){ wrap.style.display = "none"; return; }
-    renderProducts(prods, data.can_add, document.getElementById("shop-trending"));
+    _trendingAll = prods;
+    _trendingShown = 0;
+    _trendingCanAdd = data.can_add;
+    document.getElementById("shop-trending").innerHTML = "";
+    _revealMoreTrending();          // first batch
+    _wireTrendingObserver();
   } catch(_){
     skel.style.display = "none";
     wrap.style.display = "none";
   }
+}
+
+// Append the next batch of trending cards. Returns true if more remain.
+function _revealMoreTrending(){
+  const grid = document.getElementById("shop-trending");
+  const next = _trendingAll.slice(_trendingShown, _trendingShown + TRENDING_BATCH);
+  next.forEach((p) => grid.appendChild(_card(p, _trendingCanAdd)));
+  if (window.s2o) window.s2o.paintIcons(grid);
+  _trendingShown += next.length;
+  return _trendingShown < _trendingAll.length;
+}
+
+// Observe a sentinel below the grid; reveal the next batch when it scrolls into
+// view. Disconnects once every trending card has been shown.
+function _wireTrendingObserver(){
+  const sentinel = document.getElementById("shop-trending-sentinel");
+  if (!sentinel || !("IntersectionObserver" in window)){
+    // No IO support → just show everything.
+    while (_revealMoreTrending()) {}
+    return;
+  }
+  if (_trendingObserver) _trendingObserver.disconnect();
+  _trendingObserver = new IntersectionObserver((entries) => {
+    for (const e of entries){
+      if (e.isIntersecting){
+        const more = _revealMoreTrending();
+        if (!more){ _trendingObserver.disconnect(); _trendingObserver = null; }
+      }
+    }
+  }, { rootMargin: "300px" });   // prefetch a bit before the user reaches it
+  _trendingObserver.observe(sentinel);
 }
 
 // ── Init ─────────────────────────────────────────────────────────────────
@@ -400,7 +433,6 @@ document.addEventListener("DOMContentLoaded", () => {
     clearTimeout(_debounceTimer);
     const q = input.value.trim();
     if (!q) {
-      clearTimeout(_recentTimer);
       // Input cleared — show recommended page, hide results
       document.getElementById("shop-reco").style.display = "";
       document.getElementById("shop-results").innerHTML = "";
@@ -412,7 +444,6 @@ document.addEventListener("DOMContentLoaded", () => {
       return;
     }
     _debounceTimer = setTimeout(() => shopSearch(), 350);
-    _scheduleTypedRecent(q);
   });
   input.addEventListener("keydown", (e) => {
     if (e.key === "Enter") {
