@@ -2,8 +2,10 @@
 test_groq_rotation.py — multi-key Groq failover + OCR context-correction.
 
   - _groq_keys()  parses comma/numbered keys, de-duped, in order
-  - _groq_chat()  rotates to the next key on HTTP 429 / 401 / 403, remembers
-                  the working key, and errors only when all keys are exhausted
+  - _groq_chat()  rotates to the next key on HTTP 429 / 401 / 403 and
+                  key-specific restricted-org 400s, remembers the working key,
+                  and errors only when all keys are exhausted or a non-key
+                  failure occurs
   - _correct_items()  fixes misreads (Green Yogurt → Greek Yogurt) + drops
                   accidental duplicates, and falls back to the raw list on a
                   degenerate or failed correction
@@ -133,6 +135,42 @@ class TestGroqRotation:
                                          ["k1", "k2"], model="m", max_tokens=10)
         assert text is None
         assert "429" in err or "exhausted" in err.lower()
+
+    async def test_restricted_org_400_rotates_to_next_key(self, monkeypatch):
+        ocr._groq_key_idx = 0
+        calls = []
+
+        def handler(headers, body):
+            auth = headers.get("Authorization", "")
+            calls.append(auth)
+            if auth == "Bearer k1":
+                return _FakeResp(
+                    400,
+                    text='{"error":{"message":"Organization has been restricted."}}',
+                )
+            return _FakeResp(200, content="ok")
+        _install_fake_httpx(monkeypatch, handler)
+
+        text, err = await ocr._groq_chat([{"role": "user", "content": "hi"}],
+                                         ["k1", "k2"], model="m", max_tokens=10)
+        assert text == "ok" and err == ""
+        assert calls == ["Bearer k1", "Bearer k2"]
+        assert ocr._groq_key_idx == 1
+
+    async def test_generic_400_does_not_rotate(self, monkeypatch):
+        ocr._groq_key_idx = 0
+        calls = []
+
+        def handler(headers, body):
+            calls.append(headers.get("Authorization"))
+            return _FakeResp(400, text="bad request")
+        _install_fake_httpx(monkeypatch, handler)
+
+        text, err = await ocr._groq_chat([{"role": "user", "content": "hi"}],
+                                         ["k1", "k2"], model="m", max_tokens=10)
+        assert text is None
+        assert "400" in err
+        assert len(calls) == 1
 
     async def test_non_quota_error_does_not_rotate(self, monkeypatch):
         ocr._groq_key_idx = 0

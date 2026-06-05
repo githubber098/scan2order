@@ -117,7 +117,7 @@ class TestGroqKeysLive:
         print("  Summary")
         print(_SEP)
         for e in statuses:
-            icon   = "✓" if e["ok"] else ("⚠" if e["warn"] else "✗")
+            icon   = "⚠" if e["warn"] else ("✓" if e["ok"] else "✗")
             status = e["status"]
             suffix = e["suffix"]
             reason = f"  →  {e['reason']}" if e["reason"] else ""

@@ -303,6 +303,15 @@ _GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
 _groq_key_idx = 0
 
 
+def _groq_key_specific_400(body: str) -> bool:
+    """True for Groq HTTP 400 errors that are tied to the current key/org."""
+    msg = (body or "").lower()
+    return (
+        "organization has been restricted" in msg
+        or ("organization" in msg and "restricted" in msg)
+    )
+
+
 def _groq_keys() -> list[str]:
     """All configured Groq API keys, in priority order, de-duplicated.
 
@@ -343,9 +352,11 @@ async def _groq_chat(messages: list, keys: list[str], *, model: str,
     """POST a chat-completion to Groq, rotating API keys on quota/auth failures.
 
     Tries keys starting at the last-known-good index and wrapping around; a 429
-    (rate-limited / daily quota exhausted) or 401/403 (invalid key) rotates to
-    the next key, any other failure stops (another key won't fix a 5xx/network
-    error). Returns (content, "") on success or (None, error_message).
+    (rate-limited / daily quota exhausted), 401/403 (invalid key), or a
+    key-specific 400 such as a restricted organization rotates to the next key.
+    Other failures stop because another key is unlikely to fix payload/model,
+    5xx, or network errors. Returns (content, "") on success or
+    (None, error_message).
     """
     global _groq_key_idx
     n = len(keys)
@@ -372,9 +383,11 @@ async def _groq_chat(messages: list, keys: list[str], *, model: str,
                     if off and n > 1:
                         print(f"[ocr] groq: rotated to key #{idx + 1}/{n}")
                     return resp.json()["choices"][0]["message"]["content"].strip(), ""
-                if resp.status_code in (429, 401, 403):
+                if resp.status_code in (429, 401, 403) or (
+                    resp.status_code == 400 and _groq_key_specific_400(resp.text)
+                ):
                     last_err = f"Groq HTTP {resp.status_code} on key #{idx + 1}/{n}"
-                    print(f"[ocr] {last_err} (exhausted/invalid) → rotating to next key")
+                    print(f"[ocr] {last_err} (exhausted/invalid/restricted) → rotating to next key")
                     continue
                 last_err = f"Groq HTTP {resp.status_code}: {resp.text[:160]}"
                 print(f"[ocr] {last_err}")
