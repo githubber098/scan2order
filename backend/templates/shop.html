@@ -73,9 +73,12 @@
   .shop-guest-note a{ color:var(--accent2); font-weight:700; }
 
   .shop-grid{ display:grid; grid-template-columns:1fr; gap:9px; }
-  @media (min-width:520px){ .shop-grid{ grid-template-columns:1fr 1fr; } }
-  @media (min-width:860px){ .shop-grid{ grid-template-columns:1fr 1fr 1fr; } }
-  @media (min-width:1180px){ .shop-grid{ grid-template-columns:1fr 1fr 1fr 1fr; } }
+  @media (min-width:520px){ .shop-grid{ grid-template-columns:repeat(2,1fr); } }
+  @media (min-width:860px){ .shop-grid{ grid-template-columns:repeat(3,1fr); } }
+  @media (min-width:1180px){ .shop-grid{ grid-template-columns:repeat(4,1fr); } }
+  @media (min-width:1500px){ .shop-grid{ grid-template-columns:repeat(5,1fr); } }
+  @media (min-width:1900px){ .shop-grid{ grid-template-columns:repeat(6,1fr); } }
+  @media (min-width:2400px){ .shop-grid{ grid-template-columns:repeat(7,1fr); } }
 
   .pcard{ display:flex; gap:11px; padding:11px; background:var(--card);
     border:1px solid var(--card-br); border-radius:var(--radius, 14px); position:relative; }
@@ -377,8 +380,9 @@ function _revealMoreTrending(){
   return _trendingShown < _trendingAll.length;
 }
 
-// Observe a sentinel below the grid; reveal the next batch when it scrolls into
-// view. Disconnects once every trending card has been shown.
+// Observe a sentinel below the grid; reveal batches when it scrolls into view.
+// Disconnects once every trending card has been shown.
+const _TRENDING_MARGIN = 600;    // px of prefetch below the viewport
 function _wireTrendingObserver(){
   const sentinel = document.getElementById("shop-trending-sentinel");
   if (!sentinel || !("IntersectionObserver" in window)){
@@ -388,14 +392,34 @@ function _wireTrendingObserver(){
   }
   if (_trendingObserver) _trendingObserver.disconnect();
   _trendingObserver = new IntersectionObserver((entries) => {
-    for (const e of entries){
-      if (e.isIntersecting){
-        const more = _revealMoreTrending();
-        if (!more){ _trendingObserver.disconnect(); _trendingObserver = null; }
-      }
-    }
-  }, { rootMargin: "300px" });   // prefetch a bit before the user reaches it
+    if (entries.some(e => e.isIntersecting)) _pumpTrending();
+  }, { rootMargin: _TRENDING_MARGIN + "px" });
   _trendingObserver.observe(sentinel);
+  // Pump once immediately in case the first batch didn't fill past the margin
+  // (e.g. a very wide grid where 8 cards occupy barely one row) — otherwise the
+  // sentinel stays in view and IO never re-fires, stalling the reveal.
+  _pumpTrending();
+}
+
+// Reveal batches until the sentinel is pushed below the viewport (+ prefetch
+// margin) or every card is shown. IntersectionObserver only fires on enter/leave
+// transitions, so when a revealed batch doesn't move the sentinel out of view we
+// must keep revealing in a loop here rather than waiting for an event that won't
+// come. Re-fires on the next scroll once the sentinel re-enters.
+function _pumpTrending(){
+  const sentinel = document.getElementById("shop-trending-sentinel");
+  let guard = 0;
+  while (guard++ < 200){
+    const more = _revealMoreTrending();
+    if (!more){
+      if (_trendingObserver){ _trendingObserver.disconnect(); _trendingObserver = null; }
+      break;
+    }
+    // Stop once the sentinel sits beyond the viewport + prefetch margin; the
+    // observer will re-call us when the user scrolls it back into range.
+    const rect = sentinel.getBoundingClientRect();
+    if (rect.top > window.innerHeight + _TRENDING_MARGIN) break;
+  }
 }
 
 // ── Init ─────────────────────────────────────────────────────────────────
