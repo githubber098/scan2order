@@ -179,6 +179,34 @@ class TestShopTrending:
         assert data["can_add"] is False
         assert data["products"] == []
 
+    def test_trending_paginated_offset_limit_and_has_more(
+            self, client, mock_stores, connected_user_all, monkeypatch):
+        server._trending_cache.clear()
+        # Three queries; the store mocks only match "amul butter".
+        monkeypatch.setattr(server, "_TRENDING_QUERIES",
+                            ["amul butter", "amul butter", "amul butter"])
+        _login(client, connected_user_all)
+        # Page 1: offset 0, limit 2 → covers 2 of 3 queries → has_more True.
+        r = client.get("/api/shop/trending?offset=0&limit=2")
+        d = r.json()
+        assert d["offset"] == 0 and d["next_offset"] == 2
+        assert d["has_more"] is True
+        # Page 2: offset 2, limit 2 → covers the last query → has_more False.
+        r2 = client.get("/api/shop/trending?offset=2&limit=2")
+        d2 = r2.json()
+        assert d2["offset"] == 2 and d2["next_offset"] == 4
+        assert d2["has_more"] is False
+
+    def test_trending_offset_past_end_returns_empty(
+            self, client, mock_stores, connected_user_all, monkeypatch):
+        server._trending_cache.clear()
+        monkeypatch.setattr(server, "_TRENDING_QUERIES", ["amul butter"])
+        _login(client, connected_user_all)
+        r = client.get("/api/shop/trending?offset=50&limit=12")
+        d = r.json()
+        assert d["products"] == []
+        assert d["has_more"] is False
+
 
 # ── Compare guest restriction ────────────────────────────────────────────────────
 

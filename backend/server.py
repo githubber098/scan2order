@@ -1724,23 +1724,42 @@ async def _add_items_to_store(user_id: str, store_name: str,
     return app_results
 
 
-# Curated trending queries shown as product cards on the Shop landing.
+# Curated query pool for the Shop "Trending now" feed. The feed is PAGINATED:
+# the client requests slices of this list (offset/limit) and keeps appending as
+# the user scrolls (endless feed), so a large pool gives a long scroll. Each
+# query yields one representative (cheapest-per-unit) product.
 _TRENDING_QUERIES = [
-    "Milk", "Bread", "Eggs", "Bananas", "Tomato", "Onion",
-    "Paneer", "Curd", "Butter", "Rice", "Atta", "Dal",
-    "Chicken", "Cooking Oil", "Sugar", "Tea", "Coffee",
-    "Spinach", "Potato", "Cheese", "Apple", "Orange",
-    "Cucumber", "Carrot", "Capsicum", "Ginger", "Garlic",
-    "Lemon", "Yogurt", "Maggi", "Biscuits", "Chips",
-    "Chocolate", "Ghee", "Honey", "Salt",
+    # everyday staples
+    "Milk", "Bread", "Eggs", "Butter", "Paneer", "Curd", "Cheese", "Yogurt",
+    "Rice", "Atta", "Maida", "Dal", "Sugar", "Salt", "Ghee", "Cooking Oil",
+    "Tea", "Coffee", "Honey", "Jam", "Peanut Butter", "Tomato Ketchup",
+    # vegetables
+    "Tomato", "Onion", "Potato", "Spinach", "Carrot", "Cucumber", "Capsicum",
+    "Cauliflower", "Cabbage", "Brinjal", "Lady Finger", "Green Peas", "Beans",
+    "Mushroom", "Ginger", "Garlic", "Green Chilli", "Coriander", "Lemon",
+    # fruits
+    "Banana", "Apple", "Orange", "Grapes", "Pomegranate", "Watermelon",
+    "Papaya", "Mango", "Pineapple", "Kiwi", "Strawberry",
+    # packaged / snacks
+    "Maggi", "Noodles", "Pasta", "Biscuits", "Chips", "Chocolate", "Namkeen",
+    "Cornflakes", "Oats", "Poha", "Suji", "Besan", "Vermicelli",
+    # dry fruits & spices
+    "Almonds", "Cashew", "Raisins", "Walnuts", "Dates",
+    "Turmeric", "Red Chilli Powder", "Garam Masala", "Black Pepper", "Jeera",
+    # beverages & dairy extras
+    "Soft Drink", "Juice", "Buttermilk", "Lassi",
+    # household & personal care
+    "Soap", "Shampoo", "Toothpaste", "Detergent", "Dish Wash", "Hand Wash",
+    "Toilet Cleaner", "Tissue Paper", "Floor Cleaner",
 ]
-# Cache: search_uid -> (timestamp, products). Avoids re-hitting the stores on
-# every Shop page load (trending changes slowly; a 10-min cache is plenty).
+# Cache: (search_uid, offset, limit) -> (timestamp, products). Each feed page is
+# cached for 10 minutes so scrolling back/forth doesn't re-hit the stores.
 _trending_cache: dict = {}
 
 
-async def _trending_products(user_id: str, available: list[str]) -> list[dict]:
-    """One representative (cheapest-per-unit) product per trending query."""
+async def _trending_products(user_id: str, available: list[str],
+                             queries: list[str]) -> list[dict]:
+    """One representative (cheapest-per-unit) product per given query."""
     _search_fns = {"bigbasket": bigbasket.search_item_api,
                    "blinkit": blinkit.search_item_api,
                    "zepto": zepto.search_item_api,
@@ -1771,7 +1790,7 @@ async def _trending_products(user_id: str, available: list[str]) -> list[dict]:
             best["ppu_label"] = _ppu_label(best)
         return best
 
-    results = await asyncio.gather(*[_one(t) for t in _TRENDING_QUERIES])
+    results = await asyncio.gather(*[_one(t) for t in queries])
     # Dedupe by (app, product_id) in case two queries map to the same product.
     seen: set = set()
     out: list[dict] = []
@@ -1787,33 +1806,53 @@ async def _trending_products(user_id: str, available: list[str]) -> list[dict]:
 
 
 @app.get("/api/shop/trending")
-async def api_shop_trending(request: Request):
-    """Trending product cards for the Shop landing (one per popular query).
+async def api_shop_trending(request: Request, offset: int = 0, limit: int = 12):
+    """Paginated Shop "Trending now" feed (one product per popular query).
 
-    Cached per search-account for 10 minutes so it doesn't hammer the stores on
-    every page load. Same guest rules as /api/shop/search.
+    The client requests pages (?offset=&limit=) and appends them as the user
+    scrolls (endless feed). Each page is cached per search-account for 10 minutes
+    so it doesn't hammer the stores. Same guest rules as /api/shop/search.
+
+    Returns: {products, offset, next_offset, has_more, is_guest, can_add}.
     """
     session_uid = _get_session_user(request)
     is_guest = session_uid is None
     search_uid = session_uid or _guest_store_user()
+
+    def _empty(more: bool = False):
+        return {"products": [], "is_guest": is_guest,
+                "can_add": (not is_guest) if search_uid else False,
+                "offset": offset, "next_offset": offset, "has_more": more}
+
     if not search_uid:
-        return {"products": [], "is_guest": is_guest, "can_add": False}
+        return _empty()
     available = _get_available_stores(search_uid)
     if not available:
-        return {"products": [], "is_guest": is_guest, "can_add": not is_guest}
+        return _empty()
+
+    offset = max(0, int(offset))
+    limit = max(1, min(24, int(limit)))
+    queries = _TRENDING_QUERIES[offset:offset + limit]
+    next_offset = offset + limit
+    has_more = next_offset < len(_TRENDING_QUERIES)
+    if not queries:
+        return _empty(more=False)
 
     now = time.time()
-    cached = _trending_cache.get(search_uid)
+    ckey = (search_uid, offset, limit)
+    cached = _trending_cache.get(ckey)
     if cached and now - cached[0] < 600:
         products = cached[1]
-        print(f"[shop/trending] {len(products)} products (cached) for {search_uid[:8]} "
-              f"across stores={available}")
+        print(f"[shop/trending] offset={offset} limit={limit}: {len(products)} products "
+              f"(cached) for {search_uid[:8]} has_more={has_more}")
     else:
-        products = await _trending_products(search_uid, available)
-        _trending_cache[search_uid] = (now, products)
-        print(f"[shop/trending] {len(products)} products (fresh, {len(_TRENDING_QUERIES)} queries) "
-              f"for {search_uid[:8]} across stores={available}")
-    return {"products": products, "is_guest": is_guest, "can_add": not is_guest}
+        products = await _trending_products(search_uid, available, queries)
+        _trending_cache[ckey] = (now, products)
+        print(f"[shop/trending] offset={offset} limit={limit}: {len(products)} products "
+              f"(fresh, {len(queries)} queries) for {search_uid[:8]} stores={available} "
+              f"has_more={has_more}")
+    return {"products": products, "is_guest": is_guest, "can_add": not is_guest,
+            "offset": offset, "next_offset": next_offset, "has_more": has_more}
 
 
 @app.post("/api/compare")

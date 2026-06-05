@@ -340,60 +340,72 @@ async function changeQty(product, delta, foot, canAdd){
   } catch(_){ /* keep the optimistic local state; cart page can re-sync */ }
 }
 
-// ── Trending product cards (one per popular query, cached server-side) ─────
-// Cards are revealed in batches as the user scrolls (infinite-scroll feel)
-// rather than dumping all ~36 at once.
-const TRENDING_BATCH = 8;
-let _trendingAll = [];        // full product list from the server
-let _trendingShown = 0;       // how many are currently rendered
-let _trendingCanAdd = false;
+// ── Trending feed — paginated endless scroll ──────────────────────────────
+// Instead of fetching one fixed set, the client requests pages of the server's
+// trending query pool (?offset=&limit=) and keeps appending NEW products as the
+// user scrolls, until the pool is exhausted (data.has_more === false).
+const FEED_PAGE = 12;            // products requested per page
+const _TRENDING_MARGIN = 600;    // px of prefetch below the viewport
+let _feedOffset = 0;
+let _feedHasMore = true;
+let _feedLoading = false;        // a page fetch is in flight
+let _feedCanAdd = false;
+let _feedSeen = new Set();       // (app:product_id) dedupe across pages
+let _pumping = false;            // _pumpTrending re-entry guard
 let _trendingObserver = null;
+let _trendingScroller = null;    // actual scroll container (null = window)
+let _trendingScrollHandler = null;
+let _trendingPumpQueued = false;
 
 async function loadTrending(){
   const wrap = document.getElementById("shop-trending-wrap");
   const skel = document.getElementById("shop-trending-skel");
+  const grid = document.getElementById("shop-trending");
   wrap.style.display = "";
   skel.style.display = "";
   skel.innerHTML = Array.from({length:6}, () => `<div class="skel"></div>`).join("");
+  // Reset feed state (e.g. on re-entry).
+  _feedOffset = 0; _feedHasMore = true; _feedLoading = false; _feedSeen = new Set();
+  grid.innerHTML = "";
+  const added = await _loadMoreFeed();      // first page
+  skel.style.display = "none"; skel.innerHTML = "";
+  if (!added && !grid.children.length){ wrap.style.display = "none"; return; }
+  _wireTrendingObserver();
+}
+
+// Fetch the next page and append deduped cards. Returns the number appended.
+async function _loadMoreFeed(){
+  if (_feedLoading || !_feedHasMore) return 0;
+  _feedLoading = true;
   try {
-    const data = await (await fetch("/api/shop/trending")).json();
-    const prods = data.products || [];
-    skel.style.display = "none"; skel.innerHTML = "";
-    if (!prods.length){ wrap.style.display = "none"; return; }
-    _trendingAll = prods;
-    _trendingShown = 0;
-    _trendingCanAdd = data.can_add;
-    document.getElementById("shop-trending").innerHTML = "";
-    _revealMoreTrending();          // first batch
-    _wireTrendingObserver();
+    const r = await fetch(`/api/shop/trending?offset=${_feedOffset}&limit=${FEED_PAGE}`);
+    const data = await r.json();
+    _feedCanAdd = data.can_add;
+    const grid = document.getElementById("shop-trending");
+    let added = 0;
+    for (const p of (data.products || [])){
+      const key = (p.app || "") + ":" + (p.product_id || "");
+      if (_feedSeen.has(key)) continue;     // skip a product already shown
+      _feedSeen.add(key);
+      grid.appendChild(_card(p, _feedCanAdd));
+      added++;
+    }
+    if (added && window.s2o) window.s2o.paintIcons(grid);
+    // Advance the cursor; trust the server's next_offset/has_more.
+    _feedOffset = (data.next_offset != null) ? data.next_offset : (_feedOffset + FEED_PAGE);
+    _feedHasMore = !!data.has_more;
+    return added;
   } catch(_){
-    skel.style.display = "none";
-    wrap.style.display = "none";
+    return 0;
+  } finally {
+    _feedLoading = false;
   }
 }
 
-// Append the next batch of trending cards. Returns true if more remain.
-function _revealMoreTrending(){
-  const grid = document.getElementById("shop-trending");
-  const next = _trendingAll.slice(_trendingShown, _trendingShown + TRENDING_BATCH);
-  next.forEach((p) => grid.appendChild(_card(p, _trendingCanAdd)));
-  if (window.s2o) window.s2o.paintIcons(grid);
-  _trendingShown += next.length;
-  return _trendingShown < _trendingAll.length;
-}
-
-// Reveal batches as the user scrolls. The reveal MUST work whether the page
-// scrolls on the window (mobile) or inside an inner scroll container (.main on
-// desktop is `overflow-y:auto; height:100vh`). We therefore: (a) find the real
-// scroll parent, (b) point the IntersectionObserver root at it, AND (c) attach a
-// throttled scroll listener as a belt-and-suspenders fallback. Either path calls
-// _pumpTrending(), which is idempotent and self-terminating.
-const _TRENDING_MARGIN = 600;    // px of prefetch below the viewport
-let _trendingScroller = null;    // the actual scroll container (null = window)
-let _trendingScrollHandler = null;
-let _trendingPumpQueued = false;
-
-// Nearest ancestor that actually scrolls vertically, else null (window scrolls).
+// The reveal MUST work whether the page scrolls on the window (mobile) or inside
+// an inner scroll container (.main on desktop is `overflow-y:auto; height:100vh`).
+// We find the real scroll parent, point the IntersectionObserver root at it, AND
+// attach a throttled scroll listener as a belt-and-suspenders fallback.
 function _findScrollParent(el){
   let n = el && el.parentElement;
   while (n && n !== document.body && n !== document.documentElement){
@@ -404,7 +416,6 @@ function _findScrollParent(el){
   return null;
 }
 
-// Bottom edge (viewport-relative px) below which we want content pre-filled.
 function _trendingViewportBottom(){
   return _trendingScroller
     ? _trendingScroller.getBoundingClientRect().bottom
@@ -416,8 +427,6 @@ function _wireTrendingObserver(){
   const grid = document.getElementById("shop-trending");
   _trendingScroller = _findScrollParent(grid);
 
-  // Fallback scroll listener (covers any browser/layout where IO doesn't fire
-  // on inner-container scroll). Throttled to one pump per animation frame.
   if (_trendingScrollHandler){
     (_trendingScroller || window).removeEventListener("scroll", _trendingScrollHandler);
   }
@@ -435,27 +444,29 @@ function _wireTrendingObserver(){
     }, { root: _trendingScroller || null, rootMargin: _TRENDING_MARGIN + "px" });
     _trendingObserver.observe(sentinel);
   }
-  // Pump once immediately to fill the first screen (and past the margin) so a
-  // wide/short layout doesn't stall waiting for a scroll that reveals nothing.
-  _pumpTrending();
+  _pumpTrending();   // fill the first screen past the prefetch margin
 }
 
-// Reveal batches until the sentinel is pushed beyond the viewport (+ prefetch
-// margin) or every card is shown. Self-terminating: when all cards are shown it
-// tears down the observer and scroll listener. Re-invoked on scroll/IO.
-function _pumpTrending(){
-  const sentinel = document.getElementById("shop-trending-sentinel");
-  if (!sentinel) return;
-  let guard = 0;
-  while (guard++ < 500){
-    // Already filled enough? Stop and wait for the next scroll.
-    const rect = sentinel.getBoundingClientRect();
-    if (rect.top > _trendingViewportBottom() + _TRENDING_MARGIN) return;
-    const more = _revealMoreTrending();
-    if (!more){
-      _teardownTrendingReveal();
-      return;
+// Keep loading pages until the sentinel is pushed beyond the viewport (+ prefetch
+// margin) or the pool is exhausted. Async + re-entry-guarded so overlapping
+// scroll/IO events don't double-fetch. Self-terminating: tears down on exhaustion.
+async function _pumpTrending(){
+  if (_pumping) return;
+  _pumping = true;
+  try {
+    const sentinel = document.getElementById("shop-trending-sentinel");
+    if (!sentinel) return;
+    let guard = 0;
+    while (guard++ < 100 && _feedHasMore){
+      const rect = sentinel.getBoundingClientRect();
+      if (rect.top > _trendingViewportBottom() + _TRENDING_MARGIN) break;  // filled enough
+      const added = await _loadMoreFeed();
+      if (!added && !_feedHasMore) break;
+      if (!added) break;   // transient error/empty page → wait for next scroll
     }
+    if (!_feedHasMore) _teardownTrendingReveal();
+  } finally {
+    _pumping = false;
   }
 }
 
