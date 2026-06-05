@@ -41,7 +41,7 @@ Backend is FastAPI + httpx for store API calls + Playwright only for the login r
 | Session storage | SQLite at `data/sessions.db` (default), or MySQL/MariaDB if `MYSQL_URL` is set |
 | Store API calls | httpx — no Playwright in the request path |
 | Browser login relay | Playwright headless Chromium for Blinkit and Zepto only |
-| OCR | Vision LLM reads handwriting. `OCR_BACKEND`=auto → Groq cloud (Llama 4, if `GROQ_API_KEY` set) → local Ollama (`qwen2.5vl:3b`) → Tesseract. |
+| OCR | Vision LLM reads handwriting. `OCR_BACKEND`=auto → Groq cloud (Llama 4, if any Groq API key is set) → local Ollama (`qwen2.5vl:3b`) → Tesseract. |
 | LLM ranking fallback | Local Ollama (default `qwen2.5vl:3b` — the **same** model as OCR); only fires when the algorithmic ranker finds no winner |
 | Deployment | Docker + docker-compose on a homeserver, optionally fronted by Cloudflare Tunnel |
 | CI / auto-deploy | systemd timer that `git pull`s every 30 s and rebuilds on change |
@@ -130,7 +130,7 @@ If you want the LLM fallback, run Ollama separately and set `OLLAMA_HOST=http://
 | `TWILIO_ACCOUNT_SID` / `TWILIO_AUTH_TOKEN` / `TWILIO_FROM_NUMBER` | For phone login | Twilio creds for sending SMS OTP. If unset, OTP codes are printed to the server log (dev fallback). |
 | `SMTP_HOST` / `SMTP_PORT` / `SMTP_USER` / `SMTP_PASS` / `SMTP_FROM` | For email login | SMTP creds for sending email OTP (any provider). If unset, OTP codes are printed to the server log (dev fallback). |
 | `OLLAMA_HOST` | No | Defaults to `http://ollama:11434` in docker-compose. Set to `http://localhost:11434` for local-without-Docker. Required for the vision-LLM OCR path. |
-| `GROQ_API_KEY` | No | If set, OCR runs on Groq cloud (Llama 4 Scout) — fast, off-box, preferred in `auto` mode. Free key at console.groq.com. |
+| `GROQ_API_KEY` / `GROQ_API_KEY_1`, `_2`, ... | No | If set, OCR runs on Groq cloud (Llama 4 Scout) — fast, off-box, preferred in `auto` mode. Multiple keys are tried in order with failover on quota/auth failures. Free key at console.groq.com. |
 | `GROQ_OCR_MODEL` | No | Groq vision model (default `meta-llama/llama-4-scout-17b-16e-instruct`). |
 | `OLLAMA_MODEL` | No | Defaults to `qwen2.5vl:3b` — local OCR fallback + ranking. Not auto-pulled (`ollama pull qwen2.5vl:3b`). |
 | `OCR_BACKEND` | No | `auto` (Groq→local→Tesseract), `groq`, `ollama`, or `tesseract`. |

@@ -48,29 +48,41 @@ def _install_fake_httpx(monkeypatch, handler):
 
 # ── _groq_keys parsing ─────────────────────────────────────────────────────────
 
+def _clear_numbered_groq_keys(monkeypatch):
+    for i in range(1, 8):
+        monkeypatch.delenv(f"GROQ_API_KEY_{i}", raising=False)
+
+
 class TestGroqKeys:
     def test_comma_separated(self, monkeypatch):
         monkeypatch.setenv("GROQ_API_KEY", "k1, k2 ,k3")
-        for i in range(2, 6):
-            monkeypatch.delenv(f"GROQ_API_KEY_{i}", raising=False)
+        _clear_numbered_groq_keys(monkeypatch)
         assert ocr._groq_keys() == ["k1", "k2", "k3"]
 
     def test_numbered_keys_appended(self, monkeypatch):
         monkeypatch.setenv("GROQ_API_KEY", "k1")
+        monkeypatch.delenv("GROQ_API_KEY_1", raising=False)
         monkeypatch.setenv("GROQ_API_KEY_2", "k2")
         monkeypatch.setenv("GROQ_API_KEY_3", "k3")
         monkeypatch.delenv("GROQ_API_KEY_4", raising=False)
         assert ocr._groq_keys() == ["k1", "k2", "k3"]
 
+    def test_numbered_keys_can_start_at_one_without_base(self, monkeypatch):
+        monkeypatch.delenv("GROQ_API_KEY", raising=False)
+        monkeypatch.setenv("GROQ_API_KEY_1", "k1")
+        monkeypatch.setenv("GROQ_API_KEY_2", "k2")
+        monkeypatch.delenv("GROQ_API_KEY_3", raising=False)
+        assert ocr._groq_keys() == ["k1", "k2"]
+
     def test_dedup_preserves_order(self, monkeypatch):
         monkeypatch.setenv("GROQ_API_KEY", "k1,k2,k1")
+        monkeypatch.setenv("GROQ_API_KEY_1", "k1")
         monkeypatch.delenv("GROQ_API_KEY_2", raising=False)
         assert ocr._groq_keys() == ["k1", "k2"]
 
     def test_empty(self, monkeypatch):
         monkeypatch.delenv("GROQ_API_KEY", raising=False)
-        for i in range(2, 6):
-            monkeypatch.delenv(f"GROQ_API_KEY_{i}", raising=False)
+        _clear_numbered_groq_keys(monkeypatch)
         assert ocr._groq_keys() == []
 
 

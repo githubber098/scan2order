@@ -2,11 +2,11 @@
 
 Backends, selected by the OCR_BACKEND env var:
 
-  "auto" (default)  Groq cloud vision first if GROQ_API_KEY is set (fast, runs
+  "auto" (default)  Groq cloud vision first if any Groq API key is set (fast, runs
                     off-box so concurrent scans don't lag each other); else the
                     local vision LLM (qwen2.5vl via Ollama); else Tesseract.
                     Falls through on error/empty.
-  "groq"            Groq cloud vision only (needs GROQ_API_KEY).
+  "groq"            Groq cloud vision only (needs a Groq API key).
   "ollama" / "vlm"  Local vision LLM only (needs OLLAMA_HOST).
   "tesseract"       Tesseract only (the no-network/no-model fallback).
 
@@ -23,7 +23,7 @@ Env vars:
   GROQ_API_KEY       enables the Groq cloud path (preferred in auto mode). May hold
                      SEVERAL keys (comma/space separated) — when one hits its free-tier
                      limit (HTTP 429) the next is used automatically.
-  GROQ_API_KEY_2..N  additional Groq keys (numbered), combined with GROQ_API_KEY.
+  GROQ_API_KEY_1..N  numbered Groq keys, combined with GROQ_API_KEY.
   GROQ_OCR_MODEL     Groq vision model (default: meta-llama/llama-4-scout-17b-16e-instruct)
   GROQ_CORRECTION_MODEL  text model for the correction pass (default: GROQ_OCR_MODEL)
   OCR_CONTEXT_CORRECTION  auto/on (default) | 0/off — toggle the correction pass
@@ -307,21 +307,27 @@ def _groq_keys() -> list[str]:
     """All configured Groq API keys, in priority order, de-duplicated.
 
     The user can stack several free-tier keys so scanning keeps working after
-    one key hits its daily limit. Two ways to supply them (both can be combined):
+    one key hits its daily limit. Supply keys with either or both styles:
       • GROQ_API_KEY="key1,key2,key3"   (comma / whitespace / newline separated)
-      • GROQ_API_KEY_2=..., GROQ_API_KEY_3=...  (numbered fallbacks)
+      • GROQ_API_KEY_1=..., GROQ_API_KEY_2=...  (numbered keys)
     """
     keys: list[str] = []
-    raw = os.getenv("GROQ_API_KEY", "") or ""
-    for part in re.split(r"[,\s]+", raw.strip()):
-        if part:
-            keys.append(part)
+
+    def add_from_env(name: str) -> None:
+        raw = os.getenv(name, "") or ""
+        for part in re.split(r"[,\s]+", raw.strip()):
+            if part:
+                keys.append(part)
+
+    add_from_env("GROQ_API_KEY")
+    add_from_env("GROQ_API_KEY_1")
+
     i = 2
     while True:
-        v = (os.getenv(f"GROQ_API_KEY_{i}", "") or "").strip()
-        if not v:
+        name = f"GROQ_API_KEY_{i}"
+        if not (os.getenv(name, "") or "").strip():
             break
-        keys.append(v)
+        add_from_env(name)
         i += 1
     seen: set = set()
     out: list[str] = []
