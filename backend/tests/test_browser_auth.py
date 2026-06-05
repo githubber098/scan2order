@@ -211,6 +211,11 @@ class TestBrowserCheck:
         mock_s.store = "blinkit"
         mock_s.get_auth_cookies = AsyncMock(
             return_value={"gr_1_accessToken": "tok-close-test"})
+        # Auto-close path now also captures full cookie objects for WebView
+        # re-injection — provide an awaitable so the raw MagicMock doesn't blow up.
+        mock_s.get_cookies_full = AsyncMock(return_value=[])
+        mock_s.get_local_storage = AsyncMock(return_value={})
+        mock_s.get_session_storage = AsyncMock(return_value={})
         with patch("auth_browser.get", return_value=mock_s), \
              patch("auth_browser.close", new_callable=AsyncMock) as close_mock:
             r = client.get(f"/api/auth/browser/check/{sid}")

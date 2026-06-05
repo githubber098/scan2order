@@ -152,6 +152,7 @@ _SQLITE_DDL = """
         store         TEXT NOT NULL,
         cookies       TEXT NOT NULL DEFAULT '{}',
         local_storage TEXT NOT NULL DEFAULT '{}',
+        cookies_full  TEXT NOT NULL DEFAULT '[]',
         updated_at    REAL NOT NULL,
         PRIMARY KEY (user_id, store)
     );
@@ -224,6 +225,7 @@ _MYSQL_DDL = """
         store         VARCHAR(64)  NOT NULL,
         cookies       TEXT         NOT NULL,
         local_storage TEXT         NOT NULL,
+        cookies_full  TEXT,
         updated_at    DOUBLE       NOT NULL,
         PRIMARY KEY (user_id, store)
     );
@@ -298,11 +300,12 @@ _MYSQL_DDL = """
 
 if _MYSQL_URL:
     _SQL_UPSERT_SESSION = """
-        INSERT INTO sessions (user_id, store, cookies, local_storage, updated_at)
-        VALUES (%s, %s, %s, %s, %s)
+        INSERT INTO sessions (user_id, store, cookies, local_storage, cookies_full, updated_at)
+        VALUES (%s, %s, %s, %s, %s, %s)
         ON DUPLICATE KEY UPDATE
             cookies       = VALUES(cookies),
             local_storage = VALUES(local_storage),
+            cookies_full  = VALUES(cookies_full),
             updated_at    = VALUES(updated_at)
     """
     _SQL_UPSERT_COOKIES = """
@@ -326,11 +329,12 @@ if _MYSQL_URL:
     """
 else:
     _SQL_UPSERT_SESSION = """
-        INSERT INTO sessions (user_id, store, cookies, local_storage, updated_at)
-        VALUES (?, ?, ?, ?, ?)
+        INSERT INTO sessions (user_id, store, cookies, local_storage, cookies_full, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?)
         ON CONFLICT(user_id, store) DO UPDATE SET
             cookies       = excluded.cookies,
             local_storage = excluded.local_storage,
+            cookies_full  = excluded.cookies_full,
             updated_at    = excluded.updated_at
     """
     _SQL_UPSERT_COOKIES = """
@@ -491,6 +495,23 @@ def _migrate(conn, is_mysql: bool) -> None:
                 except Exception as e:
                     print(f"[user_store] {col}-add skipped: {e}")
 
+    # sessions.cookies_full — added for the WebView checkout flow (full cookie
+    # objects for re-injection). Additive: legacy rows read back as [] via
+    # get_store_cookies_full(). MySQL TEXT cannot carry a non-NULL DEFAULT on
+    # servers < 8.0.13, so it is nullable there; SQLite gets DEFAULT '[]'.
+    if _table_exists(conn, "sessions") and not _col_exists(conn, "sessions", "cookies_full"):
+        try:
+            if is_mysql:
+                conn.execute("ALTER TABLE sessions ADD COLUMN cookies_full TEXT")
+            else:
+                conn.execute(
+                    "ALTER TABLE sessions ADD COLUMN cookies_full TEXT NOT NULL DEFAULT '[]'"
+                )
+            conn.commit()
+            print("[user_store] migrated: added cookies_full column to sessions")
+        except Exception as e:
+            print(f"[user_store] cookies_full-add skipped: {e}")
+
 
 # ── Connection initialisation ──────────────────────────────────────────────────
 
@@ -533,12 +554,27 @@ def get_user_stores(user_id: str) -> dict:
 
 
 def connect_store(user_id: str, store: str, cookies: dict,
-                  local_storage: dict | None = None) -> None:
+                  local_storage: dict | None = None,
+                  cookies_full: list | None = None) -> None:
+    """Persist a store session (upsert on (user_id, store)).
+
+    cookies:       name->value dict consumed by the store API modules (httpx).
+    local_storage: page localStorage (+ '__ss__'-prefixed sessionStorage) blob.
+    cookies_full:  list of FULL cookie objects (name/value/domain/path/secure/
+                   httpOnly/expires) captured by the Playwright relay or the
+                   mobile/Capacitor WebView. Stored in its own column so a future
+                   checkout flow can re-inject the exact session into a
+                   store-domain WebView -- the name->value `cookies` dict alone
+                   drops the domain/path/flags a browser needs. Optional and
+                   additive: when omitted the column is written empty ('[]') and
+                   every existing read path (get_store_cookies etc.) is unchanged.
+    """
     with _lock:
         _conn.execute(
             _SQL_UPSERT_SESSION,
             (user_id, store, json.dumps(cookies),
-             json.dumps(local_storage or {}), time.time()),
+             json.dumps(local_storage or {}),
+             json.dumps(cookies_full or []), time.time()),
         )
         _conn.commit()
 
@@ -582,6 +618,38 @@ def get_store_session(user_id: str, store: str) -> dict:
         "cookies": json.loads(row["cookies"]),
         "local_storage": json.loads(row["local_storage"]),
     }
+
+
+def get_store_cookies_full(user_id: str, store: str) -> list:
+    """Return the list of FULL cookie objects captured for (user_id, store).
+
+    Counterpart to get_store_cookies() (which returns the name->value dict used
+    for httpx API calls). This returns the richer objects
+    (name/value/domain/path/secure/httpOnly/expires) needed to re-inject the
+    exact session into a store-domain WebView at checkout. Returns [] when the
+    row is absent, the column is NULL/empty (legacy sessions captured before
+    cookies_full existed), or the JSON is unparseable -- so callers must handle
+    the empty case (e.g. reconstruct from get_store_cookies() with per-store
+    default domains).
+    """
+    cutoff = time.time() - _TTL_30D
+    try:
+        row = _conn.execute(
+            "SELECT cookies_full FROM sessions WHERE user_id=? AND store=? AND updated_at>?",
+            (user_id, store, cutoff),
+        ).fetchone()
+    except Exception:
+        return []          # column absent (DB predates the migration)
+    if not row:
+        return []
+    raw = row["cookies_full"]
+    if not raw:
+        return []          # NULL (MySQL legacy row) or empty string
+    try:
+        data = json.loads(raw)
+        return data if isinstance(data, list) else []
+    except Exception:
+        return []
 
 
 def update_store_cookies(user_id: str, store: str, new_cookies: dict) -> None:

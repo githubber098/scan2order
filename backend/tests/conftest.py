@@ -32,6 +32,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     store         TEXT NOT NULL,
     cookies       TEXT NOT NULL DEFAULT '{}',
     local_storage TEXT NOT NULL DEFAULT '{}',
+    cookies_full  TEXT NOT NULL DEFAULT '[]',
     updated_at    REAL NOT NULL,
     PRIMARY KEY (user_id, store)
 );
@@ -443,6 +444,11 @@ class FakeBrowserSession:
 
     async def get_current_cookies(self) -> dict:
         return {}
+
+    async def get_cookies_full(self) -> list:
+        # Mirrors _Session.get_cookies_full(): full cookie objects for WebView
+        # re-injection. Empty in tests (no real Playwright context).
+        return []
 
     def captured_store(self) -> dict:
         # Mirrors _Session.captured_store(): Zepto store_id sniffed from live

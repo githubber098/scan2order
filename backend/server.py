@@ -46,7 +46,7 @@ from storage import user_store
 from stores import bigbasket, blinkit, zepto, instamart, flipkart_minutes
 
 BASE_DIR = Path(__file__).parent
-APP_VERSION = "1.7.14"
+APP_VERSION = "1.7.15"
 _TEMPLATES_DIR = BASE_DIR / "templates"
 _STATIC_DIR    = BASE_DIR / "static"
 _404_HTML      = BASE_DIR / "templates" / "404.html"
@@ -187,6 +187,43 @@ _STORE_DISPLAY = {
     "instamart":        "Instamart",
     "flipkart_minutes": "Flipkart Minutes",
 }
+
+# Static (no-network) session-health probes, keyed like _STORE_DISPLAY.
+_HEALTH_FNS = {
+    "bigbasket":        bigbasket.session_health,
+    "blinkit":          blinkit.session_health,
+    "zepto":            zepto.session_health,
+    "instamart":        instamart.session_health,
+    "flipkart_minutes": flipkart_minutes.session_health,
+}
+
+
+def _connected_store_health(user_id: str) -> dict:
+    """Per-store {connected, healthy, reason} for every store this user has a
+    stored session for.
+
+    "connected" = cookies present; "healthy" = also search-eligible (e.g. FM has
+    a delivery pincode, Zepto/Instamart have a store_id). Shared by
+    GET /api/auth/status and GET /api/bootstrap so both report identical health.
+    No network calls — each session_health() is a static cookie/local_storage
+    inspection.
+    """
+    stores_data = user_store.get_user_stores(user_id)
+    connected: dict[str, dict] = {}
+    for store in _STORE_DISPLAY:
+        if not stores_data.get(store, {}).get("connected"):
+            continue
+        entry = {"connected": True, "healthy": True, "reason": ""}
+        fn = _HEALTH_FNS.get(store)
+        if fn:
+            try:
+                h = fn(user_id)
+                entry["healthy"] = bool(h.get("ok"))
+                entry["reason"] = h.get("reason", "")
+            except Exception:
+                pass
+        connected[store] = entry
+    return connected
 
 
 # ── App lifecycle ────────────────────────────────────────────────────────────
@@ -404,6 +441,57 @@ async def health():
 @app.get("/api/version")
 async def api_version():
     return {"version": APP_VERSION}
+
+
+@app.get("/api/bootstrap")
+async def api_bootstrap(request: Request):
+    """One-shot client bootstrap: everything the server-rendered Jinja templates
+    inject today (user, connected-store flags + health, asset version, guest
+    flag, store display names).
+
+    This is the seam that lets the frontend stop being server-rendered. The
+    upcoming bundled/static Capacitor client can't read Jinja `{{ ... }}`
+    globals (there is no per-request render), so it fetches this once on load
+    instead of relying on window._SERVER_USER_ID / {{ stores.* }} / {{ guest }}.
+    Allows guests (no session) so the logged-out UI can still bootstrap —
+    returns guest=true, user=null, every store false.
+
+    Shapes mirror _user_ctx() (user + stores) and /api/auth/status
+    (connected_stores health) so the static frontend has full parity with the
+    current templates.
+    """
+    version = APP_VERSION
+    asset_v = _asset_version()
+    user_id = _get_session_user(request)
+    if not user_id:
+        return {
+            "version": version,
+            "asset_v": asset_v,
+            "guest": True,
+            "user_id": None,
+            "user": None,
+            "stores": {s: False for s in _STORE_DISPLAY},
+            "connected_stores": {},
+            "store_display": dict(_STORE_DISPLAY),
+        }
+    ctx = _user_ctx(user_id)
+    u = ctx["user"]
+    return {
+        "version": version,
+        "asset_v": asset_v,
+        "guest": False,
+        "user_id": user_id,
+        "user": {
+            "user_id": user_id,
+            "name": u.get("name"),
+            "theme": u.get("theme"),
+            "phone": u.get("phone"),
+            "email": u.get("email"),
+        },
+        "stores": ctx["stores"],
+        "connected_stores": _connected_store_health(user_id),
+        "store_display": dict(_STORE_DISPLAY),
+    }
 
 
 # ── Web UI ───────────────────────────────────────────────────────────────────
@@ -744,13 +832,22 @@ async def api_clear_history(request: Request):
 async def api_auth_connect(request: Request):
     """Store cookies for a user's grocery store session.
 
-    Body: {user_id, store, cookies, local_storage?}
+    Body: {user_id, store, cookies, local_storage?, cookies_full?}
+
+    cookies_full (optional) is a list of full cookie OBJECTS
+    (name/value/domain/path/secure/httpOnly/expires) for the WebView checkout
+    flow. The current mobile app does not send it yet (it ships only the
+    name->value `cookies` dict); the upcoming Capacitor client will. Accepted
+    additively so no client change is required for the existing flow.
     """
     body = await request.json()
     user_id = _require_user_id(body.get("user_id"))
     store = body.get("store", "").lower().strip()
     cookies = body.get("cookies") or {}
     local_storage = body.get("local_storage") or {}
+    cookies_full = body.get("cookies_full") or []
+    if not isinstance(cookies_full, list):
+        cookies_full = []
 
     if not user_id:
         return {"success": False, "error": "missing user_id"}
@@ -759,39 +856,24 @@ async def api_auth_connect(request: Request):
     if not cookies:
         return {"success": False, "error": "missing cookies"}
 
-    user_store.connect_store(user_id, store, cookies, local_storage)
+    user_store.connect_store(user_id, store, cookies, local_storage,
+                             cookies_full=cookies_full)
     print(f"[auth] connected {store} for user {user_id[:8]}... "
-          f"({len(cookies)} cookies)")
+          f"({len(cookies)} cookies, {len(cookies_full)} full)")
     return {"success": True, "store": store, "user_id": user_id}
 
 
 @app.get("/api/auth/status/{user_id}")
 async def api_auth_status(user_id: str):
-    """Return which stores are connected for a user."""
+    """Return which stores are connected for a user (+ per-store health).
+
+    Output shape is unchanged; the per-store health build moved into the shared
+    _connected_store_health() helper so /api/bootstrap reports identical data.
+    """
     uid = _require_user_id(user_id)
     if not uid:
         return {"error": "missing user_id"}
-    stores_data = user_store.get_user_stores(uid)
-    _health_fns = {"bigbasket": bigbasket.session_health,
-                   "blinkit": blinkit.session_health,
-                   "zepto": zepto.session_health,
-                   "instamart": instamart.session_health,
-                   "flipkart_minutes": flipkart_minutes.session_health}
-    connected = {}
-    for store in _STORE_DISPLAY:
-        if not stores_data.get(store, {}).get("connected"):
-            continue
-        entry = {"connected": True, "healthy": True, "reason": ""}
-        fn = _health_fns.get(store)
-        if fn:
-            try:
-                h = fn(uid)
-                entry["healthy"] = bool(h.get("ok"))
-                entry["reason"] = h.get("reason", "")
-            except Exception:
-                pass
-        connected[store] = entry
-    return {"user_id": uid, "connected_stores": connected}
+    return {"user_id": uid, "connected_stores": _connected_store_health(uid)}
 
 
 @app.post("/api/auth/link")
@@ -1109,9 +1191,21 @@ async def browser_auth_check(session_id: str):
                       f"into local_storage for {s.store}")
         except Exception:
             pass
-        user_store.connect_store(s.user_id, s.store, cookies, local_storage)
+        # Full cookie objects (domain/path/secure/httpOnly/expires) for WebView
+        # re-injection at checkout. Captured separately from the name->value
+        # `cookies` dict above (which the store API modules use but which loses
+        # the attributes a browser needs). Best-effort + guarded so a capture
+        # failure never blocks the connect (mirrors the localStorage block).
+        cookies_full = []
+        try:
+            cookies_full = await s.get_cookies_full()
+        except Exception:
+            pass
+        user_store.connect_store(s.user_id, s.store, cookies, local_storage,
+                                 cookies_full=cookies_full)
         print(f"[browser-auth] saved {len(cookies)} cookies + "
-              f"{len(local_storage)} localStorage keys for "
+              f"{len(local_storage)} localStorage keys + "
+              f"{len(cookies_full)} full-cookie objects for "
               f"{s.store} user {s.user_id[:8]}…")
         await auth_browser.close(session_id)
         return {"done": True, "user_id": s.user_id, "store": s.store}
@@ -1185,9 +1279,14 @@ async def browser_auth_force(session_id: str):
             local_storage.update({f"__ss__{k}": v for k, v in ss.items()})
     except Exception:
         pass
-    user_store.connect_store(s.user_id, s.store, kv, local_storage)
+    # `raw` (full cookie objects from s._context.cookies(), captured above) is
+    # passed through for WebView re-injection at checkout — `kv` is only the
+    # name->value projection and loses the domain/path/flags a browser needs.
+    user_store.connect_store(s.user_id, s.store, kv, local_storage,
+                             cookies_full=raw)
     print(f"[browser-auth] force-saved {len(kv)} cookies + "
-          f"{len(local_storage)} localStorage keys for "
+          f"{len(local_storage)} localStorage keys + "
+          f"{len(raw)} full-cookie objects for "
           f"{s.store} user {s.user_id[:8]}… (manual Done button)")
     await auth_browser.close(session_id)
     return {"success": True, "user_id": s.user_id, "store": s.store}

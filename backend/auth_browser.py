@@ -591,6 +591,23 @@ class _Session:
             print(f"[browser] {self.store}: get_current_cookies failed: {exc}")
             return {}
 
+    async def get_cookies_full(self) -> list:
+        """Return the FULL cookie objects (name/value/domain/path/secure/
+        httpOnly/expires) for the relay context.
+
+        These are persisted alongside the name->value dict so a future checkout
+        flow can re-inject the exact session into a store-domain WebView. The
+        name->value projection from get_auth_cookies()/get_current_cookies() is
+        all the httpx store-API calls need, but a browser also needs the
+        domain/path/flags this carries. Returns [] on failure so the connect
+        flow is never blocked.
+        """
+        try:
+            return await self._context.cookies()
+        except Exception as exc:
+            print(f"[browser] {self.store}: get_cookies_full failed: {exc}")
+            return []
+
     def captured_store(self) -> dict:
         """Return store-specific data sniffed from live API requests/responses.
 
