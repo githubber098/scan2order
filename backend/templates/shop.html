@@ -382,45 +382,88 @@ function _revealMoreTrending(){
   return _trendingShown < _trendingAll.length;
 }
 
-// Observe a sentinel below the grid; reveal batches when it scrolls into view.
-// Disconnects once every trending card has been shown.
+// Reveal batches as the user scrolls. The reveal MUST work whether the page
+// scrolls on the window (mobile) or inside an inner scroll container (.main on
+// desktop is `overflow-y:auto; height:100vh`). We therefore: (a) find the real
+// scroll parent, (b) point the IntersectionObserver root at it, AND (c) attach a
+// throttled scroll listener as a belt-and-suspenders fallback. Either path calls
+// _pumpTrending(), which is idempotent and self-terminating.
 const _TRENDING_MARGIN = 600;    // px of prefetch below the viewport
+let _trendingScroller = null;    // the actual scroll container (null = window)
+let _trendingScrollHandler = null;
+let _trendingPumpQueued = false;
+
+// Nearest ancestor that actually scrolls vertically, else null (window scrolls).
+function _findScrollParent(el){
+  let n = el && el.parentElement;
+  while (n && n !== document.body && n !== document.documentElement){
+    const oy = getComputedStyle(n).overflowY;
+    if ((oy === "auto" || oy === "scroll") && n.scrollHeight > n.clientHeight + 1) return n;
+    n = n.parentElement;
+  }
+  return null;
+}
+
+// Bottom edge (viewport-relative px) below which we want content pre-filled.
+function _trendingViewportBottom(){
+  return _trendingScroller
+    ? _trendingScroller.getBoundingClientRect().bottom
+    : window.innerHeight;
+}
+
 function _wireTrendingObserver(){
   const sentinel = document.getElementById("shop-trending-sentinel");
-  if (!sentinel || !("IntersectionObserver" in window)){
-    // No IO support → just show everything.
-    while (_revealMoreTrending()) {}
-    return;
+  const grid = document.getElementById("shop-trending");
+  _trendingScroller = _findScrollParent(grid);
+
+  // Fallback scroll listener (covers any browser/layout where IO doesn't fire
+  // on inner-container scroll). Throttled to one pump per animation frame.
+  if (_trendingScrollHandler){
+    (_trendingScroller || window).removeEventListener("scroll", _trendingScrollHandler);
   }
-  if (_trendingObserver) _trendingObserver.disconnect();
-  _trendingObserver = new IntersectionObserver((entries) => {
-    if (entries.some(e => e.isIntersecting)) _pumpTrending();
-  }, { rootMargin: _TRENDING_MARGIN + "px" });
-  _trendingObserver.observe(sentinel);
-  // Pump once immediately in case the first batch didn't fill past the margin
-  // (e.g. a very wide grid where 8 cards occupy barely one row) — otherwise the
-  // sentinel stays in view and IO never re-fires, stalling the reveal.
+  _trendingScrollHandler = () => {
+    if (_trendingPumpQueued) return;
+    _trendingPumpQueued = true;
+    requestAnimationFrame(() => { _trendingPumpQueued = false; _pumpTrending(); });
+  };
+  (_trendingScroller || window).addEventListener("scroll", _trendingScrollHandler, { passive: true });
+
+  if (sentinel && ("IntersectionObserver" in window)){
+    if (_trendingObserver) _trendingObserver.disconnect();
+    _trendingObserver = new IntersectionObserver((entries) => {
+      if (entries.some(e => e.isIntersecting)) _pumpTrending();
+    }, { root: _trendingScroller || null, rootMargin: _TRENDING_MARGIN + "px" });
+    _trendingObserver.observe(sentinel);
+  }
+  // Pump once immediately to fill the first screen (and past the margin) so a
+  // wide/short layout doesn't stall waiting for a scroll that reveals nothing.
   _pumpTrending();
 }
 
-// Reveal batches until the sentinel is pushed below the viewport (+ prefetch
-// margin) or every card is shown. IntersectionObserver only fires on enter/leave
-// transitions, so when a revealed batch doesn't move the sentinel out of view we
-// must keep revealing in a loop here rather than waiting for an event that won't
-// come. Re-fires on the next scroll once the sentinel re-enters.
+// Reveal batches until the sentinel is pushed beyond the viewport (+ prefetch
+// margin) or every card is shown. Self-terminating: when all cards are shown it
+// tears down the observer and scroll listener. Re-invoked on scroll/IO.
 function _pumpTrending(){
   const sentinel = document.getElementById("shop-trending-sentinel");
+  if (!sentinel) return;
   let guard = 0;
-  while (guard++ < 200){
+  while (guard++ < 500){
+    // Already filled enough? Stop and wait for the next scroll.
+    const rect = sentinel.getBoundingClientRect();
+    if (rect.top > _trendingViewportBottom() + _TRENDING_MARGIN) return;
     const more = _revealMoreTrending();
     if (!more){
-      if (_trendingObserver){ _trendingObserver.disconnect(); _trendingObserver = null; }
-      break;
+      _teardownTrendingReveal();
+      return;
     }
-    // Stop once the sentinel sits beyond the viewport + prefetch margin; the
-    // observer will re-call us when the user scrolls it back into range.
-    const rect = sentinel.getBoundingClientRect();
-    if (rect.top > window.innerHeight + _TRENDING_MARGIN) break;
+  }
+}
+
+function _teardownTrendingReveal(){
+  if (_trendingObserver){ _trendingObserver.disconnect(); _trendingObserver = null; }
+  if (_trendingScrollHandler){
+    (_trendingScroller || window).removeEventListener("scroll", _trendingScrollHandler);
+    _trendingScrollHandler = null;
   }
 }
 

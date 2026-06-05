@@ -1806,9 +1806,13 @@ async def api_shop_trending(request: Request):
     cached = _trending_cache.get(search_uid)
     if cached and now - cached[0] < 600:
         products = cached[1]
+        print(f"[shop/trending] {len(products)} products (cached) for {search_uid[:8]} "
+              f"across stores={available}")
     else:
         products = await _trending_products(search_uid, available)
         _trending_cache[search_uid] = (now, products)
+        print(f"[shop/trending] {len(products)} products (fresh, {len(_TRENDING_QUERIES)} queries) "
+              f"for {search_uid[:8]} across stores={available}")
     return {"products": products, "is_guest": is_guest, "can_add": not is_guest}
 
 
