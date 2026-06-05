@@ -98,8 +98,8 @@
     </button>
     <button class="btn ghost sm" id="ocr-cancel" style="display:none;width:auto" onclick="s2o_cancelOcr()">Cancel</button>
     <input id="ocr-input" type="file" accept="image/*" capture="environment" hidden onchange="s2o_handleOcr(event)" />
-    <button class="btn ghost sm" id="clear-all-btn" style="display:none;width:auto;color:var(--muted)" title="Clear list and results" onclick="clearAll()">
-      <i data-ico="trash" data-s="16"></i>
+    <button class="btn ghost" id="clear-all-btn" style="display:none;width:auto;padding:14px;color:var(--muted)" title="Clear list and results" onclick="clearAll()">
+      <i data-ico="trash" data-s="18"></i>
     </button>
     <button class="btn" style="flex:1" id="compare-btn" onclick="startCompare()">
       <i data-ico="compare" data-s="18" data-w="2.4"></i>Compare prices
@@ -130,8 +130,8 @@
     </div>
     <div style="display:flex;flex-direction:column;align-items:flex-end;gap:8px">
       <span class="badge" id="savings-badge" data-guest-hide style="background:var(--coral);color:#fff;font-size:13px;transform:rotate(4deg);padding:7px 11px;display:none">Save ₹—</span>
-      <button class="btn ghost sm" onclick="clearResults()" style="width:auto;padding:0 10px;font-size:12px;color:var(--muted);opacity:.8" title="Clear comparison results">
-        <i data-ico="trash" data-s="13"></i>Clear results
+      <button class="btn ghost" onclick="clearResults()" style="width:auto;color:var(--err);border-color:var(--err)" title="Clear comparison results">
+        <i data-ico="trash" data-s="16"></i>Clear results
       </button>
     </div>
   </div>
