@@ -339,7 +339,7 @@ async function confirmDeleteData() {
 async function confirmDeleteAccount() {
   if (!confirm('Delete your account and all data? This cannot be undone.')) return;
   await fetch('/api/auth/delete', { method:'POST' });
-  window.location.href = '/login';
+  window.location.href = '/';
 }
 </script>
 {% endblock %}

@@ -48,6 +48,25 @@ class TestGuestPages:
         assert r.status_code == 200
         assert "_SERVER_GUEST   = true" in r.text
 
+    def test_login_route_removed(self, client):
+        # The standalone /login page was removed in favour of the in-page drawer.
+        r = client.get("/login", follow_redirects=False)
+        assert r.status_code == 404
+
+    def test_login_only_page_redirects_to_home_login_param(self, client):
+        # A guest hitting a login-only page is sent to "/?login=1" (which
+        # auto-opens the login drawer), NOT to a removed /login page.
+        r = client.get("/profile", follow_redirects=False)
+        assert r.status_code == 302
+        assert r.headers["location"] == "/?login=1"
+
+    def test_guest_home_has_login_drawer(self, client):
+        body = client.get("/").text
+        # The right-anchored login drawer markup + opener must be present so the
+        # guest can sign in in-page.
+        assert 'id="login-drawer"' in body
+        assert "s2o_openLogin" in body
+
     def test_cart_page_renders(self, client):
         # The Cart tab must render its own page (empty state), NOT redirect.
         r = client.get("/cart", follow_redirects=False)

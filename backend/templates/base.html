@@ -27,7 +27,11 @@
       <a class="nav-item" data-nav="shop" data-navlink href="/shop"><i data-ico="search"></i><span>Shop</span></a>
       <a class="nav-item" data-nav="cart" data-navlink href="/cart" style="position:relative"><i data-ico="cart"></i><span>Cart</span><span class="cart-badge" style="display:none">0</span></a>
       <a class="nav-item" data-nav="history" data-navlink href="/history" data-guest-hide><i data-ico="history"></i><span>History</span></a>
-      <a class="nav-item" data-nav="profile" data-navlink href="/profile"><i data-ico="user"></i><span>{% if guest %}Log in{% else %}Profile{% endif %}</span></a>
+      {% if guest %}
+      <button class="nav-item" onclick="s2o_openLogin()"><i data-ico="user"></i><span>Log in</span></button>
+      {% else %}
+      <a class="nav-item" data-nav="profile" data-navlink href="/profile"><i data-ico="user"></i><span>Profile</span></a>
+      {% endif %}
       <div class="nav-spacer"></div>
       {% if not guest %}<button class="nav-item" onclick="s2o_confirmSignout()"><i data-ico="signout"></i><span>Sign out</span></button>{% endif %}
     </aside>
@@ -39,7 +43,7 @@
         <div style="display:flex;align-items:center;gap:12px">
           <a data-navlink href="/cart" aria-label="Cart" style="position:relative;display:flex;color:var(--text);text-decoration:none"><i data-ico="cart" data-s="24"></i><span class="cart-badge" style="display:none">0</span></a>
           {% if guest %}
-          <a href="/login" aria-label="Log in" style="height:36px;padding:0 14px;border-radius:12px;background:var(--accent-grad);color:var(--accent-ink);display:flex;align-items:center;justify-content:center;font-weight:800;font-size:13px;text-decoration:none">Log in</a>
+          <button onclick="s2o_openLogin()" aria-label="Log in" style="height:36px;padding:0 14px;border:none;border-radius:12px;background:var(--accent-grad);color:var(--accent-ink);display:flex;align-items:center;justify-content:center;font-weight:800;font-size:13px;cursor:pointer">Log in</button>
           {% else %}
           <a data-navlink href="/profile" aria-label="Profile" style="width:36px;height:36px;border-radius:12px;background:var(--accent-grad);color:var(--accent-ink);display:flex;align-items:center;justify-content:center;font-weight:800;font-size:16px;text-decoration:none">{{ (user.name or user.phone or user.email or 'U')[0] | upper }}</a>
           {% endif %}
@@ -58,7 +62,11 @@
     <a class="tb" data-nav="shop" data-navlink href="/shop"><i data-ico="search"></i><b>Shop</b></a>
     <a class="tb" data-nav="cart" data-navlink href="/cart" style="position:relative"><i data-ico="cart"></i><b>Cart</b><span class="cart-badge" style="display:none">0</span></a>
     <a class="tb" data-nav="history" data-navlink href="/history" data-guest-hide><i data-ico="history"></i><b>History</b></a>
-    <a class="tb" data-nav="profile" data-navlink href="/profile"><i data-ico="user"></i><b>{% if guest %}Log in{% else %}Profile{% endif %}</b></a>
+    {% if guest %}
+    <button class="tb" onclick="s2o_openLogin()"><i data-ico="user"></i><b>Log in</b></button>
+    {% else %}
+    <a class="tb" data-nav="profile" data-navlink href="/profile"><i data-ico="user"></i><b>Profile</b></a>
+    {% endif %}
   </nav>
 </div>
 
@@ -86,10 +94,63 @@
     <p data-lp-msg style="color:var(--muted);font-size:13.5px;margin:0 0 18px">Log in to unlock full comparisons, cart actions, and saved lists.</p>
     <div style="display:flex;gap:10px">
       <button class="btn ghost" style="flex:1" onclick="s2o_closeLoginPrompt()">Maybe later</button>
-      <a class="btn" style="flex:1;text-decoration:none" href="/login">Log In</a>
+      <button class="btn" style="flex:1" onclick="s2o_closeLoginPrompt(); s2o_openLogin()">Log In</button>
     </div>
   </div>
 </div>
+
+<!-- ===== Login drawer (right-anchored, Swiggy-style) ===== -->
+<div id="login-drawer-overlay" onclick="s2o_closeLogin()"></div>
+<aside id="login-drawer" aria-label="Sign in" aria-hidden="true">
+  <div class="login-drawer-inner">
+    <button class="login-drawer-close" onclick="s2o_closeLogin()" aria-label="Close">✕</button>
+    <div class="wm lg" style="margin-bottom:4px">scan2order</div>
+    <div class="tag" style="margin-bottom:22px">grocery price comparison · BigBasket, Blinkit, Zepto &amp; more</div>
+
+    <!-- step 1: contact -->
+    <div id="ld-step-contact">
+      <div class="seg" style="margin-bottom:20px">
+        <button class="on" id="ld-tab-phone" onclick="s2o_loginMethod('phone')"><span class="row" style="gap:6px;justify-content:center"><i data-ico="phone" data-s="15"></i>Phone</span></button>
+        <button id="ld-tab-email" onclick="s2o_loginMethod('email')"><span class="row" style="gap:6px;justify-content:center"><i data-ico="mail" data-s="15"></i>Email</span></button>
+      </div>
+      <h1 class="h2" style="margin-bottom:4px">Sign in or sign up</h1>
+      <p class="lead" style="margin-bottom:18px" id="ld-sub">We'll send you a one-time code.</p>
+
+      <div id="ld-field-phone">
+        <label class="label">Phone number</label>
+        <div class="row" style="gap:0;border:1px solid var(--card-br);border-radius:var(--radius-sm);overflow:hidden;background:var(--input-bg)">
+          <span style="padding:13px 12px;color:var(--accent2);font-weight:700;border-right:1px solid var(--card-br)">+91</span>
+          <input class="input" id="ld-input-phone" type="tel" inputmode="numeric" placeholder="98765 43210" style="border:none;border-radius:0;letter-spacing:.5px" onkeydown="if(event.key==='Enter')s2o_loginSendCode()" />
+        </div>
+      </div>
+
+      <div id="ld-field-email" style="display:none">
+        <label class="label">Email address</label>
+        <input class="input" id="ld-input-email" type="email" inputmode="email" placeholder="you@example.com" autocomplete="email" onkeydown="if(event.key==='Enter')s2o_loginSendCode()" />
+      </div>
+
+      <div id="ld-msg1" class="dim" style="font-size:12.5px;margin-top:8px;min-height:1em"></div>
+      <button class="btn" style="margin-top:12px" onclick="s2o_loginSendCode()">Send code</button>
+    </div>
+
+    <!-- step 2: code -->
+    <div id="ld-step-code" style="display:none">
+      <button onclick="s2o_loginBack()" style="background:none;border:none;color:var(--muted);font-size:13px;padding:0;margin-bottom:16px;cursor:pointer" class="row">
+        <span style="display:inline-flex;transform:scaleX(-1)"><i data-ico="chevron" data-s="15"></i></span>Back
+      </button>
+      <h1 class="h1" style="margin-bottom:6px">Enter the code</h1>
+      <p class="lead" style="margin-bottom:20px">Sent to <span class="num" id="ld-sent-to" style="color:var(--accent2);font-weight:600"></span></p>
+      <input class="input" id="ld-input-code" type="text" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]*" placeholder="000000" maxlength="6" style="font-size:22px;letter-spacing:4px;text-align:center" onkeydown="if(event.key==='Enter')s2o_loginVerify()" />
+      <div id="ld-msg2" class="dim" style="font-size:12.5px;margin-top:8px;min-height:1em"></div>
+      <button class="btn" style="margin-top:12px" onclick="s2o_loginVerify()">Verify</button>
+      <div class="center muted" id="ld-resend-row" style="margin-top:14px;font-size:12.5px;display:none">
+        <button onclick="s2o_loginSendCode(true)" style="background:none;border:none;color:var(--accent2);cursor:pointer;font-size:12.5px">Resend code</button>
+      </div>
+    </div>
+
+    <p class="center dim" style="font-size:11.5px;margin-top:18px">By continuing you agree to our Terms &amp; Privacy</p>
+  </div>
+</aside>
 
 <style>
   /* Shared guest / shop chrome — kept out of theme.css so raghav's themes stay
@@ -173,6 +234,25 @@
      the previous approach of only having .open{ display:flex } never worked.) */
   #s2o-confirm-overlay{ display:none; }
   #s2o-confirm-overlay.open{ display:flex; }
+
+  /* ===== Login drawer (right-anchored, Swiggy-style) ===== */
+  #login-drawer-overlay{ position:fixed; inset:0; background:rgba(0,0,0,.5);
+    z-index:1190; opacity:0; visibility:hidden; transition:opacity .25s, visibility .25s; }
+  #login-drawer-overlay.open{ opacity:1; visibility:visible; }
+  #login-drawer{ position:fixed; top:0; right:0; bottom:0; z-index:1200;
+    width:min(440px, 100%); background:var(--bg); border-left:1px solid var(--card-br);
+    box-shadow:-12px 0 40px rgba(0,0,0,.25); transform:translateX(100%);
+    transition:transform .3s cubic-bezier(.4,0,.2,1); overflow-y:auto;
+    -webkit-overflow-scrolling:touch; }
+  #login-drawer.open{ transform:translateX(0); }
+  .login-drawer-inner{ padding:28px 26px calc(28px + env(safe-area-inset-bottom)); position:relative;
+    min-height:100%; display:flex; flex-direction:column; }
+  .login-drawer-close{ position:absolute; top:16px; right:18px; width:34px; height:34px;
+    border-radius:10px; border:1px solid var(--card-br); background:var(--surface);
+    color:var(--muted); font-size:16px; cursor:pointer; line-height:1;
+    display:flex; align-items:center; justify-content:center; }
+  .login-drawer-close:hover{ border-color:var(--err); color:var(--err); }
+  [data-theme="brutal"] #login-drawer{ border-left-width:2.5px; }
 </style>
 
 

@@ -19,7 +19,7 @@
   {% if guest %}
   <div class="shop-guest-note">
     <i data-ico="lock" data-s="14"></i>
-    <span>Browsing as a guest — <a href="/login">log in</a> to add items to your cart.</span>
+    <span>Browsing as a guest — <a href="#" onclick="s2o_openLogin();return false">log in</a> to add items to your cart.</span>
   </div>
   {% endif %}
 
@@ -49,7 +49,7 @@
   <!-- shown when guest has no GUEST_STORE_USER_ID configured -->
   <div id="shop-login-cta" class="shop-guest-note" style="display:none;justify-content:space-between;align-items:center">
     <span style="display:flex;align-items:center;gap:7px"><i data-ico="lock" data-s="14"></i>Sign in to see live prices</span>
-    <a class="btn" href="/login" style="text-decoration:none;font-size:13px;padding:7px 14px;white-space:nowrap">Log in</a>
+    <button class="btn" onclick="s2o_openLogin()" style="font-size:13px;padding:7px 14px;white-space:nowrap">Log in</button>
   </div>
   <div id="shop-skeleton" class="shop-grid" style="display:none"></div>
   <div id="shop-results" class="shop-grid"></div>

@@ -141,7 +141,7 @@
   <div id="guest-cta" class="card tight" style="display:none;text-align:center">
     <div style="font-weight:700;font-size:14px;margin-bottom:3px">See the full comparison</div>
     <p class="dim" style="font-size:12px;margin:0 0 10px">Log in to compare every store side by side, swap products, and add to your carts.</p>
-    <a class="btn" style="text-decoration:none" href="/login"><i data-ico="lock" data-s="15"></i>Log in</a>
+    <button class="btn" onclick="s2o_openLogin()"><i data-ico="lock" data-s="15"></i>Log in</button>
   </div>
 
   <button class="btn block" style="margin-top:4px" id="add-btn" data-guest-hide onclick="addAllToCarts()">
@@ -464,14 +464,25 @@ function renderResults(data) {
     skip.style.display='';
   } else skip.style.display='none';
 
-  // Zero-results warning: connected stores that returned nothing across all items
+  // Zero-results warning: connected stores that returned NOTHING across all items
+  // (before sorting/selection). A store that returned products but didn't win the
+  // cheapest slot for any item is NOT zero-results — only warn when the store
+  // produced zero products in every item's `prices`, which is the real
+  // expired-session signal.
   const zrWarn = document.getElementById('zero-results-warn');
   if (zrWarn && _storeHealth) {
     const SN = {bigbasket:'BigBasket', blinkit:'Blinkit', zepto:'Zepto', instamart:'Instamart', flipkart_minutes:'Flipkart Minutes'};
     const skipped = new Set(data.skipped_apps || []);
+    // Stores that returned at least one product for at least one item.
+    const storesWithResults = new Set();
+    for (const entry of comparison) {
+      for (const [store, prods] of Object.entries(entry.prices || {})) {
+        if (Array.isArray(prods) && prods.length) storesWithResults.add(store);
+      }
+    }
     const zeroStores = [];
     for (const [store, info] of Object.entries(_storeHealth)) {
-      if (info.connected && !skipped.has(store) && !carts[store]) {
+      if (info.connected && !skipped.has(store) && !storesWithResults.has(store)) {
         zeroStores.push(SN[store] || store);
       }
     }
@@ -484,6 +495,11 @@ function renderResults(data) {
       zrWarn.style.display = 'none';
     }
   }
+
+  // Paint icons + store logos for the freshly-built results (store-split chips,
+  // item-row action buttons, etc.). Without this the action-button icons render
+  // empty until some later interaction re-paints them.
+  if (window.s2o) window.s2o.paintIcons(document.getElementById('results'));
 }
 
 // ── NEW thin item row with product image + swap/edit-qty/delete buttons ──────
@@ -667,6 +683,11 @@ function removeItem(idx) {
     (Object.keys(comparisonData.carts||{}).length===1?'':'s');
 }
 
+// Update the data model for a swap (selection + per-item count) and rebuild the
+// carts/totals. The actual row DOM is re-rendered by the caller (openSwapPopup)
+// via _makeItemRow, so this only touches state — the old per-row highlight code
+// targeted a previous `.sname`/`[data-pid]` layout that no longer exists and did
+// nothing, which made swaps look like a no-op.
 function swapSelection(idx, app, pid, price, qtyCount) {
   if (!comparisonData) return;
   const entry = comparisonData.comparison[idx];
@@ -674,22 +695,6 @@ function swapSelection(idx, app, pid, price, qtyCount) {
   entry.cheapest_app = app; entry.selected_pid = pid; entry.cheapest_price = price;
   entry.qty_count = qtyCount || 1;
   _rebuildCarts();
-  // Re-render that card's highlight
-  const card = document.querySelector(`[data-idx="${idx}"]`);
-  if (card) {
-    card.querySelectorAll('[data-pid]').forEach(row => {
-      const sel = row.dataset.app === app && row.dataset.pid === pid;
-      row.style.background = sel ? 'var(--accent-light, color-mix(in srgb,var(--accent) 10%,transparent))' : '';
-      const badge = row.querySelector('[data-best]');
-      if (badge) badge.remove();
-      if (sel) {
-        const nm = row.querySelector('.sname');
-        if (nm) { const b=document.createElement('span'); b.dataset.best='1'; b.style.cssText='color:var(--ok);font-size:11px;margin-left:6px'; b.textContent='✓ best'; nm.appendChild(b); }
-      }
-      const priceEl = row.querySelector('.num');
-      if (priceEl) priceEl.style.color = sel ? 'var(--accent2)' : 'inherit';
-    });
-  }
 }
 
 function _rebuildCarts() {

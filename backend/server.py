@@ -129,7 +129,9 @@ def _template_response(request: Request, tpl: str, extra: dict | None = None,
     user_id = _get_session_user(request)
     if not user_id:
         if not allow_guest:
-            return RedirectResponse("/login", status_code=302)
+            # No standalone /login page anymore — send guests to the home page
+            # with ?login=1, which auto-opens the right-side login drawer.
+            return RedirectResponse("/?login=1", status_code=302)
         ctx = {
             "user": {"name": None, "theme": "fresh", "phone": None, "email": None},
             "user_id": None,
@@ -445,17 +447,17 @@ async def profile_page(request: Request):
 async def onboarding_page(request: Request):
     user_id = _get_session_user(request)
     if not user_id:
-        return RedirectResponse("/login", status_code=302)
+        return RedirectResponse("/?login=1", status_code=302)
     ctx = {"user_id": user_id, "user": user_store.get_user_by_id(user_id) or {}}
     return templates.TemplateResponse(request, "onboarding.html", ctx,
                                       headers={"Cache-Control": "no-store"})
 
 
-@app.get("/login", response_class=HTMLResponse)
-async def login_page(request: Request):
-    if _get_session_user(request):
-        return RedirectResponse("/", status_code=302)
-    return templates.TemplateResponse(request, "login.html", {})
+# NOTE: the standalone /login page was removed. Login is now an in-page,
+# right-anchored drawer (#login-drawer in base.html, driven by s2o_openLogin in
+# app.js) available on every page. Guests hitting a login-only page are
+# redirected to "/?login=1", which auto-opens the drawer. The OTP API endpoints
+# (/api/auth/send-otp, /api/auth/verify-otp) are unchanged.
 
 
 # ── User account endpoints ────────────────────────────────────────────────────

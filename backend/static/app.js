@@ -617,7 +617,7 @@
   // base.html (#login-prompt). message overrides the default copy.
   window.s2o_loginPrompt = function (message) {
     const sheet = document.getElementById("login-prompt");
-    if (!sheet) { if (confirm("Log in to unlock this feature?")) location.href = "/login"; return; }
+    if (!sheet) { window.s2o_openLogin(); return; }
     const msg = sheet.querySelector("[data-lp-msg]");
     if (msg && message) msg.textContent = message;
     sheet.classList.add("open");
@@ -625,6 +625,114 @@
   window.s2o_closeLoginPrompt = function () {
     const sheet = document.getElementById("login-prompt");
     if (sheet) sheet.classList.remove("open");
+  };
+
+  /* ---- login drawer (right-anchored, Swiggy-style) --------------------- */
+  // Replaces the old standalone /login page. The OTP flow is unchanged — it
+  // still hits /api/auth/send-otp and /api/auth/verify-otp. Markup lives in
+  // base.html (#login-drawer). Available on every page so a guest can sign in
+  // without navigating away.
+  let _loginChannel = "phone";
+
+  window.s2o_openLogin = function () {
+    const drawer = document.getElementById("login-drawer");
+    const overlay = document.getElementById("login-drawer-overlay");
+    if (!drawer) return false;
+    // Always start on the contact step.
+    s2o_loginBack();
+    s2o_loginMethod("phone");
+    drawer.classList.add("open");
+    drawer.setAttribute("aria-hidden", "false");
+    if (overlay) overlay.classList.add("open");
+    paintIcons(drawer);
+    setTimeout(() => {
+      const el = document.getElementById("ld-input-phone");
+      if (el) el.focus();
+    }, 320);
+    return false;
+  };
+  window.s2o_closeLogin = function () {
+    const drawer = document.getElementById("login-drawer");
+    const overlay = document.getElementById("login-drawer-overlay");
+    if (drawer){ drawer.classList.remove("open"); drawer.setAttribute("aria-hidden", "true"); }
+    if (overlay) overlay.classList.remove("open");
+  };
+  window.s2o_loginMethod = function (m) {
+    _loginChannel = m;
+    const phone = m === "phone";
+    const tabP = document.getElementById("ld-tab-phone");
+    const tabE = document.getElementById("ld-tab-email");
+    if (tabP) tabP.classList.toggle("on", phone);
+    if (tabE) tabE.classList.toggle("on", !phone);
+    const fP = document.getElementById("ld-field-phone");
+    const fE = document.getElementById("ld-field-email");
+    if (fP) fP.style.display = phone ? "" : "none";
+    if (fE) fE.style.display = phone ? "none" : "";
+  };
+  window.s2o_loginBack = function () {
+    const code = document.getElementById("ld-step-code");
+    const contact = document.getElementById("ld-step-contact");
+    if (code) code.style.display = "none";
+    if (contact) contact.style.display = "";
+  };
+  function _loginValue() {
+    if (_loginChannel === "phone") {
+      const raw = (document.getElementById("ld-input-phone").value || "").replace(/\D/g, "");
+      if (raw.length === 10 && /^[6-9]/.test(raw)) return "+91" + raw;
+      if (raw.length === 12 && raw.startsWith("91")) return "+" + raw;
+      return null;
+    }
+    const v = (document.getElementById("ld-input-email").value || "").trim();
+    return /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(v) ? v : null;
+  }
+  window.s2o_loginSendCode = async function (resend) {
+    const val = _loginValue();
+    const msg = document.getElementById("ld-msg1");
+    if (!val) { msg.textContent = _loginChannel === "phone"
+      ? "Enter a valid 10-digit Indian phone number." : "Enter a valid email address."; return; }
+    msg.textContent = "Sending…";
+    try {
+      const r = await fetch("/api/auth/send-otp", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ channel: _loginChannel, value: val }),
+      });
+      const d = await r.json();
+      if (d.error) { msg.textContent = d.error; return; }
+      document.getElementById("ld-sent-to").textContent = val;
+      document.getElementById("ld-step-contact").style.display = "none";
+      document.getElementById("ld-step-code").style.display = "";
+      const codeInput = document.getElementById("ld-input-code");
+      const msg2 = document.getElementById("ld-msg2");
+      // Dev mode: server echoes the code when no SMS/SMTP provider is configured.
+      if (d.dev_code) {
+        codeInput.value = d.dev_code;
+        msg2.textContent = "Dev code auto-filled: " + d.dev_code;
+      } else {
+        codeInput.value = "";
+        msg2.textContent = resend ? "New code sent." : "";
+      }
+      codeInput.focus();
+      setTimeout(() => {
+        const rr = document.getElementById("ld-resend-row");
+        if (rr) rr.style.display = "";
+      }, 20000);
+    } catch (e) { msg.textContent = "Error: " + e.message; }
+  };
+  window.s2o_loginVerify = async function () {
+    const val = _loginValue();
+    const code = (document.getElementById("ld-input-code").value || "").trim();
+    const msg = document.getElementById("ld-msg2");
+    if (!code || code.length < 4) { msg.textContent = "Enter the 6-digit code."; return; }
+    msg.textContent = "Verifying…";
+    try {
+      const r = await fetch("/api/auth/verify-otp", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ channel: _loginChannel, value: val, code }),
+      });
+      const d = await r.json();
+      if (d.error) { msg.textContent = d.error; return; }
+      window.location.href = d.redirect || "/";
+    } catch (e) { msg.textContent = "Error: " + e.message; }
   };
 
   /* ---- shop cart (client-side, per user) ------------------------------- */
@@ -774,15 +882,30 @@
     }
     updateCartBadge();
 
+    // Auto-open the login drawer when redirected here with ?login=1 (e.g. a guest
+    // hit a login-only page like /history or /profile). Then strip the param so a
+    // reload doesn't reopen it.
+    if (qp("login") && isGuest() && typeof window.s2o_openLogin === "function") {
+      window.s2o_openLogin();
+      try {
+        const u = new URL(location.href);
+        u.searchParams.delete("login");
+        history.replaceState(null, "", u.pathname + u.search + u.hash);
+      } catch (_) {}
+    }
+
     // Preserve ?theme= preview across navigation
     const t = qp("theme");
     if (t) document.querySelectorAll("a[data-navlink]").forEach((a) => {
       a.setAttribute("href", a.getAttribute("href").split("?")[0] + "?theme=" + t);
     });
 
-    // Redirect to login if no session
-    if (window._SERVER_USER === undefined && document.body.dataset.page !== "login" && document.body.dataset.page !== "onboarding") {
-      window.location.href = "/login";
+    // Defensive: if the server never injected a user object at all (should not
+    // happen — base.html always sets a stub, even for guests), open the login
+    // drawer rather than navigating to the removed /login page.
+    if (window._SERVER_USER === undefined && document.body.dataset.page !== "onboarding"
+        && typeof window.s2o_openLogin === "function") {
+      window.s2o_openLogin();
     }
   });
 
