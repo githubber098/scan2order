@@ -98,6 +98,9 @@
     </button>
     <button class="btn ghost sm" id="ocr-cancel" style="display:none;width:auto" onclick="s2o_cancelOcr()">Cancel</button>
     <input id="ocr-input" type="file" accept="image/*" capture="environment" hidden onchange="s2o_handleOcr(event)" />
+    <button class="btn ghost sm" id="clear-all-btn" style="display:none;width:auto;color:var(--muted)" title="Clear list and results" onclick="clearAll()">
+      <i data-ico="trash" data-s="16"></i>
+    </button>
     <button class="btn" style="flex:1" id="compare-btn" onclick="startCompare()">
       <i data-ico="compare" data-s="18" data-w="2.4"></i>Compare prices
     </button>
@@ -125,7 +128,12 @@
       <div class="big num" id="grand-total">₹—</div>
       <div style="font-size:12px;opacity:.9;margin-top:2px" id="grand-summary"></div>
     </div>
-    <span class="badge" id="savings-badge" data-guest-hide style="background:var(--coral);color:#fff;font-size:13px;transform:rotate(4deg);padding:7px 11px;display:none">Save ₹—</span>
+    <div style="display:flex;flex-direction:column;align-items:flex-end;gap:8px">
+      <span class="badge" id="savings-badge" data-guest-hide style="background:var(--coral);color:#fff;font-size:13px;transform:rotate(4deg);padding:7px 11px;display:none">Save ₹—</span>
+      <button class="btn ghost sm" onclick="clearResults()" style="width:auto;padding:0 10px;font-size:12px;color:var(--muted);opacity:.8" title="Clear comparison results">
+        <i data-ico="trash" data-s="13"></i>Clear results
+      </button>
+    </div>
   </div>
 
   <!-- store split -->
@@ -177,15 +185,78 @@ let comparisonData = null;
 let _pollTimer = null;
 let _storeHealth = null;
 
-// Pre-fill textarea if history page redirected us with a rerun
+// ── Compare state persistence ──────────────────────────────────────────────
+// Saves textarea content + comparison results to sessionStorage so navigating
+// to another tab and back restores the exact state the user left.
+const _SS_TEXT = 's2o_compare_text';
+const _SS_DATA = 's2o_compare_data';
+
+function _updateClearAllVisibility() {
+  const btn = document.getElementById('clear-all-btn');
+  if (!btn) return;
+  const ta = document.getElementById('items');
+  const hasText = ta && ta.value.trim().length > 0;
+  const hasResults = document.getElementById('results').style.display !== 'none';
+  btn.style.display = (hasText || hasResults) ? '' : 'none';
+}
+
+function clearResults() {
+  comparisonData = null;
+  document.getElementById('results').style.display = 'none';
+  sessionStorage.removeItem(_SS_DATA);
+  _updateClearAllVisibility();
+}
+
+function clearAll() {
+  clearResults();
+  const ta = document.getElementById('items');
+  if (ta) { ta.value = ''; ta.dispatchEvent(new Event('input')); }
+  sessionStorage.removeItem(_SS_TEXT);
+  _updateClearAllVisibility();
+}
+
+// Pre-fill textarea if history page redirected us with a rerun; else restore
+// the last compare session (textarea text + results) from sessionStorage.
 document.addEventListener('DOMContentLoaded', () => {
   const rerun = sessionStorage.getItem('s2o_rerun');
+  const ta = document.getElementById('items');
   if (rerun) {
-    const ta = document.getElementById('items');
     if (ta) ta.value = rerun;
     sessionStorage.removeItem('s2o_rerun');
+    sessionStorage.removeItem(_SS_TEXT);
+    sessionStorage.removeItem(_SS_DATA);
+  } else {
+    // Restore saved textarea text
+    const savedText = sessionStorage.getItem(_SS_TEXT);
+    if (savedText && ta) ta.value = savedText;
+    // Restore saved comparison results
+    const savedData = sessionStorage.getItem(_SS_DATA);
+    if (savedData) {
+      try {
+        comparisonData = JSON.parse(savedData);
+        comparisonData.savings = comparisonData.savings
+          ?? _calcSavings(comparisonData.comparison, comparisonData.grand_total);
+        renderResults(comparisonData);
+      } catch(_) {
+        sessionStorage.removeItem(_SS_DATA);
+      }
+    }
   }
+
   setupItemsAutosize();
+
+  // Persist textarea content on every keystroke / OCR fill (OCR fill dispatches
+  // 'input', so this fires for both typed and scanned text).
+  if (ta) {
+    ta.addEventListener('input', () => {
+      const v = ta.value.trim();
+      if (v) sessionStorage.setItem(_SS_TEXT, ta.value);
+      else sessionStorage.removeItem(_SS_TEXT);
+      _updateClearAllVisibility();
+    });
+  }
+
+  _updateClearAllVisibility();
   checkStoreHealth();
   if (window.s2o_greet) window.s2o_greet();
   // Voice input on the list textarea (append mode), via the shared helper.
@@ -357,6 +428,9 @@ async function startCompare() {
     // Server computes savings; use it if provided, else compute client-side.
     data.savings = data.savings ?? _calcSavings(data.comparison, data.grand_total);
     renderResults(data);
+    // Persist so navigating away and back restores results.
+    try { sessionStorage.setItem(_SS_DATA, JSON.stringify(data)); } catch(_) {}
+    _updateClearAllVisibility();
   } catch(e) {
     clearInterval(_pollTimer);
     document.getElementById('progress-wrap').style.display = 'none';
@@ -366,7 +440,7 @@ async function startCompare() {
 }
 
 // ── Render ──────────────────────────────────────────────────
-const _SN  = { bigbasket:'BigBasket', blinkit:'Blinkit', zepto:'Zepto', instamart:'Instamart', flipkart_minutes:'Flipkart' };
+const _SN  = { bigbasket:'BigBasket', blinkit:'Blinkit', zepto:'Zepto', instamart:'Instamart', flipkart_minutes:'Flipkart Minutes' };
 const _SFAV = {
   bigbasket:        '/static/icons/bigbasket.webp?v={{ asset_v }}',
   blinkit:          '/static/icons/blinkit.svg?v={{ asset_v }}',

@@ -89,7 +89,7 @@ async function loadHistory() {
     for (const h of data) {
       const btn = document.createElement('button');
       btn.className = 'card tight srow'; btn.style.cssText='width:100%;text-align:left;cursor:pointer';
-      const stores = (h.stores || []).map(s => ({bigbasket:'BigBasket',blinkit:'Blinkit',zepto:'Zepto',instamart:'Instamart'}[s]||s)).join(', ');
+      const stores = (h.stores || []).map(s => ({bigbasket:'BigBasket',blinkit:'Blinkit',zepto:'Zepto',instamart:'Instamart',flipkart_minutes:'Flipkart Minutes'}[s]||s)).join(', ');
       btn.innerHTML =
         `<div style="flex:1"><div class="sname">${_esc(h.title||'Order')}</div>`+
         `<div class="smeta">${_fmtDate(h.date)} · ${(h.items||[]).length} items${stores?' · '+_esc(stores):''}</div></div>`+
