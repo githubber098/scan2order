@@ -374,7 +374,7 @@ async def _groq_chat(messages: list, keys: list[str], *, model: str,
                         headers={"Authorization": f"Bearer {keys[idx]}",
                                  "Content-Type": "application/json"},
                         json={"model": model, "messages": messages,
-                              "temperature": 0, "max_tokens": max_tokens},
+                              "temperature": 0, "max_completion_tokens": max_tokens},
                     )
                 except Exception as e:
                     return None, f"Groq request error: {e}"

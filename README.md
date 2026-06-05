@@ -132,6 +132,7 @@ If you want the LLM fallback, run Ollama separately and set `OLLAMA_HOST=http://
 | `OLLAMA_HOST` | No | Defaults to `http://ollama:11434` in docker-compose. Set to `http://localhost:11434` for local-without-Docker. Required for the vision-LLM OCR path. |
 | `GROQ_API_KEY` / `GROQ_API_KEY_1`, `_2`, ... | No | If set, OCR runs on Groq cloud (Llama 4 Scout) — fast, off-box, preferred in `auto` mode. Multiple keys are tried in order with failover on quota/auth failures. Free key at console.groq.com. |
 | `GROQ_OCR_MODEL` | No | Groq vision model (default `meta-llama/llama-4-scout-17b-16e-instruct`). |
+| `GROQ_KEY_TEST_MODEL` / `GROQ_KEY_TEST_STRICT_CHAT` | No | Live test controls for `tests/test_groq_keys_live.py`. The test always validates key auth with `/models`; the chat probe defaults to `llama-3.1-8b-instant`, and strict mode makes chat/model warnings fail. |
 | `OLLAMA_MODEL` | No | Defaults to `qwen2.5vl:3b` — local OCR fallback + ranking. Not auto-pulled (`ollama pull qwen2.5vl:3b`). |
 | `OCR_BACKEND` | No | `auto` (Groq→local→Tesseract), `groq`, `ollama`, or `tesseract`. |
 | `OCR_MAX_DIM` | No | Local-model image cap (default 900). Lower → faster; raise if scans return empty. |
