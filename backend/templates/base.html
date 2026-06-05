@@ -239,11 +239,16 @@
   #login-drawer-overlay{ position:fixed; inset:0; background:rgba(0,0,0,.5);
     z-index:1190; opacity:0; visibility:hidden; transition:opacity .25s, visibility .25s; }
   #login-drawer-overlay.open{ opacity:1; visibility:visible; }
+  /* Width scales with the viewport: ~100% on phones, but wider on large monitors
+     (34vw) so it doesn't look like a thin strip, capped at 680px. */
   #login-drawer{ position:fixed; top:0; right:0; bottom:0; z-index:1200;
-    width:min(440px, 100%); background:var(--bg); border-left:1px solid var(--card-br);
+    width:min(100%, clamp(420px, 34vw, 680px)); background:var(--bg);
+    border-left:1px solid var(--card-br);
     box-shadow:-12px 0 40px rgba(0,0,0,.25); transform:translateX(100%);
     transition:transform .3s cubic-bezier(.4,0,.2,1); overflow-y:auto;
     -webkit-overflow-scrolling:touch; }
+  /* Centre the form column inside a wider drawer so fields don't stretch ugly. */
+  .login-drawer-inner{ max-width:440px; margin:0 auto; width:100%; }
   #login-drawer.open{ transform:translateX(0); }
   .login-drawer-inner{ padding:28px 26px calc(28px + env(safe-area-inset-bottom)); position:relative;
     min-height:100%; display:flex; flex-direction:column; }

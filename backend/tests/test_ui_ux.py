@@ -32,6 +32,14 @@ class TestWebUI:
         assert "blinkit" in body
         assert "zepto" in body
 
+    def test_root_renders_swap_popup(self, client):
+        """The swap popup element must actually render. It once sat outside any
+        Jinja block in index.html, so inheritance silently dropped it and the
+        Swap button became a no-op (openSwapPopup bailed on the null element)."""
+        r = client.get("/")
+        assert 'id="swap-popup"' in r.text
+        assert 'id="swap-popup-body"' in r.text
+
 
 class TestHealth:
     def test_health_ok(self, client):

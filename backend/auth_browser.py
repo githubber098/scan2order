@@ -77,22 +77,18 @@ _STORE_CONFIG = {
     },
     "instamart": {
         # Swiggy Instamart. Cookie auth (tid = session JWT, sid, deviceId).
-        # Mirrors Zepto: search needs a location-resolved storeId, so the real
-        # readiness gate is a saved delivery address, not just login.
+        # Search needs a location-resolved storeId, so the real readiness gate is
+        # a saved delivery address, not just login.
+        #
+        # IMPORTANT: phase-2 is gated SOLELY on the storeId captured from live API
+        # request headers by the interceptor in start() (see _location_ready).
+        # We deliberately do NOT set wait_for_ls / location_scan here: Swiggy's
+        # persisted storage contains location-ish blobs (userLocation,
+        # deliveryAddress, "lat", addressList…) even for a guest with no Instamart
+        # store set, so scanning them closed the relay prematurely — reporting
+        # "connected" on the first click while capturing no usable storeId.
         "url": "https://www.swiggy.com/instamart",
         "auth_cookie": "tid",
-        "wait_for_ls": ["userLocation", "addressList", "user-location",
-                        "selectedAddress", "lastKnownLocation"],
-        "wait_for_ls_contains": {"userLocation": "lat"},
-        # Robust fallback: close as soon as any stored value carries a resolved
-        # store id (key name unknown across builds). Also include lat/lng
-        # markers since Swiggy saves resolved coords in sessionStorage.
-        "location_scan": [
-            "storeId", "store_id", "primaryStoreId", "swiggyStoreId",
-            "activeStoreId", "nearestStoreId", "instamart_store_id",
-            "\"lat\"", "\"latitude\"", "activeLatLng", "userLocation",
-            "addressId", "deliveryAddress",
-        ],
         "wait_hint": (
             "✅ Log in to Swiggy, then tap the location bar at the top and "
             "save/confirm a delivery address so Instamart knows your store. "
@@ -376,21 +372,34 @@ class _Session:
         wait_for_ls = cfg.get("wait_for_ls", [])
         ls_contains = cfg.get("wait_for_ls_contains", {})
 
-        if not wait_for and not wait_for_ls:
-            return True
-
-        # For Instamart/Zepto: check if the request/response interceptor has
-        # already captured a storeId from live API traffic. This is the most
-        # reliable signal — the storeId is never written to cookies or localStorage,
-        # but it appears on API request headers/URLs within seconds of the user
-        # confirming a delivery address. Checking it here lets _location_ready()
-        # return True without needing to find storeId in persistent storage.
+        # For Instamart/Zepto the storeId captured from live API traffic by the
+        # request interceptor is the most reliable signal a real delivery store
+        # has resolved — it's never written to cookies/localStorage but appears on
+        # API request headers/URLs within seconds of confirming an address. Check
+        # it FIRST, before any generic early-out or storage scan.
         if self.store in ("instamart", "zepto"):
             cap = self.captured_store()
             if cap.get("store_id"):
                 print(f"[browser] {self.store}: phase-2 passed via captured "
                       f"store_id={cap['store_id']!r}")
                 return True
+            # Instamart's persisted cookies/localStorage/sessionStorage carry
+            # location-ish blobs (userLocation, deliveryAddress, "lat",
+            # addressList…) even for a guest or a just-logged-in user with NO
+            # Instamart delivery store set. Scanning them closed the relay
+            # prematurely (on the first click that triggered a storage write) with
+            # no real store resolved. So for Instamart the captured storeId is the
+            # SOLE auto-gate; until it appears, keep waiting — the manual "Done"
+            # button is the fallback. (Zepto has a reliable serviceability cookie
+            # + user-position localStorage signal, so it falls through to those.)
+            if self.store == "instamart":
+                present = [k for k in kv if k != cfg["auth_cookie"]]
+                print(f"[browser] instamart: phase-2 waiting for captured storeId "
+                      f"(none yet). Cookies present ({len(present)}): {present[:30]}")
+                return False
+
+        if not wait_for and not wait_for_ls:
+            return True
 
         def _cookie_ok(k: str) -> bool:
             raw = kv.get(k, "")
