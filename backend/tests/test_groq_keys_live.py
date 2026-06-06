@@ -25,6 +25,7 @@ Run inside Docker:
 
 import json
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -72,6 +73,39 @@ def _short_reason(body: str) -> str:
     return body[:160].strip()
 
 
+def _groq_key_sources() -> list[dict[str, str]]:
+    """Return configured Groq keys with the env source for safe diagnostics."""
+    raw_entries: list[dict[str, str]] = []
+
+    def add_from_env(name: str) -> None:
+        raw = os.getenv(name, "") or ""
+        parts = [p for p in re.split(r"[,\s]+", raw.strip()) if p]
+        for idx, key in enumerate(parts, 1):
+            source = name if len(parts) == 1 else f"{name}[{idx}]"
+            raw_entries.append({"key": key, "source": source})
+
+    add_from_env("GROQ_API_KEY")
+    add_from_env("GROQ_API_KEY_1")
+
+    i = 2
+    while True:
+        name = f"GROQ_API_KEY_{i}"
+        if not (os.getenv(name, "") or "").strip():
+            break
+        add_from_env(name)
+        i += 1
+
+    seen: set[str] = set()
+    out: list[dict[str, str]] = []
+    for entry in raw_entries:
+        key = entry["key"]
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(entry)
+    return out
+
+
 @pytest.fixture(scope="module")
 def groq_keys():
     keys = ocr._groq_keys()
@@ -87,6 +121,7 @@ class TestGroqKeysLive:
         probe_model = os.getenv("GROQ_KEY_TEST_MODEL", _DEFAULT_TEST_MODEL)
         ocr_model = os.getenv("GROQ_OCR_MODEL", "meta-llama/llama-4-scout-17b-16e-instruct")
         strict_chat = _strict_chat()
+        sources = _groq_key_sources()
 
         print(f"\n{_SEP2}")
         print("  Groq live key test")
@@ -95,6 +130,9 @@ class TestGroqKeysLive:
         print(f"  OCR model       : {ocr_model}")
         print(f"  Strict chat     : {'yes' if strict_chat else 'no'}")
         print(f"  Keys            : {len(groq_keys)} configured")
+        print("  Key sources     :")
+        for i, entry in enumerate(sources, 1):
+            print(f"    key {i} (...{entry['key'][-6:]}) from {entry['source']}")
         print(f"{_SEP2}\n")
 
         statuses: list[dict] = []  # {label, suffix, status, reason, ok, warn}
