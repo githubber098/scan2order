@@ -65,6 +65,14 @@
   #items.textarea{ min-height:calc(2 * 1.6em + 28px); max-height:calc(20 * 1.6em + 28px); resize:none; overflow-y:hidden; }
   [data-theme="brutal"] .swap-opt{ border-width:2px; }
   [data-theme="brutal"] .swap-sheet{ border-width:2.5px; }
+
+  /* Desktop: show the swap list as a centred modal (a bottom sheet that hugs the
+     screen edge looks odd on a wide window). Phone keeps the bottom sheet. */
+  @media (min-width:860px){
+    #swap-popup{ align-items:center; padding:24px; }
+    .swap-sheet{ border-radius:16px; width:min(460px,92%); max-height:78vh;
+      border-bottom:1px solid var(--card-br); box-shadow:0 24px 60px rgba(0,0,0,.35); }
+  }
 </style>
 {% endblock %}
 

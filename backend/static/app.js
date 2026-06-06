@@ -358,10 +358,13 @@
       }
       // Show the manual "Done" button:
       //  - For all stores: once phase-1 passes (message stops starting "Waiting").
-      //  - For Flipkart Minutes: immediately from the start, because the flid
-      //    cookie detection is unreliable (timing / name variation); the user must
-      //    be able to force-save after completing the OTP flow manually.
-      const _alwaysShowDone = _currentStore === "flipkart_minutes";
+      //  - For Flipkart Minutes AND Instamart: immediately from the start.
+      //    FM's flid cookie detection is unreliable (timing / name variation).
+      //    Instamart never auto-closes at all — Swiggy emits a default storeId on
+      //    page load and `tid` is present for guests, so there's no reliable
+      //    auto-signal; the user logs in + sets their address, then clicks Done.
+      const _alwaysShowDone = _currentStore === "flipkart_minutes"
+                              || _currentStore === "instamart";
       if (!_doneBtnShown && (_alwaysShowDone || (d.message && !d.message.startsWith("Waiting")))) {
         _doneBtnShown = true;
         const bar = document.getElementById("browser-done-bar");

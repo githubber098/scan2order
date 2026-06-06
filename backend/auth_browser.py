@@ -372,31 +372,30 @@ class _Session:
         wait_for_ls = cfg.get("wait_for_ls", [])
         ls_contains = cfg.get("wait_for_ls_contains", {})
 
-        # For Instamart/Zepto the storeId captured from live API traffic by the
-        # request interceptor is the most reliable signal a real delivery store
-        # has resolved — it's never written to cookies/localStorage but appears on
-        # API request headers/URLs within seconds of confirming an address. Check
-        # it FIRST, before any generic early-out or storage scan.
-        if self.store in ("instamart", "zepto"):
+        # Instamart NEVER auto-closes. Swiggy emits a storeId header on page load
+        # for an IP/default location — BEFORE the user logs in or picks their
+        # address — and the `tid` auth cookie is present even for guests. So both
+        # phase-1 (tid) and any storeId-based phase-2 pass instantly, which saved
+        # a guest/default session that doesn't work (the user saw the window close
+        # the moment it opened). There is no reliable auto-signal that the user has
+        # logged in AND set THEIR address, so Instamart requires the explicit
+        # "Done" button (force-save), exactly like Flipkart Minutes. The relay's
+        # request interceptor still records the latest storeId so the Done click
+        # persists the real one (set after login + address). Keep returning False
+        # here so /check never reports done on its own.
+        if self.store == "instamart":
+            return False
+
+        # Zepto: the storeId captured from live API request headers is a reliable
+        # auto-close signal — Zepto shows "select location" and does NOT emit a
+        # storeId until the user confirms an address (unlike Swiggy's default
+        # store). It's never written to cookies/localStorage, so check it here.
+        if self.store == "zepto":
             cap = self.captured_store()
             if cap.get("store_id"):
-                print(f"[browser] {self.store}: phase-2 passed via captured "
+                print(f"[browser] zepto: phase-2 passed via captured "
                       f"store_id={cap['store_id']!r}")
                 return True
-            # Instamart's persisted cookies/localStorage/sessionStorage carry
-            # location-ish blobs (userLocation, deliveryAddress, "lat",
-            # addressList…) even for a guest or a just-logged-in user with NO
-            # Instamart delivery store set. Scanning them closed the relay
-            # prematurely (on the first click that triggered a storage write) with
-            # no real store resolved. So for Instamart the captured storeId is the
-            # SOLE auto-gate; until it appears, keep waiting — the manual "Done"
-            # button is the fallback. (Zepto has a reliable serviceability cookie
-            # + user-position localStorage signal, so it falls through to those.)
-            if self.store == "instamart":
-                present = [k for k in kv if k != cfg["auth_cookie"]]
-                print(f"[browser] instamart: phase-2 waiting for captured storeId "
-                      f"(none yet). Cookies present ({len(present)}): {present[:30]}")
-                return False
 
         if not wait_for and not wait_for_ls:
             return True
